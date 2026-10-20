@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.21)
+project(hello_physx_superbuild LANGUAGES C CXX)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+include(cmake/PhysXBootstrap.cmake)
+add_executable(hello_physx main.cpp)
+target_compile_features(hello_physx PRIVATE cxx_std_17)
+target_link_libraries(hello_physx PRIVATE PhysX::SDK)

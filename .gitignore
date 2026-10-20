@@ -1,0 +1,46 @@
+# Build trees (keep short: out/<preset>)
+/out/
+/build/
+/Saved/
+
+# CMake user-local presets (point SDK URLs / UE root at local paths)
+CMakeUserPresets.json
+
+# IDE
+.vs/
+.vscode/*
+!.vscode/settings.json.example
+!.vscode/launch.json.example
+.idea/
+*.user
+*.suo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Unreal (Chaos bridge host project) — never commit engine-derived artifacts
+/Unreal/**/Binaries/
+/Unreal/**/Intermediate/
+/Unreal/**/Saved/
+/Unreal/**/DerivedDataCache/
+*.generated.h
+*.gen.cpp
+
+# Binaries
+*.dll
+*.pdb
+*.exe
+*.lib
+*.exp
+*.ilk
+*.obj
+
+# Local-only prototypes (e.g. the UE4-style PhysX probe written after reading a third-party UE 4.18 mirror)
+/prototypes/local/
+
+# Captures / results (results stay private until licensing is checked)
+*.png.tmp
+/Results/
