@@ -1,5 +1,7 @@
-// CommandLine.cpp - process-wide command line string.
+// CommandLine.cpp - process-wide command line string (UTF-8) and the wide argv conversion for wmain.
 #include "Misc/CommandLine.h"
+
+#include "Containers/StringConv.h"
 
 #include <cstring>
 
@@ -72,5 +74,22 @@ namespace PhysicsTest
 			Result += Suffix;
 		}
 		return Result;
+	}
+
+	FUtf8ArgV::FUtf8ArgV(const int32 ArgC, wchar_t** ArgVW)
+	{
+		const int32 Count = (ArgVW != nullptr && ArgC > 0) ? ArgC : 0;
+		Strings.reserve(static_cast<size_t>(Count));
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			Strings.push_back(ArgVW[Index] != nullptr ? StringConv::WideToUtf8(ArgVW[Index]) : std::string());
+		}
+		// Pointers into Strings are taken only after Strings stopped growing.
+		Pointers.reserve(Strings.size() + 1);
+		for (std::string& String : Strings)
+		{
+			Pointers.push_back(String.data());
+		}
+		Pointers.push_back(nullptr);
 	}
 }

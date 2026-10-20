@@ -7,6 +7,9 @@
 #   PhysicsTest.Probe.PinGuard            wrong SDK tag / mirror or external source dir / wrong HEAD
 #                                         stop configure                                               (criterion 8)
 #   PhysicsTest.Probe.NegativeScaleFatal  FTransform composition with negative scale stops every build (M0 fix round)
+#   PhysicsTest.Probe.HarnessCVars        a profile-only program (no BodyUtils / BodyInstance / PhysScene objects) has
+#                                         the harness physics CVars and hashes profiles like PhysicsTestAutomation
+#                                         (M1 fix round)
 
 pt_add_program(PtProbeThirdPartyIncludes
 	SOURCES ThirdPartyIncludesProbe.cpp
@@ -19,6 +22,15 @@ pt_add_script_test(PhysicsTest.Probe.NegativeScaleFatal
 	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckFatalExit.cmake"
 	ARGS "-DPT_EXE=$<TARGET_FILE:PtProbeNegativeScaleFatal>" -DPT_EXPECT_RC=3
 		"-DPT_EXPECT_REGEX=LogCore: Fatal: FTransform::Multiply: negative scale composition")
+
+# Links PT::PhysicsCore for the resolver only. /MAP lets the driver prove that BodyUtils.cpp.obj is not linked.
+pt_add_program(PtProbeHarnessCVars SOURCES HarnessCVarsProbe.cpp DEPS PT::Core PT::PhysicsCore FOLDER "PhysicsTest/Tests")
+target_compile_definitions(PtProbeHarnessCVars PRIVATE "PT_CONFIG_DIR=\"${CMAKE_SOURCE_DIR}/Config\"")
+target_link_options(PtProbeHarnessCVars PRIVATE "/MAP:$<TARGET_FILE_DIR:PtProbeHarnessCVars>/PtProbeHarnessCVars.map")
+pt_add_script_test(PhysicsTest.Probe.HarnessCVars
+	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckHarnessCVars.cmake"
+	ARGS "-DPT_PROBE_EXE=$<TARGET_FILE:PtProbeHarnessCVars>" "-DPT_PROBE_MAP=$<TARGET_FILE_DIR:PtProbeHarnessCVars>/PtProbeHarnessCVars.map"
+		"-DPT_AUTOMATION_EXE=$<TARGET_FILE:PhysicsTestAutomation>")
 
 if(PT_WITH_JOLT)
 	add_library(PtProbeJoltSeam STATIC JoltSeam/PtJoltSeam.cpp JoltSeam/PtJoltSeam.h)
@@ -46,7 +58,7 @@ pt_add_script_test(PhysicsTest.Probe.PinGuard
 		"-DPT_SDK_MIRROR=${PT_SDK_MIRROR}" "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
 	LABELS "configure")
 
-foreach(_test ThirdPartyIncludes NegativeScaleFatal FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard)
+foreach(_test ThirdPartyIncludes NegativeScaleFatal HarnessCVars FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard)
 	if(TEST PhysicsTest.Probe.${_test})
 		get_test_property(PhysicsTest.Probe.${_test} LABELS _labels)
 		if(_labels)

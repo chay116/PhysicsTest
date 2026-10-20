@@ -147,8 +147,8 @@ D:\PhysicsTest\
                  PtFetch.cmake (pinned FetchContent helpers + SHA guard, M0)
     Chaos/       PtChaosUbt.cmake
   Config/
-    BasePhysicsTest.ini
-    Profiles/UEParity.ini  Profiles/Normalized.ini
+    BasePhysicsTest.ini                       (M1: every modelled key with its UE / harness default)
+    Profiles/UEParity.ini  Profiles/Normalized.ini   (M1 drafts, complete M9)
     Profiles/Backend/  PhysX.UE4Compat  PhysX.SdkDefault  PhysX.UE4Compat-TGS  PhysX.UE4Compat-Stab
                        Jolt.Default  Jolt.SharpBoxes  Bullet.Default  Bullet.StaticAabbOff  Chaos.Game  Chaos.Evolution  (.ini)
     Matrices/  smoke headline sensitivity-avx2 scaling overhead behavior determinism (.json)
@@ -158,6 +158,7 @@ D:\PhysicsTest\
     Runtime/
       Core/                Math, LogMacros, AssertionMacros, CommandLine/Parse, ConfigCacheIni, IConsoleManager,
                            PlatformTime (QPC), PlatformAffinity, Fnv/Sha256, FRandomStream,
+                           Containers/StringConv (UTF-16 <-> UTF-8, wmain argv, M1),
                            Misc/PtThirdPartyIncludesStart.h / PtThirdPartyIncludesEnd.h (harness side)
       PhysicsTestAbi/Public/PhysicsTestAbi/  PtBackendAbi.h (C)  PtBackendKit.h  PtAbiCodec.h (M14)
       BackendCommon/Public/                  PtUnitScale.h  PtContactConvention.h  PtCombine.h  PtDamping.h
@@ -168,7 +169,8 @@ D:\PhysicsTest\
                                  BodyInstance ConstraintInstance ConstraintUtils PhysicsSettings BodyUtils
         Public/PhysicalMaterials/PhysicalMaterial.h
         Public/Physics/          PhysicsInterfaceTypes PhysicsInterface PhysicsBackend StepPlanner PhysSceneStats
-                                 PhysicsProfile PhysicsDebugSnapshot
+                                 PhysicsProfile PhysicsDebugSnapshot AnalyticReference (dt_engine, M1)
+        Private/Physics/Matrix33 (3x3 helpers: Jacobi, quat <-> matrix, M1)
       PhysicsDebugDraw/    DebugDrawQueue DebugDrawSettings PhysicsDebugDraw DebugDrawRenderer IslandBuilder (no D3D)
       D3D11DebugRenderer/  D3D11RHI D3D11DebugDrawRenderer SceneView; Private/WireMeshes Shaders.hlsl.inl Capture
       PhysicsTestScenarios/ Private/Scenarios/{Gates,Overhead,Behavior,Perf,Extended}
@@ -221,7 +223,7 @@ D:\PhysicsTest\
 - **compile_commands:** `CMAKE_EXPORT_COMPILE_COMMANDS` ON. G0의 입력이다 (§4.6).
 - **C++ 표준:** 전역 `CMAKE_CXX_STANDARD`는 쓰지 않는다 (PhysX의 /std:c++14 /WX가 C5055로 깨짐 [V]). `pt_target_defaults()`가 하네스 타깃마다 다음을 건다:
   - cxx_std_20
-  - /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor
+  - /W4 /WX /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor (`/WX`는 M1 수정 라운드에서 더했다. 하네스 TU의 경고는 모든 프리셋에서 빌드 실패다)
   - NOMINMAX WIN32_LEAN_AND_MEAN UNICODE
   - PT_DO_CHECK
 - **/arch:** 전역으로 걸지 않는다. `pt_apply_arch(<targets>)`가 타깃 목록에만 붙인다.
@@ -347,8 +349,8 @@ PhysicsTestChaos_UBT_{Development,Test}   custom target (PT_WITH_CHAOS=ON, not i
 | FChaosSolversModule + InitGamePhys/TermGamePhys + FModuleManager | `Abi::IPhysicsBackend`, `FPhysicsBackendModule`, `FPhysicsBackendRegistry` | 모듈은 언로드하지 않는다 |
 | FPhysicsActorHandle (= FSingleParticlePhysicsProxy*) | 같은 이름 `{FPhysicsBackendScene* Scene; uint32 Index; uint32 Serial}` | Index = 생성 순서 = 삽입 순서 = 해시 순서 |
 | Chaos::FMassProperties + BodyUtils::ComputeMassProperties | `FMassProperties`, `BodyUtils::` | 하네스가 계산해 명시적으로 전달한다 (D5). 규칙은 §5.3 |
-| FRigidBodyState / GetUnrealWorldTransform | `FBodyInstanceState` {BodyTM = 바디 원점, cm/s, rad/s, ObjectState} | UE의 AngVel은 deg/s라서 이름을 `AngularVelocityInRadians`로 다르게 했다 |
-| Chaos::EObjectStateType | `EObjectStateType` {Uninitialized 0, Sleeping 1, Kinematic 2, Static 3, Dynamic 4} | 값이 같다 (ObjectState.h:9-18 [V]) |
+| FRigidBodyState / GetUnrealWorldTransform | `FBodyInstanceState` {BodyTM = 바디 원점의 강체 자세(스케일 1), cm/s, rad/s, ObjectState} | UE의 AngVel은 deg/s라서 이름을 `AngularVelocityInRadians`로 다르게 했다. 스케일은 UE처럼 `FBodyInstance::Scale3D`에만 있다 (§5.2 #26) |
+| Chaos::EObjectStateType | `EObjectStateType` {Uninitialized 0, Sleeping 1, Kinematic 2, Static 3, Dynamic 4} | 값이 같다 (Chaos/Particle/ObjectState.h:9-18 [V]) |
 | ECollisionChannel / `Chaos::Filter::FShapeFilterData` (레거시 `FCollisionFilterData`) | `ECollisionChannel` (uint8, 0..31) + `FBodyCollisionFilter` {ObjectType, BlockMask uint32, CollisionEnabled} | 상호 차단 검사는 UE와 같다 (CollisionFilterData.cpp:263-272 [V]). 채널 수는 아래 "충돌 채널" 참고 |
 | Chaos::FDebugDrawQueue / IChaosDDRenderer / FChaosDebugDrawSettings / Chaos::DebugDraw::Draw* | `FDebugDrawQueue` / `IDebugDrawRenderer` / `FDebugDrawSettings` / `DebugDraw::Draw*` | `FDebugDrawQueue`는 Engine의 DrawDebugHelpers가 아니라 **Chaos::FDebugDrawQueue**(DebugDrawQueue.h)를 미러링한다. CVar 이름이 같다 |
 | IConsoleManager, TAutoConsoleVariable, FCommandLine, FParse, FConfigFile, UE_LOG, check/ensure, FPlatformTime | 같은 이름의 소형 구현 | UE 복제판이 아니라 필요한 부분만 구현한다. CLI11은 쓰지 않는다 |
@@ -357,7 +359,7 @@ PhysicsTestChaos_UBT_{Development,Test}   custom target (PT_WITH_CHAOS=ON, not i
 
 **충돌 채널**
 - UE 5.8.3은 기본 채널 8개, 엔진 trace 채널 6개, 게임 trace 채널 50개로 64채널을 직렬화한다. `ECC_OverlapAll_Deprecated` = 64, `ECC_MAX` = 65이고 마스크는 uint64다 (EngineTypes.h:1101-1176; CollisionFilterData.cpp:263-272, 310-313 [V]).
-- 하네스는 의도적으로 32채널(`PT_NUM_COLLISION_CHANNELS = 32`, uint32 마스크)을 쓴다. UE4 PhysX의 word3 레이아웃은 채널을 5비트로 담고(PhysicsFiltering.h:34 NumCollisionChannelBits=5, EngineTypes.h:1063 NumExtraFilterBits=6 [V]), Bullet의 group/mask는 int라서 둘 다 32채널까지만 담기 때문이다.
+- 하네스는 의도적으로 32채널(C++ 상수 `NumCollisionChannels = 32`, C ABI 매크로 `PT_NUM_COLLISION_CHANNELS`, uint32 마스크)을 쓴다. C++ 상수에 매크로와 같은 이름을 쓰면 `PtBackendAbi.h`를 먼저 include한 TU에서 선언이 깨지므로 이름을 나눴다. M2에서 두 이름이 함께 보이는 곳에 `static_assert(NumCollisionChannels == PT_NUM_COLLISION_CHANNELS)`를 둔다. `ObjectType`이 32~255이면 무효다: `FBodyCollisionFilter::IsValid()`가 거짓이고 채널 마스크는 0이며(32로 나눈 나머지 채널로 접히지 않는다) `FPhysScene::SpawnBody`가 `checkf`로 거부한다. M2 마샬링도 거부한다. UE4 PhysX의 word3 레이아웃은 채널을 5비트로 담고(PhysicsFiltering.h:34 NumCollisionChannelBits=5, EngineTypes.h:1063 NumExtraFilterBits=6 [V]), Bullet의 group/mask는 int라서 둘 다 32채널까지만 담기 때문이다.
 - Chaos 브리지는 `Chaos::Filter::FShapeFilterBuilder`로 `FShapeFilterData`를 만들 때 BlockMask를 uint64로 넓힌다 (Chaos 모듈 CollisionFilterData.h:116-171 [V]). 레거시 4-word `FCollisionFilterData`는 이 uint64 마스크를 두 word로 나눠 담을 뿐이다 (CollisionFilterData.cpp:308-315 [V]).
 
 **정지마찰 (Chaos 규칙) [V]**
@@ -404,6 +406,19 @@ UE 소스를 읽는 사람이 바로 눈치챌 항목을 모두 적는다. "일�
 | 16 | `FRandomStream` | UE의 LCG | mt19937_64 + 하네스 고유의 [0,1) 매핑 (seed 0x5EED) | 의도적 차이 (재현성만 목적) |
 | 17 | 셰이프 이름 | `FName` | `std::string` | UObject 없음 |
 | 18 | Core 관용구 | UE 전체 구현 | 필요한 부분만의 소형 구현 (`FParse`, CVar 레지스트리, ini 리더, `UE_LOG`, `check`/`ensure`) | 의도적 축소 |
+| 19 | 수학 타입 기본 생성 | `FVector`, `FQuat`는 초기화하지 않는다 (`ForceInit`가 필요). `FTransform()`은 항등 | `FVector`는 0, `FQuat`는 항등으로 초기화. `FTransform()`은 항등 (UE와 같음) | 의도적 차이 (미초기화 값이 수치를 오염시키지 않게) |
+| 20 | `FTransform::Inverse()`, 스케일이 모두 0 | Win64는 벡터화 구현을 컴파일한다 (`ENABLE_VECTORIZED_TRANSFORM`, ScalarRegister.h:15-16 [V]). 어떤 \|Scale\| 성분도 `SMALL_NUMBER`보다 크지 않으면 Identity (TransformVectorized.h:363-374 [V]). 스칼라 구현(TransformNonVectorized.h:304-312)은 역회전 + 0 스케일 | Win64 동작 그대로 Identity. 0에 가까운 성분만 있으면 그 성분의 역수를 0으로 둔다 | 일치 (M1에서 고침) |
+| 21 | 음수 스케일 `FTransform` 합성 | 행렬 경로 `MultiplyUsingMatrixWithScale` (TransformVectorized.cpp:320-324 [V]) | 구현하지 않고 모든 빌드에서 Fatal (종료 코드 3, CTest `PhysicsTest.Probe.NegativeScaleFatal`) | 의도적 차이 (지원 범위 밖을 조용히 다르게 계산하지 않음) |
+| 22 | 질량 규칙의 정밀도, 대각화, 기여 요소가 없는 바디 | 1단계 밀도를 float로 계산한다 (`0.001f × Density`, 1 g/cm³이면 0.0010000000475 kg/cm³, BodyUtils.cpp:30-45 [V]). `ApplyMassPropertiesModifiers`가 `OldMass`/`NewMass`/`MassRatio`를 float로 계산 (BodyUtils.cpp:50-75 [V]). 대각화는 Chaos의 닫힌 형식 고유값 풀이 (MassProperties.cpp:17-96 [V]). 질량에 기여하는 셰이프가 하나도 없으면 `FBodyInstance`가 그 셰이프들을 빼고 질량 계산을 건너뛰므로, 관성 trace의 `CHAOS_ENSURE`가 실패하고 질량을 설정하지 않는다 (BodyInstance.cpp:3405-3417, 3484-3507 [V]) | 1·4·5단계를 double로 계산 (밀도 0.001, 상대 차이 4.7e-8). 대각화는 순환 Jacobi이고, Chaos와 같은 "이미 대각" 조기 종료(OffDiag²/Trace² < 1e-8)를 쓴다. 텐서는 같고, 대각이 아닌 텐서의 주축 순서만 다를 수 있다. 셰이프 체적은 Chaos처럼 float `UE_PI`와 float `4/3`(캡슐)을 쓴다. 기여 요소가 없으면 Chaos `CalculateMassPropertiesFromShapeCollection`의 대체값(523 kg, 5.24e5 kg·cm², MassProperties.cpp:481-497 [V])에 질량 규칙을 적용하고 Error 로그를 남긴다. UE 바디는 이 경로에 오지 않으므로 UE 동작이 아니라 결정적인 하네스 값이다 | 의도적 차이 (상대 1e-7 수준, 모든 엔진이 같은 하네스 값을 받는다) |
+| 23 | `FParse` 숫자 | 키가 있으면 true, `Atoi`/`Atof`로 변환 (Parse.cpp:709-718) | 숫자를 실제로 읽고 형에 들어갈 때만 true. unsigned는 `-`를 거부 (`-Threads=-1`이 4294967295가 되지 않음), 범위를 넘으면 거부 | 의도적 차이 (CLI 오타를 조용히 받지 않음, Progress M0 §3 #13, M1 §3) |
+| 24 | 프로그램 진입점과 명령줄 | `TCHAR`(UTF-16) 명령줄 | `wmain` + `FUtf8ArgV`로 UTF-16을 UTF-8로 바꿔 `FCommandLine`에 넣는다. `main(int, char**)`는 ANSI 코드 페이지(cp949)를 받으므로 쓰지 않는다 | 일치 (문자열 표현만 UTF-8) |
+| 25 | `FBodySetup::BuildScale3D` | `RescaleSimpleCollision`이 빌드 스케일을 AggGeom에 미리 굽고 BuildScale3D에는 그 값을 기록만 한다. `UBodySetup::GetScaledVolume`과 ChaosInterfaceUtils는 읽지 않는다 (BodySetup.cpp:756-812, 2417-2425 [V]) | 같다. 메타데이터로만 두고 질량·체적·마샬링에서 곱하지 않는다. 지오메트리를 키우는 것은 `FBodyInstance::Scale3D`뿐이다 | 일치 (M1 수정 라운드에서 고침. 전에는 Scale3D에 곱해 UE 에셋 값을 두 번 스케일했다) |
+| 26 | 바디 자세 | `GetUnrealWorldTransform`은 강체 액터 자세다 (`GetTransform_AssumesLocked`, 스케일 없음). 스케일은 `FBodyInstance::Scale3D` (BodyInstance.cpp:2732-2747 [V]) | `FBodyInstanceState::BodyTM` = 회전 + 이동, 스케일 1. 스케일은 `Scale3D`에만 둔다 | 일치 (M1 수정 라운드에서 고침. 0번째 프레임과 M2 readback이 같은 형태다) |
+| 27 | 물리 CVar | `p.ComNudgeAffectsInertia` (BodyUtils.cpp:16-17), `p.SensitiveSleepThresholdMultiplier` (기본 1/20, BodyInstance.cpp:106-110) [V] | 같은 이름·기본값. 둘 다 `Physics/PhysicsConsoleVariables.cpp` 한 TU에 있고 프로필 리졸버가 그 TU를 참조하므로, 어떤 프로그램이 정적 라이브러리에서 무엇을 링크하든 등록된다 | 일치 (M1 수정 라운드에서 Sensitive 배수를 상수에서 CVar로 바꿨다) |
+| 28 | ini 섹션 이름 | `FConfigFile`이 `TMap<FString, FConfigSection>`이라 대소문자를 무시한다 (ConfigCacheIni.h:502, :574 [V]) | 대소문자 무시. 처음 쓴 철자를 유지하고, 정규 키는 정규 철자를 쓴다 | 일치 (M1 수정 라운드에서 고침) |
+| 29 | CVar 우선순위 충돌 | 더 낮은 우선순위의 Set은 로그만 남기고 무시한다 | `IConsoleVariable::Set`은 false를 돌려주고 (M1 §3 #15), `FProfileResolver::ApplyConsoleVariables`는 거부된 CVar마다 이름·현재 값·현재 SetBy를 오류로 돌려준다 | 의도적 차이 (적용되지 않은 값이 적용된 것처럼 기록되지 않게) |
+| 30 | 숫자 텍스트의 inf/nan | `FCString::Atof`와 ImportText가 `inf`/`nan`을 받는다 | `FParse` float/double, float CVar, ini `GetFloat`/`GetDouble`, 프로필 값은 유한수만 받는다 | 의도적 차이 (프로필 오타가 엔진 상태에 inf/nan으로 들어가지 않게) |
+| 31 | 프레임 델리게이트 | UE5: `SetUpForFrame` 다음 `FChaosScene::StartFrame` → `FPhysScene_Chaos::OnStartFrame(MDeltaTime)`이 `OnPhysScenePreTick`과 `OnPhysSceneStep`을 clamp된 프레임 dt로 한 번씩 broadcast한다 (ChaosScene.cpp:331-374, PhysScene_Chaos.cpp:2272-2316 [V]). `OnPhysScenePostTick`은 dt 없이 EndFrame에서 (ChaosScene.cpp:576 [V]) | PreTick은 `StartFrame` 안(phase SetUp, 스텝 전)에서 `FStepPlan::FrameDeltaTime`(= MDeltaTime)으로 한 번. Harness driver의 `OnPhysSceneStep`은 엔진 스텝마다 스텝 dt로 (UE4 PhysX substep 방식). PostTick은 같은 프레임 dt를 넘긴다 | PreTick은 일치 (M1 수정 라운드에서 고침. 전에는 SetUpForFrame 전에 원래 dt로 불렀다). Step은 의도적 차이 (Harness driver, §9.1) |
 
 ### 5.3 질량 규칙 (`BodyUtils::ComputeMassProperties`, BodyUtils.cpp [V])
 
@@ -421,6 +436,14 @@ UE가 하는 순서를 그대로 따른다.
 8. **COMNudge 관성 항:** `p.ComNudgeAffectsInertia`(기본 true, :16-17)이면 관성을 다시 actor 공간 행렬로 바꾸고, 대각 성분마다 `I_ii += M' × nudge_i²`를 더한 뒤 다시 대각화한다 (:99-111). 원본 주석이 "ScaleInertia 다음에 와야 한다"고 적고 있다. 일반적인 평행축 공식(`I_xx += M'(y² + z²)` 등)이 아니라 UE 구현 그대로다.
 
 질량 규칙 축(`EMassRule`)은 §10에서 정한다. `Physical`은 4단계의 지수를 1로 둔다.
+
+**M1 구현 메모 [V]**
+- 2단계는 UE가 부르는 Chaos 셰이프 적분을 그대로 따른다 (ChaosInterfaceUtils.cpp:137-190, MassProperties.cpp:281-492). 요소마다 `GetFinalScaled`(BodySetup.cpp:2006-2182)로 스케일을 반영하고, half extent와 반지름의 하한 `UE_KINDA_SMALL_NUMBER`도 같다. 체적에는 Chaos처럼 float `UE_PI`(구, 캡슐)와 float `4.0f / 3.0f`(캡슐, Capsule.h:280)가 들어간다. 그래서 반지름 50 cm 구의 체적은 정확한 π로 계산한 값과 상대 2.8e-8 다르다.
+- 요소가 하나이고 회전이 항등이면 합성 없이 그대로 쓴다 (CombineWorldSpace). 아무 요소도 질량에 기여하지 않으면 Chaos의 대체값(523 kg, 5.24e5 kg·cm²)을 쓰고 Error 로그를 남긴다. UE는 이 경우 질량 계산 자체를 건너뛰므로 (§5.2 #22) 이 값은 UE 동작이 아니라 결정적인 하네스 대체값이다. 기여 요소의 질량 합이 `UE_SMALL_NUMBER` 이하이면 CombineWorldSpace의 100 cm 물 정육면체를 쓴다. Chaos는 텐서만 바꾸고 0에 가까운 질량을 유지하지만, 하네스는 5단계의 질량 비율이 터지지 않게 정육면체의 1000 kg도 함께 쓴다.
+- 지오메트리 스케일은 `FBodyInstance::Scale3D`뿐이다. `FBodySetup::BuildScale3D`는 UE처럼 AggGeom에 이미 구운 값의 기록이라 곱하지 않는다 (§5.2 #25).
+- 3·7·8단계의 대각화는 순환 Jacobi다. Chaos `TransformToLocalSpace`처럼 OffDiag²/Trace² < 1e-8이면 대각으로 보고 회전을 바꾸지 않는다 (MassProperties.cpp:17-38). 대각이 아닌 텐서에서는 주축 순서가 Chaos의 닫힌 형식 풀이와 다를 수 있지만 텐서 자체는 같다 (§5.2 #22).
+- 1·4·5단계는 double로 계산한다. UE는 float로 계산한다 (§5.2 #22). 1단계의 차이는 1 g/cm³에서 상대 4.7e-8이다.
+- 8단계의 `p.ComNudgeAffectsInertia`와 Sensitive sleep 배수 `p.SensitiveSleepThresholdMultiplier`는 하네스 물리 CVar 표(`Physics/PhysicsConsoleVariables.h`)에 있다 (§5.2 #27, §10 M1 메모).
 
 **검증 예 (단위 테스트로 고정)**
 - 100 cm 정육면체: 177.83 kg, 296,380 kg·cm²
@@ -481,7 +504,7 @@ Tick(DeltaSeconds) ...   (§9)
 **스레드 규칙**
 - 모든 `FPhysScene`, `FBodyInstance`, `FPhysicsInterface` 호출은 GameThread 하나에서만 한다.
 - 작업 스레드는 엔진 내부에만 있다.
-- `IsSimulating()` 동안의 쓰기는 `checkf`로 막는다.
+- 생성(`CreatePhysicalMaterial`, `CreateBodySetup`, `SpawnBody`, `SpawnConstraint`, `DeferAddActor`), `FlushDeferredActors`, `PrepareForSimulation`은 프레임 phase가 Idle일 때만 할 수 있다 (`checkf`). M1 수정 라운드에서 `IsSimulating()` 검사를 phase 검사로 바꿔 `SetUpForFrame`과 `StartFrame` 사이도 막았다. `OnPhysScenePreTick`은 phase SetUp에서 불리므로 그 안에서 바디를 만들 수 없다.
 
 ## 7. 백엔드 경계 (C ABI) [MVP M2, 핵심 동결 M6]
 
@@ -499,7 +522,7 @@ Tick(DeltaSeconds) ...   (§9)
 - **변환 규약:**
   - Box는 half extent로 넘긴다. 호스트가 FKBoxElem의 full extent를 반으로 나누며, 이 지점 하나만 테스트한다.
   - Capsule은 `Radius` + `HalfLength`이고 축은 로컬 Z다.
-  - BuildScale3D는 호스트가 미리 반영한다.
+  - BuildScale3D는 UE처럼 AggGeom에 이미 반영된 값의 기록이다. 호스트는 다시 곱하지 않고 `FBodyInstance::Scale3D`만 적용한다 (§5.2 #25).
   - 엔진별 차이(변형 반복 횟수, contact offset 규칙 등)는 `PtActorCreateInfo`에 쓰지 않는다. 바디 정보에는 UE `FBodyInstance` 값을 쓰고, 엔진별 해석은 `PtSceneDesc.Options`(변형 키)로만 전달한다. 그래야 `desc_sha256`이 엔진 간에 같다 (§12.3).
 - **비동기 dt:** `PtSceneDesc.AsyncFixedTimeStepSize`는 sync이면 반드시 -1이다. Chaos는 `AsyncDt >= 0`을 async로 취급하므로 (PhysicsSolverBase.h:712-715 [V]) Kit는 0을 `PT_E_INVALID_ARG`로 거부한다.
 - **스레드 규칙:** 모든 호출은 `InitGamePhys`를 부른 스레드에서 한다. 다른 스레드에서 부르면 부작용 없이 `PT_E_WRONG_THREAD`를 돌려준다. 예외는 로그 콜백 하나뿐이다.
@@ -801,9 +824,10 @@ Tick(DeltaSeconds) ...   (§9)
 
 ```
 Tick(float DeltaSeconds)                               ~ UWorld::Tick physics part (LevelTick.cpp:1740-1778)
-  OnPhysScenePreTick
-  SetUpForFrame(&Gravity, Dt, MinDt, MaxDt, MaxSubDt, MaxSubsteps, bSubstepping)  -> FStepPlanner -> FStepPlan{N, StepDt, Lost}
-  StartFrame()  bIsSimulating = true
+  SetUpForFrame(&Gravity, Dt, MinDt, MaxDt, MaxSubDt, MaxSubsteps, bSubstepping)  -> FStepPlanner -> FStepPlan{N, StepDt, FrameDt, Lost}
+  StartFrame()
+    OnPhysScenePreTick(FrameDt)   phase SetUp; FrameDt = UE5 MDeltaTime (FChaosScene::StartFrame -> OnStartFrame)
+    bIsSimulating = true
     if Driver == Native (backend has NATIVE_FRAME_MODEL: Chaos, Null):
       [T_push] flush commands once
       [T_step] Backend SetUpForFrame(original UE args) -> StartFrame -> WaitPhysScenes -> EndFrame
@@ -817,8 +841,10 @@ Tick(float DeltaSeconds)                               ~ UWorld::Tick physics pa
     [T_pull] ReadBodyStates(ACTIVE_ONLY), once per frame -> FBodyInstance::State
     [untimed] bench run:     GetStepStats values that need no listener; native hash only after the final frame
               behavior/viz:  hash every H, counters every C, capture frames: snapshot -> FIslandBuilder -> DebugDraw::Draw*
-    OnPhysScenePostTick
+    OnPhysScenePostTick(FrameDt)
 ```
+
+- **델리게이트 순서 (M1 수정 라운드에서 고침, §5.2 #31):** UE5는 `SetUpForFrame` 다음 `StartFrame` 안에서 PreTick과 Step을 clamp된 프레임 dt(`MDeltaTime`)로 한 번씩 broadcast한다 (ChaosScene.cpp:331-374, PhysScene_Chaos.cpp:2272-2316 [V]). 하네스 PreTick은 이와 같다. Harness driver의 `OnPhysSceneStep`은 엔진 스텝마다 스텝 dt로 부른다 (UE4 PhysX substep 방식). PostTick은 UE5에서 dt 없이 EndFrame에서 broadcast되고 (ChaosScene.cpp:576 [V]), 하네스는 같은 FrameDt를 넘긴다.
 
 - **FixedStep과 Sync에서는** 두 driver의 호출이 같다.
   - Chaos에서 MaxDt≤0은 "clamp 없음"이다 (ChaosScene.cpp:341-345). 솔버 루프도 MaxDeltaTime>0을 검사한다 (PBDRigidsSolver.cpp:569) [V].
@@ -827,7 +853,7 @@ Tick(float DeltaSeconds)                               ~ UWorld::Tick physics pa
   - `EFrameDriver::Harness`를 Chaos에 강제하는 것은 진단용으로만 허용한다. Null에서는 두 driver를 모두 돌려 A10을 검사한다.
 - **헤드라인 run의 비타이밍 작업:** 1만 바디의 해시나 카운터 패스는 1.1 MB 이상을 건드려 다음 프레임의 캐시를 식힌다. 그래서 bench 모드는 `HashEvery=0`(마지막 프레임 뒤에만 해시)과 `CountersEvery=0`을 기본으로 한다. 리스너가 필요 없는 `GetStepStats` 값은 매 프레임 읽어도 된다.
 
-### 9.2 `FStepPlanner` (UE의 float 산술을 그대로 재현하고 테스트로 고정) [MVP M1]
+### 9.2 `FStepPlanner` (UE의 산술을 UE의 형 그대로 재현하고 테스트로 고정) [MVP M1]
 
 전 모드를 M1에 구현하고 단위 테스트로 고정한다. MVP 씬은 FixedStep과 Sync만 쓴다. Chaos로 Native driver를 실제 검증하는 것은 M13이고, 그 전에는 Null로 검증한다 (A10).
 
@@ -861,6 +887,11 @@ Tick(float DeltaSeconds)                               ~ UWorld::Tick physics pa
 | Async 1/30, 프레임 1/60 | 스텝 수 0, 1 교대 |
 
 PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴다.
+
+**M1 구현 메모 [V]**
+- 계획은 UE의 형(type)으로 계산한다. `FChaosScene::SetUpForFrame`의 clamp는 float, `AdvanceAndDispatch_External`의 스텝 수·누산기는 FReal(double)이다 (PhysicsSolverBase.h:1013-1017). 각 스텝은 솔버 루프(PBDRigidsSolver.cpp:560-575)를 그대로 지나므로 `MinDeltaTime` 이하인 스텝은 시뮬레이션되지 않고 그 시간은 이월되지 않는다. UE4 규칙의 `MinDeltaTime` 처리는 같은 방식으로 적용했다 [R].
+- `FStepPlan`은 엔진 스텝 수(`NumSteps`)와 함께 UE가 밀어 넣은 스텝 수(`NumExternalSteps`), Native driver가 받는 UE 인자(`FSetUpForFrameParams`), AsyncFixed 표시(`bAsyncInterpolated`)를 갖는다. A10(M6)에서 `NumStepsTaken`을 어느 쪽과 대조할지는 M2/M6에서 정한다.
+- dt 0.2에서 float `6 × (1/60)`은 정확히 반올림 경계(0.1000000052154064)라서 짝수 쪽 0.100000009가 되고, ceil 입력이 6.0000002라 7 > 6이므로 6 × 1/60으로 떨어진다. 반대로 반올림되어도 6 × 1/60이다. 고정값은 두 경우 모두에서 같다.
 
 ### 9.3 타이밍 버킷과 헤드라인
 
@@ -978,6 +1009,16 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
   - 물리 프로필이 `EngineDefault`로 표시한 키
 - 그 밖의 키를 바꾸면 로드 오류다. 변형이 정규화를 조용히 되돌리지 못하게 하기 위해서다.
 - 백엔드가 모르는 키는 거부한다.
+- **M1 구현 메모 [V]:**
+  - 값의 정규 키는 `<접두어>.<키>`다: `PhysicsSettings.`, `PhysicsTestSettings.`, `BodyInstanceDefaults.`, `PhysicalMaterialDefaults.`, `ConsoleVariables.<cvar>`, `Backend.<Engine>.`(`.Init`). 프로필은 `[PhysicsTest.Profile]`의 `+EngineDefaultKeys=<정규 키>`로 변형에 연다.
+  - 모델링한 키는 모두 구조체 속성 표를 거쳐 파싱·재출력하므로 형식이 달라도(`-980.000000`과 `-980.0`) 같은 값이다. UE 섹션의 모르는 키는 Origin과 함께 기록만 하고(`bApplied=false`, 경고) 하네스 섹션의 모르는 키는 오류다. 스칼라 키에 배열 연산자(`+ . - !`)를 쓰면 오류다.
+  - `[ConsoleVariables]`: 하네스 물리 CVar와 Base·프로필이 설정한 CVar는 고정 키다. 그 밖의 CVar(예: Chaos CVar)는 엔진 키로 보고 변형이 쓸 수 있다.
+  - 하네스 물리 CVar는 `PhysicsCVars::GetHarnessConsoleVariables()`의 고정 표다 (`p.ComNudgeAffectsInertia`, `p.SensitiveSleepThresholdMultiplier`, `Physics/PhysicsConsoleVariables.cpp` 한 TU). 리졸버는 이 표만 하네스 CVar로 본다: 값 검증·정규화, 변형 금지, `physics_sha256` 포함, 내장 기본값 층. 프로그램이 따로 등록한 CVar(뷰어 CVar, 테스트의 `pt.Test.*`)는 리졸버에게는 엔진 CVar다. `ApplyConsoleVariables`만 그 프로세스에 등록된 CVar이면 설정한다. 그래서 같은 프로필은 어느 프로그램에서나 같은 값·같은 해시가 된다 (M1 수정 라운드. 전에는 프로세스에 등록된 모든 CVar로 시드해 링크 구성에 따라 해시가 달라졌다. CTest `PhysicsTest.Probe.HarnessCVars`가 BodyUtils를 링크하지 않는 프로그램과 `PhysicsTestAutomation`의 해시를 대조한다).
+  - `ApplyConsoleVariables`는 Set이 거부되면(못 읽는 값, 읽기 전용, 이미 더 높은 우선순위로 설정됨) 거부된 CVar마다 현재 값과 SetBy를 담아 false를 돌려준다. 섹션 이름은 UE처럼 대소문자를 무시한다. 숫자 값은 유한수만 받는다 (`inf`/`nan`은 로드 오류).
+  - `physics_sha256`: 적용된 물리 키 중 프로필이 고정한 것만 넣는다. EngineDefault 키, 엔진 키, 실행 옵션(스레드 수, run mode, 해시 주기), 모르는 UE 키는 뺀다.
+  - 커맨드라인은 UE 문법이다: `-ini:PhysicsTest:[Section]:Key=Value,...`(UE 철자인 `-ini:Engine:`도 받는다, ConfigCacheIni.cpp:2413-2500)와 `-ExecCmds="cvar value, ..."`. CVar 적용 우선순위는 ini가 `ECVF_SetByConsoleVariablesIni`, `-ExecCmds`가 `ECVF_SetByConsole`이다.
+  - Normalized의 "최대 각속도 해제"는 0이 아니라 `bOverrideMaxAngularVelocity=True`, `MaxAngularVelocity=1e7`(deg/s, 약 1.75e5 rad/s)이다. Chaos는 `MaxAngularSpeedSq`로 무조건 clamp하므로 0이면 회전이 멈춘다 (PBDRigidsEvolutionGBF.cpp:950-954 [V]). `UE_BIG_NUMBER`(3.4e+38)도 쓰지 않는다: rad/s로 바꾼 5.9e36을 엔진이 float로 제곱하면 +inf가 되어 (Chaos `MMaxAngularSpeedSq`는 `FRealSingle`, ParticleDirtyFlags.h:579, :646. Jolt `Square(mMaxAngularVelocity)`, MotionProperties.inl:39. PhysX `PxReal maxAngularVelocitySq`, PxvDynamics.h:74 [V]) readback, effective 설정 대조, 차이 계산에 inf가 들어간다. 1e7 deg/s는 제곱해도 float로 유한하고 도달할 수 없는 속도다 (M1 수정 라운드에서 고침).
+  - 위 표의 행을 키로 옮기면서 `FPhysicsTestSettings`에 `bAllowSleeping`(sleep 축)과 `RestitutionThresholdVelocity`(cm/s, 0 이하이면 엔진별 UEParity 매핑)를 더했다. "Average 강제, SF := F"를 머티리얼마다 강제하는 `ForcedOverrides`는 M9이고, M1 초안은 프로젝트 combine 모드만 Average로 둔다.
 
 | 항목 | UEParity | Normalized |
 |---|---|---|

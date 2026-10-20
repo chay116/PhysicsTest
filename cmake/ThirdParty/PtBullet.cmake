@@ -1,8 +1,9 @@
 # PtBullet.cmake - Bullet 3.25 (2c204c49) -> PT::Bullet (02_Architecture 4.3, DL54).
 #
 # Produces PT::Bullet: INTERFACE target with Bullet's src/ include dir, BulletDynamics / BulletCollision /
-# LinearMath, and the compile definitions Bullet itself was built with (Bullet's libraries carry no usage
-# requirements and its BT_* definitions are add_definitions() in Bullet's directory only).
+# LinearMath, and the header-visible BT_* definitions Bullet itself is built with (Bullet's libraries carry no usage
+# requirements and its own BT_* definitions are add_definitions() in Bullet's directory only, so the harness sets one
+# list on both sides - see _pt_bullet_header_defines below).
 #
 # Why each line exists (verified against bullet3 @ 2c204c49 with CMake 4.1.2):
 #  * Bullet's CMakeLists.txt:1 says cmake_minimum_required(VERSION 2.4.3): CMake >= 4.0 refuses it unless
@@ -38,6 +39,11 @@ _pt_bullet_force(BULLET2_MULTITHREADING BOOL OFF)         # BT_THREADSAFE=0 (the
 _pt_bullet_force(BULLET2_USE_PPL_MULTITHREADING BOOL OFF)
 _pt_bullet_force(BULLET2_USE_OPEN_MP_MULTITHREADING BOOL OFF)
 _pt_bullet_force(BULLET2_USE_TBB_MULTITHREADING BOOL OFF)
+# Options that add header-visible definitions through Bullet's add_definitions() (CMakeLists.txt:229-236): forced so a
+# stray -D on the command line cannot give Bullet's TUs and the adapter TUs different inline code (btRigidBody.h:308-386
+# uses BT_CLAMP_VELOCITY_TO). 0 / OFF = the definitions are not emitted at all.
+_pt_bullet_force(CLAMP_VELOCITIES STRING 0)
+_pt_bullet_force(INTERNAL_UPDATE_SERIALIZATION_STRUCTURES BOOL OFF)
 # Bullet writes these as global CACHE variables (CMakeLists.txt:209-211); pre-seed them so the "_Debug" postfix
 # does not leak into our own library targets.
 set(CMAKE_DEBUG_POSTFIX "" CACHE STRING "")
@@ -60,9 +66,34 @@ foreach(_t LinearMath BulletCollision BulletDynamics)
 	target_compile_options(${_t} PRIVATE /wd4819)
 endforeach()
 
+# Header-visible BT_* definitions, identical on Bullet's own TUs and on every PT::Bullet consumer, so both compile the
+# same inline code (ODR). BT_THREADSAFE is spelled out as 0: Bullet tests it with #if (btThreads.h and the TUs), so
+# 0 equals "undefined" for Bullet, while a consumer's self-report can tell "exported 0" from "missing".
+# DumpBuildFlags.cmake records the set ("bullet_header_defines") and flags any TU that disagrees.
+set(_pt_bullet_header_defines BT_THREADSAFE=0)
+if(PT_BULLET_DOUBLE)
+	list(APPEND _pt_bullet_header_defines BT_USE_DOUBLE_PRECISION)
+endif()
+function(_pt_bullet_collect_targets Dir OutVar)
+	get_property(_targets DIRECTORY "${Dir}" PROPERTY BUILDSYSTEM_TARGETS)
+	get_property(_subdirs DIRECTORY "${Dir}" PROPERTY SUBDIRECTORIES)
+	foreach(_sub IN LISTS _subdirs)
+		_pt_bullet_collect_targets("${_sub}" _sub_targets)
+		list(APPEND _targets ${_sub_targets})
+	endforeach()
+	set(${OutVar} ${_targets} PARENT_SCOPE)
+endfunction()
+_pt_bullet_collect_targets("${PT_BULLET3_SOURCE_DIR}" _pt_bullet_targets)
+foreach(_t IN LISTS _pt_bullet_targets)
+	get_target_property(_type ${_t} TYPE)
+	if(_type MATCHES "^(STATIC|SHARED|OBJECT|MODULE)_LIBRARY$|^EXECUTABLE$")
+		target_compile_definitions(${_t} PRIVATE ${_pt_bullet_header_defines})
+	endif()
+endforeach()
+set(PT_BULLET_HEADER_DEFINES "${_pt_bullet_header_defines}" CACHE INTERNAL "BT_* definitions shared by Bullet and PT::Bullet consumers")
+
 add_library(pt_bullet INTERFACE)
 add_library(PT::Bullet ALIAS pt_bullet)
 target_include_directories(pt_bullet SYSTEM INTERFACE "${PT_BULLET3_SOURCE_DIR}/src")
 target_link_libraries(pt_bullet INTERFACE BulletDynamics BulletCollision LinearMath)
-target_compile_definitions(pt_bullet INTERFACE
-	$<$<BOOL:${PT_BULLET_DOUBLE}>:BT_USE_DOUBLE_PRECISION>)
+target_compile_definitions(pt_bullet INTERFACE ${_pt_bullet_header_defines})

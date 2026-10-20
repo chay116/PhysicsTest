@@ -1,5 +1,8 @@
-// CoreMiscTests.cpp - hashes (published test vectors), FParse / FCommandLine (UE semantics), FRandomStream, QPC clock.
+// CoreMiscTests.cpp - hashes (published test vectors), FParse / FCommandLine (UE semantics), UTF-8 conversion,
+// FRandomStream (golden values), QPC clock.
 #include "CoreMinimal.h"
+
+#include "Containers/StringConv.h"
 
 #include "Misc/PtThirdPartyIncludesStart.h"
 #include <doctest/doctest.h>
@@ -131,6 +134,116 @@ TEST_CASE("PhysicsTest.Core.ParseValue")
 	CHECK(bFlag);
 }
 
+TEST_CASE("PhysicsTest.Core.ParseNumericRangeAndSign")
+{
+	// Unsigned overloads reject a '-' sign instead of wrapping around (strtoul("-1") = 4294967295 without ERANGE).
+	uint32 Threads = 7;
+	CHECK_FALSE(FParse::Value("-Threads=-1", "Threads=", Threads));
+	CHECK(Threads == 7u);
+	CHECK_FALSE(FParse::Value("-Threads= -1", "Threads=", Threads));
+	CHECK(Threads == 7u);
+	uint64 Mask = 9;
+	CHECK_FALSE(FParse::Value("-Affinity=-5", "Affinity=", Mask));
+	CHECK(Mask == 9u);
+
+	// Overflow is rejected, never truncated.
+	CHECK_FALSE(FParse::Value("-Threads=4294967296", "Threads=", Threads));
+	CHECK(FParse::Value("-Threads=4294967295", "Threads=", Threads));
+	CHECK(Threads == 4294967295u);
+	CHECK_FALSE(FParse::Value("-Mask=18446744073709551616", "Mask=", Mask));
+	CHECK(FParse::Value("-Mask=18446744073709551615", "Mask=", Mask));
+	CHECK(Mask == 18446744073709551615ull);
+	int32 Signed = 3;
+	CHECK_FALSE(FParse::Value("-N=2147483648", "N=", Signed));
+	CHECK_FALSE(FParse::Value("-N=-2147483649", "N=", Signed));
+	CHECK(Signed == 3);
+	CHECK(FParse::Value("-N=-2147483648", "N=", Signed));
+	CHECK(Signed == -2147483647 - 1);
+	int64 Big = 0;
+	CHECK_FALSE(FParse::Value("-N=9223372036854775808", "N=", Big));
+	CHECK(FParse::Value("-N=-9223372036854775808", "N=", Big));
+	CHECK(FParse::Value("-Threads=+4", "Threads=", Threads));   // an explicit '+' is fine
+	CHECK(Threads == 4u);
+
+	// float / double: a real, finite number (strtod alone would accept inf / nan).
+	double Dt = 0.25;
+	float Scale = 0.5f;
+	for (const char* Text : { "-Dt=inf", "-Dt=-INF", "-Dt=nan", "-Dt=infinity", "-Dt=1e999" })
+	{
+		CAPTURE(Text);
+		CHECK_FALSE(FParse::Value(Text, "Dt=", Dt));
+		CHECK_FALSE(FParse::Value(Text, "Dt=", Scale));
+	}
+	CHECK(Dt == 0.25);
+	CHECK(Scale == 0.5f);
+	CHECK(FParse::Value("-Dt=0.016666668", "Dt=", Dt));
+	CHECK(Dt == doctest::Approx(0.016666668));
+}
+
+TEST_CASE("PhysicsTest.Core.ParseToken")
+{
+	// UE FParse::Token: a leading quote is stripped, quotes inside a token are kept, a delimiter can be given.
+	const char* Stream = "  -A=1 \"two words\" -Label=\"x y\"  -ini:PhysicsTest:[S]:K=V,[S]:K2=\"a,b\"";
+	std::string Token;
+	CHECK(FParse::Token(Stream, Token));
+	CHECK(Token == "-A=1");
+	CHECK(FParse::Token(Stream, Token));
+	CHECK(Token == "two words");
+	CHECK(FParse::Token(Stream, Token));
+	CHECK(Token == "-Label=\"x y\"");
+	CHECK(FParse::Token(Stream, Token));
+	CHECK(Token == "-ini:PhysicsTest:[S]:K=V,[S]:K2=\"a,b\"");
+	CHECK_FALSE(FParse::Token(Stream, Token));
+
+	const std::string Settings = "[S]:K=V,[S]:K2=\"a,b\"";
+	const char* SettingsStream = Settings.c_str();
+	CHECK(FParse::Token(SettingsStream, Token, ','));
+	CHECK(Token == "[S]:K=V");
+	CHECK(FParse::Token(SettingsStream, Token, ','));
+	CHECK(Token == "[S]:K2=\"a,b\"");   // the comma inside quotes does not split
+	CHECK_FALSE(FParse::Token(SettingsStream, Token, ','));
+}
+
+TEST_CASE("PhysicsTest.Core.StringConvUtf8")
+{
+	// "한글 경로" (Korean path) in UTF-16 and UTF-8.
+	const wchar_t Wide[] = { 0xD55C, 0xAE00, L' ', 0xACBD, 0xB85C, 0 };
+	const std::string Utf8 = StringConv::WideToUtf8(Wide);
+	CHECK(Utf8 == "\xED\x95\x9C\xEA\xB8\x80 \xEA\xB2\xBD\xEB\xA1\x9C");
+	CHECK(StringConv::Utf8ToWide(Utf8) == std::wstring(Wide));
+	CHECK(StringConv::WideToUtf8(L"").empty());
+	// U+1F600 (a surrogate pair) round-trips too.
+	const wchar_t Emoji[] = { 0xD83D, 0xDE00, 0 };
+	CHECK(StringConv::WideToUtf8(Emoji) == "\xF0\x9F\x98\x80");
+	CHECK(StringConv::PathToUtf8(StringConv::Utf8ToPath(Utf8)) == Utf8);
+
+	// wmain argv -> UTF-8 argv -> FCommandLine (programs enter through wmain, docs/Progress.md M1).
+	wchar_t Arg0[] = L"PhysicsTestBench.exe";
+	wchar_t Arg1[] = { L'-', L'O', L'u', L't', L'=', L'D', L':', L'\\', 0xD55C, 0xAE00, L' ', 0xACBD, 0xB85C, 0 };
+	wchar_t* ArgVW[] = { Arg0, Arg1 };
+	const FUtf8ArgV Args(2, ArgVW);
+	REQUIRE(Args.Num() == 2);
+	CHECK(Args.Get()[2] == nullptr);
+	const std::string Built = FCommandLine::BuildFromArgV(nullptr, Args.Num(), Args.Get(), nullptr);
+	CHECK(Built == "-Out=\"D:\\" + Utf8 + "\"");
+	std::string Out;
+	CHECK(FParse::Value(Built.c_str(), "Out=", Out));
+	CHECK(Out == "D:\\" + Utf8);
+}
+
+TEST_CASE("PhysicsTest.Core.CommandLineUtf8Probe")
+{
+	// CTest PhysicsTest.Unit.CommandLineUtf8 starts the exe with -PtUtf8Probe="한글 경로" and runs this case: the
+	// value must arrive as UTF-8 through wmain (main(int, char**) would see the ANSI code page, cp949).
+	std::string Probe;
+	if (!FParse::Value(FCommandLine::Get(), "PtUtf8Probe=", Probe))
+	{
+		MESSAGE("no -PtUtf8Probe= argument (only the dedicated CTest entry passes one)");
+		return;
+	}
+	CHECK(Probe == "\xED\x95\x9C\xEA\xB8\x80 \xEA\xB2\xBD\xEB\xA1\x9C");
+}
+
 TEST_CASE("PhysicsTest.Core.CommandLine")
 {
 	char Arg0[] = "PhysicsTestBench.exe";
@@ -179,6 +292,55 @@ TEST_CASE("PhysicsTest.Core.RandomStream")
 	(void)C.GetFraction();
 	C.Reset();
 	CHECK(C.GetFraction() == First);
+}
+
+TEST_CASE("PhysicsTest.Core.RandomStreamGoldenValues")
+{
+	// Scene generation and desc_sha256 depend on this exact sequence. The expected values come from an independent
+	// MT19937-64 implementation (Matsumoto & Nishimura's reference algorithm, checked against the standard's
+	// 10000th-output requirement 9981545732273789042), the harness [0,1) mappings (53 bits: (x >> 11) * 2^-53;
+	// 24 bits: (x >> 40) * 2^-24) and the seeding path int32 -> uint32 -> uint64.
+	{
+		std::mt19937_64 Reference;   // the standard's own conformance value (default seed 5489)
+		Reference.discard(9999);
+		CHECK(Reference() == 9981545732273789042ull);
+	}
+	{
+		FRandomStream S(FRandomStream::DefaultSeed);   // 0x5EED
+		CHECK(S.GetFraction() == 0x1.c271be2ef4ba8p-1);
+		CHECK(S.GetFraction() == 0x1.4b044f345c238p-2);
+		CHECK(S.GetFraction() == 0x1.d2fdbca73c8dcp-3);
+		CHECK(S.FRand() == 0x1.13006p-1f);
+		CHECK(S.FRand() == 0x1.01ec6p-1f);
+		CHECK(S.FRand() == 0x1.823652p-1f);
+		S.Reset();
+		CHECK(S.GetUnsignedInt() == 3778600727u);
+		CHECK(S.GetUnsignedInt() == 1388385229u);
+		CHECK(S.GetUnsignedInt() == 979351444u);
+		S.Reset();
+		const int32 Expected[] = { 3, -1, -2, 0, 0, 2, -1, 0 };
+		for (const int32 Value : Expected)
+		{
+			CHECK(S.RandRange(-3, 3) == Value);
+		}
+	}
+	{
+		// A negative seed goes through uint32: -1 -> 0xFFFFFFFF -> mt19937_64 seed 4294967295.
+		FRandomStream S(-1);
+		CHECK(S.GetInitialSeed() == -1);
+		CHECK(S.GetFraction() == 0x1.a7759e8bbab5cp-3);
+		CHECK(S.GetFraction() == 0x1.a9b006768695cp-1);
+		CHECK(S.GetFraction() == 0x1.aa5712f6fb4dcp-1);
+		CHECK(S.FRand() == 0x1.028d7ap-1f);
+		CHECK(S.FRand() == 0x1.22c25p-2f);
+		CHECK(S.FRand() == 0x1.6f88bp-2f);
+		S.Reset();
+		const int32 Expected[] = { -2, 2, 2, 0, -2, -1, 0, -3 };
+		for (const int32 Value : Expected)
+		{
+			CHECK(S.RandRange(-3, 3) == Value);
+		}
+	}
 }
 
 TEST_CASE("PhysicsTest.Core.PlatformTimeIsQpc")

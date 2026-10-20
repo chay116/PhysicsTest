@@ -1,10 +1,12 @@
 # PT::Core - minimal UE idioms (02_Architecture 3, A.5, DL18): math, UE_LOG, check/verify/ensure, FCommandLine/FParse,
-# FPlatformTime (QPC), FNV-1a / SHA-256, FRandomStream, and the harness-side third-party include pair.
-# FConfigFile / IConsoleManager arrive in M1, FCycleCounter in M10.
+# FPlatformTime (QPC), FNV-1a / SHA-256, FRandomStream, UTF-8 string conversion, the harness-side third-party include
+# pair (M0), FConfigFile and IConsoleManager (M1). FCycleCounter arrives in M10.
 pt_add_module(PtCore STATIC ALIAS PT::Core
 	SOURCES
 		Public/CoreMinimal.h
 		Public/CoreTypes.h
+		Public/Containers/StringConv.h
+		Public/HAL/IConsoleManager.h
 		Public/HAL/PlatformMisc.h
 		Public/HAL/PlatformTime.h
 		Public/Hash/Fnv.h
@@ -19,9 +21,12 @@ pt_add_module(PtCore STATIC ALIAS PT::Core
 		Public/Math/Vector.h
 		Public/Misc/AssertionMacros.h
 		Public/Misc/CommandLine.h
+		Public/Misc/ConfigCacheIni.h
 		Public/Misc/Parse.h
 		Public/Misc/PtThirdPartyIncludesStart.h
 		Public/Misc/PtThirdPartyIncludesEnd.h
+		Private/Containers/StringConv.cpp
+		Private/HAL/ConsoleManager.cpp
 		Private/HAL/WindowsPlatform.cpp
 		Private/Hash/Sha256.cpp
 		Private/Logging/LogMacros.cpp
@@ -29,6 +34,7 @@ pt_add_module(PtCore STATIC ALIAS PT::Core
 		Private/Math/RandomStream.cpp
 		Private/Misc/AssertionMacros.cpp
 		Private/Misc/CommandLine.cpp
+		Private/Misc/ConfigCacheIni.cpp
 		Private/Misc/Parse.cpp)
 
 # Usage requirements of Core's PUBLIC headers, so every consumer compiles them the same way even without

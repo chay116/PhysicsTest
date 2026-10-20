@@ -25,10 +25,18 @@ namespace
 #else
 	#define PT_SMOKE_BT_SSE "\"BT_USE_SSE\":0,"
 #endif
-#if BT_THREADSAFE
+// PT::Bullet exports BT_THREADSAFE explicitly (cmake/ThirdParty/PtBullet.cmake), so "0" is the exported value, not a
+// missing macro; Bullet's own TUs are built with the same definition.
+#if !defined(BT_THREADSAFE)
+	#error "PT::Bullet must export BT_THREADSAFE (cmake/ThirdParty/PtBullet.cmake _pt_bullet_header_defines)"
+#elif BT_THREADSAFE
 	#define PT_SMOKE_BT_THREADSAFE "\"BT_THREADSAFE\":1,"
 #else
 	#define PT_SMOKE_BT_THREADSAFE "\"BT_THREADSAFE\":0,"
+#endif
+// CLAMP_VELOCITIES is forced to 0, so BT_CLAMP_VELOCITY_TO (used inline by btRigidBody.h) must not be defined.
+#if defined(BT_CLAMP_VELOCITY_TO)
+	#error "BT_CLAMP_VELOCITY_TO is defined: Bullet's TUs and the adapter TUs could disagree on btRigidBody's inline code"
 #endif
 
 	PT_BUILD_REPORT_JSON(GBuildReport, "\"BT_BULLET_VERSION\":" PT_BR_STR(BT_BULLET_VERSION) "," PT_SMOKE_BT_DOUBLE PT_SMOKE_BT_SSE PT_SMOKE_BT_THREADSAFE);

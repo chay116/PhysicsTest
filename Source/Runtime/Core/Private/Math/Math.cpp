@@ -329,7 +329,7 @@ namespace PhysicsTest
 	void FTransform::Multiply(FTransform* OutTransform, const FTransform* A, const FTransform* B)
 	{
 		// UE composes transforms with any negative scale component through matrices (MultiplyUsingMatrixWithScale,
-		// TransformNonVectorized.h), which the harness does not implement (no FMatrix yet). Fail in EVERY build, not
+		// TransformVectorized.cpp:320-324), which the harness does not implement (no FMatrix yet). Fail in EVERY build, not
 		// through checkf: with PT_DO_CHECK=0 (test preset) a check would be compiled out and the composition below
 		// would silently give a non-UE result. Fatal logs and terminates (exit code 3).
 		const bool bNegativeScale = A->Scale3D.X < 0.0 || A->Scale3D.Y < 0.0 || A->Scale3D.Z < 0.0
@@ -403,6 +403,13 @@ namespace PhysicsTest
 
 	FTransform FTransform::Inverse() const
 	{
+		// Win64 UE (TransformVectorized.h:363-374): InverseFast() only when some |Scale3D| component exceeds
+		// SMALL_NUMBER, otherwise Identity. (The scalar TransformNonVectorized.h path would return the inverse
+		// rotation with zero scale instead; UE does not compile it on Win64.)
+		if (!(FMath::Abs(Scale3D.X) > UE_SMALL_NUMBER || FMath::Abs(Scale3D.Y) > UE_SMALL_NUMBER || FMath::Abs(Scale3D.Z) > UE_SMALL_NUMBER))
+		{
+			return FTransform::Identity;
+		}
 		const FQuat InvRotation = Rotation.Inverse();
 		const FVector InvScale3D = GetSafeScaleReciprocal(Scale3D);
 		const FVector InvTranslation = InvRotation.RotateVector(InvScale3D * -Translation);

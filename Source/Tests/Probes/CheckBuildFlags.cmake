@@ -3,7 +3,8 @@
 # Fails when DumpBuildFlags.cmake recorded any violation of the flag-profile expectations:
 #   Shipped: only Jolt TUs and TUs that compile against Jolt carry /arch:AVX2; PhysX, Bullet and harness have no /arch;
 #   every TU is /fp:fast with -MD (Debug: -MDd) and no -MT; PhysX TUs keep /std:c++14; harness TUs are C++20; no /GL;
-#   every TU has the same effective _ITERATOR_DEBUG_LEVEL (Debug 2, Release 0), explicit /D "..." defines included.
+#   every TU has the same effective _ITERATOR_DEBUG_LEVEL (Debug 2, Release 0), explicit /D "..." defines included;
+#   Bullet's TUs and every harness TU compiled against Bullet carry the same BT_* definitions (M1).
 if(NOT EXISTS "${PT_BUILD_FLAGS}")
 	message(FATAL_ERROR "BuildFlags.json not found: '${PT_BUILD_FLAGS}' (build the PtBuildFlags target first)")
 endif()
@@ -15,10 +16,12 @@ string(JSON _profile GET "${_json}" flag_profile)
 string(JSON _config GET "${_json}" configuration)
 string(JSON _summary GET "${_json}" summary)
 string(JSON _jolt GET "${_json}" jolt_public_defines)
+string(JSON _bullet GET "${_json}" bullet_header_defines)
 string(REGEX REPLACE "[ \n]+" " " _summary "${_summary}")
 
 message(STATUS "BuildFlags.json: ${_tu_count} TUs, configuration ${_config}, profile ${_profile}, PhysX config ${_physx}")
 message(STATUS "Jolt public defines: ${_jolt}")
+message(STATUS "Bullet header defines (Bullet TUs = PT::Bullet consumers): ${_bullet}")
 message(STATUS "Per-group summary: ${_summary}")
 if(_violations GREATER 0)
 	string(JSON _list GET "${_json}" violations)

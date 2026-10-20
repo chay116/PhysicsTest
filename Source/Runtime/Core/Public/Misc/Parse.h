@@ -9,9 +9,11 @@
 //   Value(Stream, "Key=", Out) the text after the first match: a value in double quotes may contain spaces; an
 //                              unquoted value skips leading whitespace and stops at whitespace, ',' or ')'
 //                              (UE behaviour: Parse.cpp:242-322)
-// Intentional differences from UE (docs/Progress.md M0 §3 #13): the numeric overloads return true only when a number
-// was actually read (UE returns true for any match and converts with Atoi/Atof, so "-Threads=abc" gives 0), and
-// Bool returns false for a value it does not recognise (UE returns true with FCString::ToBool's result, i.e. false).
+// Intentional differences from UE (docs/Progress.md M0 §3 #13, M1 §3): the numeric overloads return true only when a
+// number was actually read and fits the type (UE returns true for any match and converts with Atoi/Atof, so
+// "-Threads=abc" gives 0); the unsigned overloads also reject a '-' sign ("-Threads=-1" is an error, not 4294967295);
+// the float / double overloads reject inf and nan; and Bool returns false for a value it does not recognise (UE
+// returns true with FCString::ToBool's result, false).
 #pragma once
 
 #include "CoreTypes.h"
@@ -35,5 +37,11 @@ namespace PhysicsTest
 		// "Key=true|false|on|off|yes|no|<integer>" (case-insensitive; an integer is true when non-zero), like
 		// UE's FParse::Bool / FCString::ToBool.
 		static bool Bool(const char* Stream, const char* Match, bool& OnOff);
+
+		// Next token of Stream, which is advanced past it (UE FParse::Token without escapes, Parse.cpp:846-930): leading
+		// whitespace (and Delimiter, when given) is skipped; a token that starts with '"' runs to the closing quote and
+		// loses the quotes; any other token runs to whitespace / Delimiter and keeps embedded quoted parts intact
+		// ("-Key="a b"" is one token). Returns false when no token is left.
+		static bool Token(const char*& Stream, std::string& OutToken, char Delimiter = '\0');
 	};
 }

@@ -14,7 +14,7 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | Jolt | 5.6.0 (`e77f1755`) | 1단계 |
 | Chaos | UE 5.8.3, UBT Program DLL + C ABI | 나중에 직접 구현 |
 
-> **현재 상태 (2026-10-21):** M0(스캐폴드·툴체인·SDK 연결·환경 준비)를 마쳤습니다. 세 SDK, 작은 의존성, 하네스 Core가 Ninja 트리 하나로 빌드되고 SDK 스모크 3종과 CTest 프로브가 통과합니다. 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M1(PhysicsCore 데이터 모델)입니다.
+> **현재 상태 (2026-10-21):** M1(PhysicsCore 데이터 모델)까지 마쳤습니다. M0의 스캐폴드(세 SDK, 작은 의존성, 하네스 Core를 Ninja 트리 하나로 빌드, SDK 스모크와 CTest 프로브) 위에 UE 이름·기본값의 데이터 모델, 하네스 질량 규칙(`BodyUtils`), 모든 tick mode의 `FStepPlanner`, ini 프로필 리졸버, `FPhysScene` 골격(스텁 백엔드)이 단위 테스트로 고정되어 있습니다. 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M2(C ABI v0.9 + BackendKit + Null 백엔드)입니다.
 
 ## 문서
 
@@ -67,7 +67,7 @@ Tools\ctest.cmd --preset dev
 | `test` | Release, `/MD` | Test | 끔 | 빌드 안 함 | 헤드라인 측정 (M7부터) |
 
 - 모든 프리셋은 Ninja 단일 구성이고 빌드 트리는 `out/<preset>`입니다. `RelWithDebInfo`/`MinSizeRel`은 configure에서 거부합니다.
-- 공통 플래그: 전 타깃 `/fp:fast`, `/MD`(dbg는 `/MDd`), `/Zi`, LTO 없음. `/arch:AVX2`는 Jolt와 Jolt를 쓰는 TU에만 붙습니다 (Shipped 프로필). 하네스 타깃은 C++20, `/W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor`입니다. 전역 `CMAKE_CXX_STANDARD`는 쓰지 않습니다 (PhysX `/std:c++14 /WX`가 깨짐).
+- 공통 플래그: 전 타깃 `/fp:fast`, `/MD`(dbg는 `/MDd`), `/Zi`, LTO 없음. `/arch:AVX2`는 Jolt와 Jolt를 쓰는 TU에만 붙습니다 (Shipped 프로필). 하네스 타깃은 C++20, `/W4 /WX /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor`입니다 (하네스 TU의 경고는 빌드 실패). 전역 `CMAKE_CXX_STANDARD`는 쓰지 않습니다 (PhysX `/std:c++14 /WX`가 깨짐).
 - `test-avx2`는 M7, `prof`·`test-<engine>`은 M10에서 추가합니다.
 
 ### SDK 소스
@@ -88,15 +88,30 @@ Tools\ctest.cmd --preset dev
 
 | 테스트 | 확인하는 것 |
 |---|---|
-| `PhysicsTest.Automation` | `PhysicsTestAutomation.exe`(doctest): Core 관용구 단위 테스트 (UE 회전·합성 순서, SHA-256/FNV, FParse 등) |
+| `PhysicsTest.Automation` | `PhysicsTestAutomation.exe`(doctest)의 모든 단위 테스트를 한 프로세스에서 실행 |
+| `PhysicsTest.Unit.<Area>` | 같은 exe를 `-tc=PhysicsTest.<Area>.*`로 영역별 실행: `Core`(UE 회전·합성 순서, SHA-256/FNV, FParse, `FRandomStream` 골든 값, UTF-8), `Config`(ini 문법, CVar 우선순위), `Types`(UE 필드·기본값, 32채널 충돌 필터, 조인트 프리셋), `BodyUtils`(질량 규칙), `StepPlanner`(tick mode 고정값), `Analytic`(`dt_engine`, S00 기준값), `Profile`(ini 계층, Origin, 변형 키 제한, `-ini:`/`-ExecCmds`), `PhysScene`(골격과 프레임 상태기계). 걸러진 테스트가 0개이면 실패로 칩니다 |
+| `PhysicsTest.Unit.CommandLineUtf8` | 한글 인자(`-PtUtf8Probe=한글 경로`)가 `wmain`을 거쳐 UTF-8로 `FCommandLine`에 들어감 |
 | `PhysicsTest.Smoke.{Jolt,Bullet,PhysX}` | SDK 스모크: SI, Z-up, g = 9.80, damping 0, sleep 끔. z(60) = 5.0183328 m ± 2e-5. Jolt는 설정 문자열(AVX2, Profile/Debug Renderer/FP Exceptions 없음)도 검사. `RunSmoke.cmake`가 `PT_SMOKE_JSON` 줄이 유효한 JSON인지도 확인 |
 | `PhysicsTest.Probe.ThirdPartyIncludes` | Core를 먼저 include한 TU가 래퍼 쌍을 거쳐 doctest·ImGui·ImPlot·nlohmann/json을 include하고 컴파일됨 |
 | `PhysicsTest.Probe.NegativeScaleFatal` | 음수 스케일 `FTransform` 합성이 모든 프리셋(`PT_DO_CHECK=0`인 test 포함)에서 Fatal로 끝남 (종료 코드 3) |
+| `PhysicsTest.Probe.HarnessCVars` | 프로필 리졸버만 쓰는 프로그램(링크 맵에 `BodyUtils`·`BodyInstance`·`PhysScene` 오브젝트 없음)에도 하네스 물리 CVar가 등록되고 변형 금지·값 검증이 그대로이며, `physics_sha256`이 `PhysicsTestAutomation`과 같음 |
 | `PhysicsTest.Probe.FlagLeak` | Jolt를 PRIVATE로 링크한 정적 lib의 소비자 TU에 `__AVX2__`와 `JPH_*`가 없음 |
-| `PhysicsTest.Probe.BuildFlags` | `BuildFlags.json`에 플래그 프로필 위반이 0개 (모든 TU의 `_ITERATOR_DEBUG_LEVEL`이 같은지 포함) |
+| `PhysicsTest.Probe.BuildFlags` | `BuildFlags.json`에 플래그 프로필 위반이 0개 (모든 TU의 `_ITERATOR_DEBUG_LEVEL`이 같은지, Bullet TU와 Bullet을 쓰는 하네스 TU의 `BT_*` 정의가 같은지 포함) |
 | `PhysicsTest.Probe.RefsClean` | `D:\PhysicsRefs` 세 저장소의 `git status --porcelain`(`--ignored` 포함)이 비어 있고 PxConfig.h/.dxil/.spv가 없음. 프로브 자신도 `--no-optional-locks`로 읽기만 함 |
 | `PhysicsTest.Probe.LongestObjectPath` | 가장 긴 컴파일러 오브젝트 경로 < 240자 |
 | `PhysicsTest.Probe.PinGuard` | 잘못된 SDK 태그, 미러(대소문자 바꾼 경로 포함)·빌드 트리 밖 소스 디렉터리, 다른 HEAD(임시 저장소)에서 configure가 FATAL |
+
+### 물리 프로필 (M1)
+
+설정은 UE처럼 ini 계층으로 정합니다: 코드 기본값 → `Config/BasePhysicsTest.ini`(UE 기본값, 모든 UE 키는 `[/Script/Engine.PhysicsSettings]`) → `Config/Profiles/<UEParity|Normalized>.ini` → 백엔드 변형 ini(M5) → 씬 고정값(M3) → 커맨드라인. 값마다 출처(Origin: 파일과 줄)가 남습니다. 변형 ini는 자기 엔진 키와 프로필이 `EngineDefaultKeys`로 연 키만 바꿀 수 있고, 그 밖의 키를 건드리면 로드 오류입니다. 하네스 물리 CVar는 `p.ComNudgeAffectsInertia`와 `p.SensitiveSleepThresholdMultiplier` 두 개이고 (`Physics/PhysicsConsoleVariables.h`), 그 밖의 CVar 이름은 엔진(Chaos 등)으로 넘어갑니다. 섹션 이름은 UE처럼 대소문자를 무시하고, 숫자 값은 유한수만 받습니다. 커맨드라인 문법은 UE와 같습니다.
+
+```
+-ini:PhysicsTest:[/Script/Engine.PhysicsSettings]:DefaultGravityZ=-490,[/Script/PhysicsTest.PhysicsTestSettings]:TickMode=Sync
+-ini:Engine:[/Script/Engine.PhysicsSettings]:MaxSubsteps=4
+-ExecCmds="p.ComNudgeAffectsInertia 0, p.Chaos.Solver.Sleep.Enabled=0"
+```
+
+`[/Script/PhysicsCore.PhysicsSettingsCore]` 섹션은 쓰지 않습니다 (UE 게임처럼 모든 물리 키가 Engine 섹션에 있습니다, docs/04 DL44). 하네스 프로그램은 `wmain`으로 들어오므로 한글 경로 같은 비 ASCII 인자도 UTF-8로 그대로 전달됩니다.
 
 ### 빌드 자기보고
 
@@ -151,8 +166,10 @@ dbg 프리셋 exe(`out/dbg/bin/*.exe`, PDB 포함)를 디버깅합니다. 선택
 CMakeLists.txt  CMakePresets.json  CMakeUserPresets.json.example  THIRD_PARTY_NOTICES.md
 cmake/            PTOptions, PTToolchain, PTFlagProfiles, PTModules, DumpBuildFlags, PTBuildInfo.h.in
 cmake/ThirdParty/ Jolt, PtBullet, PhysX, PhysXBootstrap, ImGui, SmallDeps, PtFetch (.cmake)
-Source/Runtime/   Core (UE 관용구 최소 구현), BackendCommon (빌드 자기보고, SDK include 매크로)
-Source/Programs/  PhysicsTestAutomation (doctest 골격)
+Config/           BasePhysicsTest.ini, Profiles/UEParity.ini, Profiles/Normalized.ini (프로필 ini 계층, M1 초안)
+Source/Runtime/   Core (UE 관용구 최소 구현, ini, CVar), BackendCommon (빌드 자기보고, SDK include 매크로),
+                  PhysicsCore (UE 데이터 모델, BodyUtils, FStepPlanner, 프로필 리졸버, FPhysScene 골격)
+Source/Programs/  PhysicsTestAutomation (doctest 단위 테스트)
 Source/Tests/     SdkSmoke (스모크 3종), Probes (CTest 프로브)
 Tools/            cmake.cmd, ctest.cmd, vcenv.cmd, check_physx_isolation.cmd, CompareBuildFlags.cmake, ptbench/
 docs/             설계 문서와 Progress.md

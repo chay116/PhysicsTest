@@ -1,9 +1,14 @@
 // PhysicsTestAutomation.exe - doctest runner for unit tests (M1+) and ABI / conformance gates (M2+).
-// Skeleton in M0: Core idiom tests. Test names follow PhysicsTest.<Area>.<Name> (02_Architecture 14.1).
+// Test names follow PhysicsTest.<Area>.<Name> (02_Architecture 14.1); CTest runs everything (PhysicsTest.Automation)
+// and each area separately (PhysicsTest.Unit.<Area>).
 //
 //   PhysicsTestAutomation.exe                     run everything
-//   PhysicsTestAutomation.exe -tc=PhysicsTest.Core.*
+//   PhysicsTestAutomation.exe -tc=PhysicsTest.BodyUtils.*
 //   PhysicsTestAutomation.exe -BuildInfo          print the build self-report and exit
+//   PhysicsTestAutomation.exe -ConfigDir=<dir>    use another Config/ directory (default: the source tree's)
+//
+// Entry point is wmain: Windows passes the command line as UTF-16 and FUtf8ArgV converts it to UTF-8, so non-ASCII
+// arguments (e.g. Korean paths) reach FCommandLine intact; main(int, char**) would get the ANSI code page (cp949).
 #include "CoreMinimal.h"
 
 #include "BuildFlagsSha.h"
@@ -14,11 +19,12 @@
 #include <doctest/doctest.h>
 #include "Misc/PtThirdPartyIncludesEnd.h"
 
-int main(int ArgC, char** ArgV)
+int wmain(int ArgC, wchar_t** ArgVW)
 {
 	using namespace PhysicsTest;
 
-	const std::string CommandLine = FCommandLine::BuildFromArgV(nullptr, ArgC, ArgV, nullptr);
+	const FUtf8ArgV Args(ArgC, ArgVW);
+	const std::string CommandLine = FCommandLine::BuildFromArgV(nullptr, Args.Num(), Args.Get(), nullptr);
 	FCommandLine::Set(CommandLine.c_str());
 	if (!FPlatformMisc::IsDebuggerPresent())
 	{
@@ -38,6 +44,6 @@ int main(int ArgC, char** ArgV)
 	}
 
 	doctest::Context Context;
-	Context.applyCommandLine(ArgC, ArgV);
+	Context.applyCommandLine(Args.Num(), Args.Get());
 	return Context.run();
 }

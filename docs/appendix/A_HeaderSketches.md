@@ -61,6 +61,16 @@
 - BackendCommon: `PtTypes.h` (02 §7.3이 말하는 고정 폭 typedef의 파일)
 - PhysicsTestAbi: `Private/PtAbiUeCompatCheck.cpp` (02 §4.5의 `PtAbiUeCompatCheck` OBJECT 타깃의 소스)
 
+**M1 구현과의 차이 (요약, 세부는 [Progress.md](../Progress.md) M1 §3).** A.5~A.10은 M1에서 컴파일되는 코드가 되었고, 스케치와 다른 곳은 다음과 같다.
+- 새 파일: Core `Containers/StringConv.h`(UTF-16 ↔ UTF-8, `wmain` 인자), PhysicsCore `Physics/AnalyticReference.h`(`dt_engine`, 자유낙하 기준값), `Physics/PhysicsConsoleVariables.h`(하네스 물리 CVar 표: `p.ComNudgeAffectsInertia`, `p.SensitiveSleepThresholdMultiplier`. 리졸버가 이 표만 하네스 CVar로 본다), `Private/Physics/Matrix33.h`(Jacobi 대각화), `PhysicsEngine/ConstraintUtils.h`(A.6에서는 `ConstraintInstance.h` 안에 있던 프리셋).
+- A.5의 `FConfigCacheIni`는 만들지 않았다 (쓰는 곳이 없다. 하네스는 ini 파일을 명시적으로 합성한다). `FConfigFile`의 섹션 이름은 UE처럼 대소문자를 무시한다.
+- A.6: `PhysicsInterfaceTypes.h`의 채널 수는 C++ 상수 `NumCollisionChannels`다. C ABI의 매크로 `PT_NUM_COLLISION_CHANNELS`(A.1)와 이름이 같으면 ABI 헤더를 먼저 include한 TU에서 선언이 깨지기 때문이다. `FBodyCollisionFilter::IsValid()`를 더했다. `FBodySetup::GetVolume`은 UE 5.1+ 이름 `GetScaledVolume`이 되었고, `BuildScale3D`는 UE처럼 메타데이터라 곱하지 않는다.
+- A.10의 `FConfigValue`는 Core ini의 UE 이름 `FConfigValue`와 겹쳐 `FResolvedConfigValue`로 바꿨다. `FProfileResolver::Resolve`는 입력을 `FProfileResolveInputs`(Base, 프로필, 변형, 씬 고정값, 커맨드라인 전체)로 받는다. `FResolvedPhysicsConfig::Sha256()`은 `PhysicsSha256()`이 되었다 (`FPhysicsProfile::Sha256()`·`FBackendVariant::Sha256()`과 구분). `ApplyConsoleVariables(Config, OutEngineVariables, OutError)`를 더했다. `ApplyForcedOverrides`는 M9에 둔다. effective 설정 API(`FEffectiveSetting`, `ParseEffectiveSettings`, `GetRequiredEffectiveKeys`)는 백엔드의 `DumpEffectiveSettings`가 생기는 M2(Null, A7)와 M3(`effective_settings.jsonl`)로 미뤘다.
+- A.7의 `FStepPlan`에 `NumExternalSteps`, `bAsyncInterpolated`, `Params`(UE `SetUpForFrame` 인자), `FrameDeltaTime`(UE5 `MDeltaTime`, PreTick이 받는 dt)을 더했고, `FStepPlanner`는 `MakeSetUpForFrameParams` / `GetAsyncDeltaTime` / `PlanFrame`으로 나눴다 (A.7의 편의 오버로드도 있다).
+- A.9의 `Tick`은 UE5 순서다: `SetUpForFrame` → `StartFrame`(안에서 `OnPhysScenePreTick(FrameDeltaTime)`) → `WaitPhysScenes` → `EndFrame`. 생성·flush·준비는 phase Idle에서만 된다.
+- A.6의 `FBodyInstance` 명령 함수(속도·힘·임펄스·깨우기)와 A.9의 `FPhysScene` 명령 버퍼·해시·디버그 스냅샷은 ABI가 생기는 M2~M4에 더한다. `FKConvexElem::BuildHull`은 M15다.
+- `FPhysicsTestSettings`에 `bAllowSleeping`, `RestitutionThresholdVelocity`를 더했다 (02 §10 M1 구현 메모).
+
 ### A.0.4 UE 대응 차이 (헤더 수준)
 
 UE 전문가가 읽을 때 걸릴 만한 차이를 모았다. 모두 의도한 차이다. D1에 따른 `float` → `double` 외에는 수치에 영향을 주는 항목이 없다 (R1). 전체 대응표는 [02_Architecture.md](../02_Architecture.md) §5.2이고, 이 표는 헤더에서 보이는 것만 다룬다.
@@ -1007,7 +1017,8 @@ struct FCycleCounter {                                                          
 };
 // Also provided (minimal, S5): UE_LOG / DECLARE_LOG_CATEGORY_EXTERN, check / checkf / verify / ensure (PT_DO_CHECK),
 //   FCommandLine, FParse::Value / Param, FRandomStream (mt19937_64 + harness [0,1) mapping, seed 0x5EED), FSHA256 [M0];
-//   FConfigFile / FConfigCacheIni, IConsoleManager, TAutoConsoleVariable<T>, FAutoConsoleVariableRef [M1].
+//   FConfigFile / FConfigCacheIni, IConsoleManager, TAutoConsoleVariable<T>, FAutoConsoleVariableRef [M1]
+//   (M1 implemented FConfigFile without FConfigCacheIni, see A.0.3).
 // Third-party headers (doctest, ImGui, ImPlot, nlohmann/json) are included only between
 // #include "Misc/PtThirdPartyIncludesStart.h" and #include "Misc/PtThirdPartyIncludesEnd.h" (A.4).
 }

@@ -159,7 +159,7 @@ TEST_CASE("PhysicsTest.Core.QuatCompositionOrder")
 
 TEST_CASE("PhysicsTest.Core.TransformCompositionOrder")
 {
-	// A * B applies A first, then B (UE FTransform::Multiply, TransformNonVectorized.h:1308-1342).
+	// A * B applies A first, then B (UE FTransform::Multiply, TransformVectorized.cpp:295-345).
 	const FTransform A(FRotator(10.0, 20.0, 30.0), FVector(1.0, 2.0, 3.0), FVector(2.0));
 	const FTransform B(FRotator(-40.0, 5.0, 60.0), FVector(-5.0, 7.0, 1.0), FVector(1.5));
 	const FVector P(3.0, -4.0, 5.0);
@@ -185,6 +185,33 @@ TEST_CASE("PhysicsTest.Core.TransformCompositionOrder")
 	CHECK((Turn * Move).TransformPosition(FVector::ForwardVector).Equals(FVector(0.0, 1.0, 10.0), Tolerance));
 	CHECK((Turn * Move).TransformPosition(FVector(0.0, 0.0, 1.0)).Equals(FVector(0.0, 0.0, 11.0), Tolerance));
 	CHECK((Move * Turn).GetTranslation().Equals(FVector(0.0, 0.0, 10.0), Tolerance));
+}
+
+TEST_CASE("PhysicsTest.Core.TransformInverseZeroScale")
+{
+	// UE Win64 (TransformVectorized.h:363-374): Identity when no |Scale3D| component exceeds SMALL_NUMBER.
+	const FTransform AllZero(FRotator(10.0, 20.0, 30.0), FVector(1.0, 2.0, 3.0), FVector(0.0));
+	CHECK(AllZero.Inverse().Equals(FTransform::Identity, 0.0));
+	const FTransform Tiny(FRotator(10.0, 20.0, 30.0), FVector(1.0, 2.0, 3.0), FVector(1e-9));
+	CHECK(Tiny.Inverse().Equals(FTransform::Identity, 0.0));
+	// One non-zero component: InverseFast with GetSafeScaleReciprocal (zero components invert to zero).
+	const FTransform Flat(FQuat::Identity, FVector(4.0, 6.0, 8.0), FVector(2.0, 0.0, 1.0));
+	const FTransform FlatInverse = Flat.Inverse();
+	CHECK(FlatInverse.GetScale3D().Equals(FVector(0.5, 0.0, 1.0), Tolerance));
+	CHECK(FlatInverse.GetTranslation().Equals(FVector(-2.0, 0.0, -8.0), Tolerance));
+}
+
+TEST_CASE("PhysicsTest.Core.DefaultInitialisation")
+{
+	// Intentional difference from UE (02_Architecture 5.2): FVector / FQuat are zero / identity by default (UE leaves
+	// them uninitialised); FTransform defaults to the identity, as UE's TTransform() does.
+	const FVector V;
+	const FQuat Q;
+	const FTransform T;
+	CHECK(V == FVector::ZeroVector);
+	CHECK(Q == FQuat::Identity);
+	CHECK(T.Equals(FTransform::Identity, 0.0));
+	CHECK(T.GetScale3D() == FVector::OneVector);
 }
 
 TEST_CASE("PhysicsTest.Core.BoxAccumulation")

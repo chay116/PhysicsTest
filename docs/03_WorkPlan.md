@@ -248,7 +248,7 @@ Chaos 행까지:
 |---|---|---|
 | 1 | 타입: `FKShapeElem`, `FKSphereElem`, `FKBoxElem`, `FKSphylElem`, `FKConvexElem`(데이터만), `FKAggregateGeom`, `FBodySetup`, `FPhysicalMaterial`, `FBodyInstance`, `FConstraintInstance`(ball/hinge 데이터만), `FBodyInstanceState`, `EObjectStateType`, `ECollisionChannel` + `FBodyCollisionFilter`, 설정 계층 `FPhysicsSettingsCore`/`FPhysicsSettings`/`SolverOptions`/`FPhysicsTestSettings` | 1.25 |
 | 2 | `BodyUtils::ComputeMassProperties`: 해석적 프리미티브(구, 박스, 캡슐), 평행축 합성, Jacobi 대각화, UE 질량 규칙과 Physical 규칙 | 0.75 |
-| 3 | `FStepPlanner`: FixedStep, Sync, Substepping(UE5ChaosScene, UE4PhysSubstep), AsyncFixed. UE의 float 산술 재현, MinDeltaTime 미만 나머지 소실, `dt_engine = (double)(float)dt` | 0.75 |
+| 3 | `FStepPlanner`: FixedStep, Sync, Substepping(UE5ChaosScene, UE4PhysSubstep), AsyncFixed. UE의 산술을 UE의 형 그대로 재현 (`FChaosScene::SetUpForFrame`은 float, 솔버의 스텝 수·누산기는 FReal = double, UE4 substep은 float. M1에서 확인), MinDeltaTime 미만 나머지 소실, `dt_engine = (double)(float)dt` | 0.75 |
 | 4 | 최소 프로필: `FConfigFile`(ini 리더), `IConsoleManager`/`TAutoConsoleVariable`(최소), `FProfileResolver`(Base → Profile → Backend variant → 커맨드라인), Origin 추적, 변형 키 제한, `-ini:`/`-ExecCmds`. `BasePhysicsTest.ini`, `Profiles/UEParity.ini`, `Profiles/Normalized.ini` 초안 | 1.0 |
 | 5 | `FPhysScene` 골격: 포인터 안정 저장소(std::deque), 지연 액터 목록, 델리게이트(`OnPhysScenePreTick`/`OnPhysSceneStep`/`OnPhysScenePostTick`), 프레임 상태기계. 백엔드는 스텁 | 0.25 |
 

@@ -57,8 +57,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 #[[
 pt_target_defaults(<Target>)
-	Harness-side compile policy (02 4.1): C++20, /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor,
-	NOMINMAX WIN32_LEAN_AND_MEAN UNICODE, PT_DO_CHECK. Never applied to SDK or third-party targets.
+	Harness-side compile policy (02 4.1): C++20, /W4 /WX /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor,
+	NOMINMAX WIN32_LEAN_AND_MEAN UNICODE, PT_DO_CHECK. Never applied to SDK or third-party targets. /WX makes a
+	compiler warning in a harness TU fail every preset (SDK headers are wrapped by Misc/PtThirdPartyIncludesStart.h).
 #]]
 function(pt_target_defaults Target)
 	get_target_property(_type ${Target} TYPE)
@@ -67,7 +68,7 @@ function(pt_target_defaults Target)
 		return()
 	endif()
 	target_compile_features(${Target} PUBLIC cxx_std_20)
-	target_compile_options(${Target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+	target_compile_options(${Target} PRIVATE /W4 /WX /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor)
 	target_compile_definitions(${Target} PRIVATE
 		NOMINMAX
 		WIN32_LEAN_AND_MEAN

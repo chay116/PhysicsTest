@@ -1,6 +1,7 @@
 // CoreMinimal.h - the harness Core in one include (UE: Core/Public/CoreMinimal.h).
 // Core is a minimal implementation of the UE idioms the harness uses (DL18, S5); names and semantics follow
-// UE 5.8.3, the code is our own. FConfigFile and IConsoleManager arrive in M1, FCycleCounter in M10.
+// UE 5.8.3, the code is our own. As in UE, Containers/StringConv.h, HAL/IConsoleManager.h and Misc/ConfigCacheIni.h
+// (M1) are included where they are used, not here. FCycleCounter arrives in M10.
 #pragma once
 
 #include "CoreTypes.h"
