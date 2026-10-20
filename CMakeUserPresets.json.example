@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "local-base",
+      "hidden": true,
+      "cacheVariables": {
+        "PT_SDK_MIRROR": "D:/PhysicsRefs",
+        "PT_JOLT_GIT": "file:///D:/PhysicsRefs/JoltPhysics",
+        "PT_PHYSX_GIT": "file:///D:/PhysicsRefs/PhysX",
+        "PT_BULLET_GIT": "file:///D:/PhysicsRefs/bullet3",
+        "PT_UE_ROOT": "D:/UnrealEngine"
+      }
+    },
+    { "name": "dbg-local", "inherits": [ "local-base", "dbg" ], "displayName": "dbg (local SDK mirror)" },
+    { "name": "dev-local", "inherits": [ "local-base", "dev" ], "displayName": "dev (local SDK mirror)" },
+    { "name": "test-local", "inherits": [ "local-base", "test" ], "displayName": "test (local SDK mirror)" }
+  ],
+  "buildPresets": [
+    { "name": "dbg-local", "configurePreset": "dbg-local" },
+    { "name": "dev-local", "configurePreset": "dev-local" },
+    { "name": "test-local", "configurePreset": "test-local" }
+  ],
+  "testPresets": [
+    { "name": "dbg-local", "configurePreset": "dbg-local", "output": { "outputOnFailure": true } },
+    { "name": "dev-local", "configurePreset": "dev-local", "output": { "outputOnFailure": true } },
+    { "name": "test-local", "configurePreset": "test-local", "output": { "outputOnFailure": true } }
+  ]
+}

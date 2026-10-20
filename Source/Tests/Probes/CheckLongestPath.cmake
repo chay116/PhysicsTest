@@ -1,0 +1,42 @@
+# CheckLongestPath.cmake - CTest PhysicsTest.Probe.LongestObjectPath (03_WorkPlan M0 criterion 8).
+#   cmake -DPT_BINARY_DIR=<out/<preset>> [-DPT_LIMIT=240] -P CheckLongestPath.cmake
+# LongPathsEnabled=0 on the reference machine: MSVC fails with C1083 near MAX_PATH (260). The build keeps every object
+# file path below 240 characters; the longest file of any kind is reported for information.
+if(NOT PT_LIMIT)
+	set(PT_LIMIT 240)
+endif()
+file(TO_NATIVE_PATH "${PT_BINARY_DIR}" _native_root)
+
+function(_pt_longest Pattern Filter OutPath OutLength OutCount)
+	file(GLOB_RECURSE _files LIST_DIRECTORIES false "${PT_BINARY_DIR}/${Pattern}")
+	if(Filter)
+		list(FILTER _files INCLUDE REGEX "${Filter}")
+	endif()
+	set(_best "")
+	set(_best_len 0)
+	foreach(_f IN LISTS _files)
+		file(TO_NATIVE_PATH "${_f}" _native)
+		string(LENGTH "${_native}" _len)
+		if(_len GREATER _best_len)
+			set(_best_len ${_len})
+			set(_best "${_native}")
+		endif()
+	endforeach()
+	list(LENGTH _files _count)
+	set(${OutPath} "${_best}" PARENT_SCOPE)
+	set(${OutLength} ${_best_len} PARENT_SCOPE)
+	set(${OutCount} ${_count} PARENT_SCOPE)
+endfunction()
+
+# Compiler objects only: SDK source trees also contain Wavefront *.obj meshes (Bullet data/).
+_pt_longest("*.obj" "/CMakeFiles/" _obj _obj_len _obj_count)
+_pt_longest("*" "" _any _any_len _any_count)
+message(STATUS "Compiler object files: ${_obj_count}, longest ${_obj_len} chars: ${_obj}")
+message(STATUS "All files under ${_native_root}: ${_any_count}, longest ${_any_len} chars: ${_any}")
+if(_obj_count EQUAL 0)
+	message(FATAL_ERROR "LongestObjectPath: no object files under ${PT_BINARY_DIR} (build first)")
+endif()
+if(NOT _obj_len LESS PT_LIMIT)
+	message(FATAL_ERROR "LongestObjectPath: FAIL (${_obj_len} >= ${PT_LIMIT})")
+endif()
+message(STATUS "LongestObjectPath: PASS (${_obj_len} < ${PT_LIMIT})")

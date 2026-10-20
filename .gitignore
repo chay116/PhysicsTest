@@ -1,9 +1,9 @@
-# Build trees (keep short: out/<preset>)
+# Build trees (keep short: out/<preset>, LongPathsEnabled=0)
 /out/
 /build/
 /Saved/
 
-# CMake user-local presets (point SDK URLs / UE root at local paths)
+# CMake user-local presets (point SDK URLs / UE root at local paths; see CMakeUserPresets.json.example)
 CMakeUserPresets.json
 
 # IDE
@@ -12,16 +12,19 @@ CMakeUserPresets.json
 !.vscode/settings.json.example
 !.vscode/launch.json.example
 .idea/
+cmake-build-*/
 *.user
 *.suo
 
-# Python
+# Python (analysis tooling, M8+). The venv lives at the repository root; the wheelhouse is an offline cache.
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+/Tools/ptbench/.venv/
+/Tools/ptbench/wheelhouse/
 
-# Unreal (Chaos bridge host project) — never commit engine-derived artifacts
+# Unreal (Chaos bridge host project) - never commit engine-derived artifacts
 /Unreal/**/Binaries/
 /Unreal/**/Intermediate/
 /Unreal/**/Saved/

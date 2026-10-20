@@ -1,0 +1,53 @@
+{
+  // Copy to .vscode/launch.json (git-ignored). Debugger: Visual Studio Windows debugger (cppvsdbg) from the
+  // "C/C++" extension. Build the dbg preset first: Tools\cmake.cmd --preset dbg && Tools\cmake.cmd --build --preset dbg
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "dbg: PtSmokeBullet",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/dbg/bin/PtSmokeBullet.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "dbg: PtSmokeJolt",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/dbg/bin/PtSmokeJolt.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "dbg: PtSmokePhysX",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/dbg/bin/PtSmokePhysX.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "dbg: PhysicsTestAutomation (Core tests)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/out/dbg/bin/PhysicsTestAutomation.exe",
+      "args": [ "-tc=PhysicsTest.Core.*" ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "CMake Tools: selected launch target",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${command:cmake.launchTargetPath}",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

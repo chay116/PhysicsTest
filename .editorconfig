@@ -1,0 +1,40 @@
+# PhysicsTest editor settings. C++ / CMake follow the UE layout: tabs, Allman braces (enforced by review).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{h,hpp,inl,c,cc,cpp,cxx,hlsl,cmake,in}]
+indent_style = tab
+indent_size = 4
+tab_width = 4
+
+[{CMakeLists.txt,*.cmake}]
+indent_style = tab
+indent_size = 4
+tab_width = 4
+
+[*.{json,example}]
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.{cmd,bat,ps1}]
+end_of_line = crlf
+indent_style = space
+indent_size = 2
+
+[*.md]
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = false
+
+# Only the pip requirement files. Templates such as cmake/PTBuildInfo.h.in keep the tab rule above.
+[Tools/ptbench/requirements.{in,lock}]
+indent_style = space

@@ -144,6 +144,7 @@ D:\PhysicsTest\
     PTOptions.cmake   PTToolchain.cmake   PTFlagProfiles.cmake   PTModules.cmake
     PTBuildInfo.h.in  PTBackendRegistry.cpp.in  DumpBuildFlags.cmake
     ThirdParty/  Jolt.cmake  PtBullet.cmake  PhysX.cmake  PhysXBootstrap.cmake (VS only)  ImGui.cmake  SmallDeps.cmake
+                 PtFetch.cmake (pinned FetchContent helpers + SHA guard, M0)
     Chaos/       PtChaosUbt.cmake
   Config/
     BasePhysicsTest.ini
@@ -184,6 +185,8 @@ D:\PhysicsTest\
     Editor/PhysicsTestEditor/  ViewportClient CameraController ReplaySource (M12)
                                Panels/{Engines,Inspector,Stats,Console}  (+ Profiler, OutputLog: M12)
     Programs/  PhysicsTestBench/  PhysicsTestViewer/  PhysicsTestAutomation/  PtBackendServer/ (M14, conditional)
+    Tests/     SdkSmoke/ (PtSmoke{Jolt,Bullet,PhysX}.exe, M0)  Probes/ (CTest probes: includes, flag leak, BuildFlags,
+               refs clean, longest path, pin guard, negative-scale fatal, M0)
   Unreal/ChaosBridgeHost/          UBT only, implemented by the user
     ChaosBridgeHost.uproject       (name differs from the target, UEBuildTarget.cs:1926-1946 [V])
     .gitignore                     Binaries/ Intermediate/ Saved/ DerivedDataCache/ *.generated.h *.gen.cpp *.dll *.pdb
@@ -191,9 +194,11 @@ D:\PhysicsTest\
     Source/PhysicsTestChaos/PhysicsTestChaos.Build.cs
     Source/PhysicsTestChaos/Private/  PtChaosModule.cpp PtChaosBackend.* PtChaosScene.* PtChaosBodyFactory.cpp
                                       PtChaosSnapshot.cpp PtChaosDebugDraw.cpp PtChaosEvolutionScene.cpp PtChaosDefaults.h
-  Tools/  cmake.cmd (vcvars64)  check_modules.py  Chaos/build_chaos.cmd
+  Tools/  cmake.cmd ctest.cmd vcenv.cmd (vcvars64)  check_physx_isolation.cmd + CompareBuildFlags.cmake (M0)
+          check_modules.py  Chaos/build_chaos.cmd
           ptbench/ (runner, envcheck, analysis/{load,validate,perf,behavior,determinism,report}, analytic)
-          ptbench/requirements.lock  .venv/ (ignored)  wheelhouse/ (offline only, ignored)
+          ptbench/requirements.lock  wheelhouse/ (offline only, ignored)
+  .venv/  (ignored, repository root; Tools/ptbench analysis packages)
   docs/   01_Feasibility.md  02_Architecture.md  03_WorkPlan.md  04_DecisionLog.md  appendix/A_HeaderSketches.md
           (planned) Abi.md  TimingContract.md  Profiles.md  Scenes.md  ResultsSchema.md  ChaosBackendGuide.md  ChaosSpike.md  Checkpoints.md
   out/<preset>/   (ignored, short root)
@@ -239,7 +244,7 @@ D:\PhysicsTest\
 |---|---|---|---|
 | Jolt v5.6.0 (`e77f1755`) | FetchContent, GIT_TAG는 커밋 SHA, SOURCE_SUBDIR `Build`, configure 후 `git rev-parse` 검사 | `block()` 안에서 static CRT / IPO / ALL_WARNINGS / INSTALL OFF, DX12 / VK / CPU_COMPUTE OFF (소스 트리에 .dxil/.spv 생성 방지), DEBUG_RENDERER와 PROFILER_IN_DEBUG_AND_RELEASE OFF (prof 프리셋에서만 ON, M10), FP_EXCEPTIONS OFF, OBJECT_LAYER_BITS 16 유지 | `PT::Jolt` |
 | Bullet 3.25 (`2c204c49`) | `FetchContent_Declare(bullet3 GIT_REPOSITORY ${PT_BULLET_GIT} GIT_TAG <2c204c49 full SHA> GIT_CONFIG core.longpaths=true SOURCE_SUBDIR _none_)` + `FetchContent_MakeAvailable(bullet3)`. `_none_`에는 CMakeLists.txt가 없으므로 받기만 한다. 그다음 `block()` 안에서 `CMAKE_POLICY_VERSION_MINIMUM` 3.10을 설정하고 `add_subdirectory(${bullet3_SOURCE_DIR} <bin> EXCLUDE_FROM_ALL SYSTEM)` | 단일 인자 `FetchContent_Populate`는 CMP0169(3.30)로 금지되므로 쓰지 않는다. 옵션은 전부 CACHE FORCE (Bullet 안에서 CMP0077 OLD), LinearMath / BulletCollision / BulletDynamics만, BT_THREADSAFE=0, /wd4819 | `PT::Bullet` (BT_* define 재수출) |
-| PhysX 5.11.0 (`da950a35`, ovphysx-0.6.3) | FetchContent, SOURCE_SUBDIR `physx` (Ninja 전용). PxConfig.h는 `out/<preset>/_deps`에만 쓰인다 | GPU OFF, STATIC ON, NV_USE_STATIC_WINCRT OFF, SNIPPETS / PVDRUNTIME OFF, PRECISE_MATH OFF | `PT::PhysX` INTERFACE = `physx_lib` (physx/CMakeLists.txt:326 [V]) + `PX_PHYSX_STATIC_LIB` + `DISABLE_CUDA_PHYSX`. `physx_lib`는 `PX_PHYSX_STATIC_LIB`를 전달하지 않으므로 래퍼가 직접 정의한다. Debug에서는 PvdSDK도 링크 |
+| PhysX 5.11.0 (`da950a35`, ovphysx-0.6.3) | FetchContent, SOURCE_SUBDIR `physx` (Ninja 전용). PxConfig.h는 `out/<preset>/_deps`에만 쓰인다 | GPU OFF, STATIC ON, NV_USE_STATIC_WINCRT OFF, SNIPPETS / PVDRUNTIME OFF, PRECISE_MATH OFF | `PT::PhysX` INTERFACE = `physx_lib` (physx/CMakeLists.txt:326 [V]) + `PX_PHYSX_STATIC_LIB` + `DISABLE_CUDA_PHYSX`. `physx_lib`는 `PX_PHYSX_STATIC_LIB`를 전달하지 않으므로 래퍼가 직접 정의한다. PvdSDK는 PhysX·PhysXExtensions의 링크 의존성이라 모든 구성에서 링크되며, release에서는 `PX_SUPPORT_PVD=0`으로 코드가 빠진다 (physx/source/compiler/cmake/PhysX.cmake:397-400 [V], M0에서 정정) |
 | imgui v1.92.9b-docking, implot v1.0, stb `a7d4c217`, nlohmann/json v3.12.0, doctest v2.5.3, Tracy v0.14.1 (prof만, M10) | URL + URL_HASH SHA256 | `IMGUI_DISABLE_OBSOLETE_FUNCTIONS`는 정의하지 않는다 (implot이 깨짐) | `PT::ImGui` 등 |
 
 - 저장소 URL은 캐시 변수 `PT_<SDK>_GIT`로 둔다. User preset에서 `file:///D:/PhysicsRefs/<repo>`로 바꾸면 오프라인으로 빌드된다.
@@ -1465,7 +1470,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - Chaos glue는 엔진 헤더를 include하며 로컬 UE에서 UBT로만 컴파일한다. `PT_WITH_CHAOS`는 기본 OFF다.
 
 **저장소에 넣지 않는 것 (.gitignore)**
-- `out/`, `Saved/`, `CMakeUserPresets.json`, `Tools/ptbench/.venv/`, `Tools/ptbench/wheelhouse/`
+- `out/`, `Saved/`, `CMakeUserPresets.json`, `.venv/`(저장소 루트, M0), `Tools/ptbench/wheelhouse/`
 - UE Binaries, Intermediate, Saved, DerivedDataCache
 - `*.generated.h`, `*.gen.cpp`
 - DLL, PDB

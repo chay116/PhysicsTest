@@ -1,0 +1,8 @@
+# Direct dependencies of Tools/ptbench (analysis, M8+). The pinned, complete set is requirements.lock (pip freeze).
+# Upgrade: pip install -U -r requirements.in in a fresh .venv, run the tests, then pip freeze > requirements.lock.
+numpy
+pandas
+pyarrow
+scipy
+matplotlib
+jsonschema

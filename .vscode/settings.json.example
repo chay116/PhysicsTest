@@ -1,0 +1,24 @@
+{
+  // Copy to .vscode/settings.json (git-ignored). Needs the "C/C++" (ms-vscode.cpptools) and "CMake Tools" extensions.
+  // CMake Tools reads CMakePresets.json (dbg / dev / test); the presets' "architecture"/"toolset" (strategy external)
+  // make it load the MSVC x64 environment (vcvars64) before configuring.
+  "cmake.useCMakePresets": "always",
+  "cmake.cmakePath": "${env:USERPROFILE}/.cmake-deps/cmake/win/x64/bin/cmake.exe",
+  "cmake.environment": {
+    "PATH": "${env:USERPROFILE}/.cmake-deps/ninja/win/x64;${env:PATH}"
+  },
+  "cmake.configureEnvironment": {
+    "PT_SDK_MIRROR": "D:/PhysicsRefs"
+  },
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/out/dbg/compile_commands.json",
+  "files.associations": {
+    "*.inl": "cpp",
+    "*.h.in": "cpp"
+  },
+  "files.exclude": {
+    "out/**": true,
+    ".venv/**": true
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe"
+}

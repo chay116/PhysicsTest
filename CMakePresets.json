@@ -1,0 +1,51 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "architecture": { "value": "x64", "strategy": "external" },
+      "toolset": { "value": "host=x64", "strategy": "external" },
+      "cacheVariables": {
+        "PT_PRESET": "${presetName}",
+        "PT_FLAG_PROFILE": "Shipped",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "dbg",
+      "inherits": "base",
+      "displayName": "dbg - Debug (UE DebugGame), /MDd, checks on",
+      "description": "Debugging (cppvsdbg / CLion). Not for measurements.",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "PT_DO_CHECK": "ON", "PT_WITH_VIEWER": "ON" }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "dev - Release (UE Development), checks on",
+      "description": "Viewer and day-to-day checks. Not a headline configuration.",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PT_DO_CHECK": "ON", "PT_WITH_VIEWER": "ON" }
+    },
+    {
+      "name": "test",
+      "inherits": "base",
+      "displayName": "test - Release (UE Test), checks off, no renderer",
+      "description": "Headline measurements (from M7). No viewer/renderer targets.",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PT_DO_CHECK": "OFF", "PT_WITH_VIEWER": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dbg", "configurePreset": "dbg" },
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "test", "configurePreset": "test" }
+  ],
+  "testPresets": [
+    { "name": "dbg", "configurePreset": "dbg", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "test", "configurePreset": "test", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+  ]
+}
