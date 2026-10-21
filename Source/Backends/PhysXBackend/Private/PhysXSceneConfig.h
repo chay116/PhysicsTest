@@ -41,6 +41,15 @@ namespace PhysicsTest::PhysXBackend
 		SdkDefault,   // unset -> PhysX's default (unlimited); a body value > 0 is set, 0 is not representable (> 0 required)
 	};
 
+	// M6 (lead (e)): whether PT_BODY_GYROSCOPIC reaches PxRigidBodyFlag::eENABLE_GYROSCOPIC_FORCES. The flag first appeared in
+	// PhysX 5.1 (the 5.11 SDK has it, PxRigidBody.h); UE4 shipped PhysX 3.4, which integrates no gyroscopic term, so the
+	// UE4Compat family ignores the request (recorded in body.gyroscopic); SdkDefault honours the body's flag.
+	enum class EPhysXGyroscopicRule : uint8
+	{
+		Ignore,     // UE4 on PhysX 3.4: no gyroscopic term [R: 3.4 has no such flag; V: 5.11 PxRigidBodyFlag::eENABLE_GYROSCOPIC_FORCES]
+		FromBody,   // the body's PT_BODY_GYROSCOPIC (UE5's bGyroscopicTorqueEnabled)
+	};
+
 	enum class EPhysXDispatcherKind : uint8
 	{
 		Auto,           // T = 1: FPhysXCPUDispatcherSingleThread (UE4); T >= 2: PxDefaultCpuDispatcherCreate(T)
@@ -56,9 +65,11 @@ namespace PhysicsTest::PhysXBackend
 		bool bEnablePCM = true;                                              // [V] PhysicsSettingsCore.cpp:27-49
 		bool bEnableStabilization = false;                                   // [V]
 		bool bEnableEnhancedDeterminism = false;                             // [V] (or PT_SIM_ENHANCED_DETERMINISM)
-		bool bEnableCCD = true;                                              // [M] scene flag eENABLE_CCD
-		bool bEnableActiveActors = true;                                     // [M] eENABLE_ACTIVE_ACTORS | eEXCLUDE_KINEMATICS_FROM_ACTIVE_ACTORS
-		physx::PxPairFilteringMode::Enum KineKineFiltering = physx::PxPairFilteringMode::eKEEP;     // [M] (the shader suppresses)
+		bool bEnableCCD = true;                                              // [V] bDisableCCD false (PhysicsSettings.h:305); [M] -> eENABLE_CCD
+		bool bEnableActiveActors = true;                                     // [V] bDisableActiveActors(false) (PhysicsSettings.cpp:18); [M] ->
+		                                                                     // eENABLE_ACTIVE_ACTORS | eEXCLUDE_KINEMATICS_FROM_ACTIVE_ACTORS
+		physx::PxPairFilteringMode::Enum KineKineFiltering = physx::PxPairFilteringMode::eKEEP;     // [V] bDisableKinematic*Pairs false
+		                                                                     // (PhysicsSettings.h:296, :300); [M] kept, the shader suppresses
 		physx::PxPairFilteringMode::Enum StaticKineFiltering = physx::PxPairFilteringMode::eKEEP;   // [M]
 		EPhysXNonBlockingPairFilter NonBlockingPairFilter = EPhysXNonBlockingPairFilter::Kill;                         // [M] PhysicsFiltering.h
 		EPhysXKinematicStaticPairFilter KinematicStaticPairFilter = EPhysXKinematicStaticPairFilter::UnlessKinematicPairs;   // [M]
@@ -74,8 +85,9 @@ namespace PhysicsTest::PhysXBackend
 		EPhysXStaticFrictionRule StaticFrictionRule = EPhysXStaticFrictionRule::EqualsDynamic;
 		EPhysXThresholdRule ThresholdRule = EPhysXThresholdRule::UE4Multiplier;
 		EPhysXDepenetrationRule DepenetrationRule = EPhysXDepenetrationRule::UE4Project;
-		double ProjectMaxDepenetrationVelocityCm = 0.0;                      // [V] UPhysicsSettingsCore default 0 (0 = unlimited in UE4)
+		double ProjectMaxDepenetrationVelocityCm = 0.0;                      // [V] zero-initialised, "0 means no maximum" (PhysicsSettingsCore.h:93-95)
 		EPhysXDispatcherKind Dispatcher = EPhysXDispatcherKind::Auto;
+		EPhysXGyroscopicRule GyroscopicRule = EPhysXGyroscopicRule::Ignore;   // UE4Compat column (M6)
 	};
 
 	// One [PhysicsTest.Backend.PhysX] key, case-insensitive. PT_OK, or PT_E_INVALID_ARG with a message in Error.
@@ -92,4 +104,5 @@ namespace PhysicsTest::PhysXBackend
 	const char* ToString(EPhysXThresholdRule Value);
 	const char* ToString(EPhysXDepenetrationRule Value);
 	const char* ToString(EPhysXDispatcherKind Value);
+	const char* ToString(EPhysXGyroscopicRule Value);
 }

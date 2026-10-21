@@ -83,14 +83,40 @@ namespace PhysicsTest
 		Out = FBenchRunSpec();
 		Out.CommandLine = CommandLine != nullptr ? CommandLine : "";
 		const char* Cmd = Out.CommandLine.c_str();
+		std::string Text;
 		Out.bList = FParse::Param(Cmd, "List");
 		Out.bDescribe = FParse::Param(Cmd, "Describe");
+		Out.bConformance = FParse::Param(Cmd, "Conformance");
+		if (FParse::Value(Cmd, "SceneHashes=", Text))
+		{
+			Out.SceneHashesPath = StringConv::Utf8ToPath(Text);
+		}
+		// -Gates=G1,G9 (a comma list of physics gate ids; -Conformance only).
+		if (FParse::Value(Cmd, "Gates=", Text, false))
+		{
+			size_t Start = 0;
+			while (Start <= Text.size())
+			{
+				const size_t Comma = Text.find(',', Start);
+				const std::string Gate = Text.substr(Start, Comma == std::string::npos ? std::string::npos : Comma - Start);
+				if (Gate.empty())
+				{
+					OutError = "-Gates=" + Text + " has an empty gate id";
+					return false;
+				}
+				Out.Gates.push_back(Gate);
+				if (Comma == std::string::npos)
+				{
+					break;
+				}
+				Start = Comma + 1;
+			}
+		}
 		FParse::Value(Cmd, "Backend=", Out.Backend);
 		FParse::Value(Cmd, "BackendProfile=", Out.BackendProfile);
 		FParse::Value(Cmd, "Profile=", Out.PhysicsProfile);
 		FParse::Value(Cmd, "Scenario=", Out.Scenario);
 		FParse::Value(Cmd, "Session=", Out.Session);
-		std::string Text;
 		if (FParse::Value(Cmd, "Out=", Text))
 		{
 			Out.OutDir = StringConv::Utf8ToPath(Text);
@@ -159,12 +185,18 @@ namespace PhysicsTest
 		{
 			return false;
 		}
-		if (!Out.bList && Out.Backend.empty())
+		const bool bSceneHashes = !Out.SceneHashesPath.empty();
+		if (!Out.bList && !bSceneHashes && Out.Backend.empty())
 		{
 			OutError = "-Backend=<name> is required (see -List)";
 			return false;
 		}
-		if (!Out.bList && !Out.bDescribe && Out.Scenario.empty())
+		if (!Out.Gates.empty() && !Out.bConformance)
+		{
+			OutError = "-Gates= selects physics gates for -Conformance only";
+			return false;
+		}
+		if (!Out.bList && !Out.bDescribe && !Out.bConformance && !bSceneHashes && Out.Scenario.empty())
 		{
 			OutError = "-Scenario=<ID.Name> is required (see -List)";
 			return false;

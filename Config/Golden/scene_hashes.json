@@ -1,0 +1,154 @@
+{
+  "schema": "physicstest.scene_hashes/1",
+  "description": "Golden scene hashes of the M6 gate scenes (docs/Scenes.md). scene_sha256 is build-independent; desc_sha256 is per build configuration (Release = dev / test, Debug = dbg) and physics profile, with the scenario's default frames. Regenerate with PhysicsTestBench -SceneHashes=Config/Golden/scene_hashes.json in each configuration; PhysicsTest.Scenario.SceneHashesGolden checks it.",
+  "scenes": {
+    "S00.FreeFall": {
+      "version": 1,
+      "scene_sha256": "d91901296060cfd158bd2b6e5550b4f91e16695fe16fe68fb1e88cb399069dd9",
+      "default_frames": 60,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "41cf8618bce48c47eecfd294cced7269213d71c797c8c10ebdaa349d6b073366",
+          "Normalized": "8129eee7da851b6927e2b86d676f823e1efd41dd44fe345a9feeddb969cf4fbd"
+        },
+        "Debug": {
+          "UEParity": "41cf8618bce48c47eecfd294cced7269213d71c797c8c10ebdaa349d6b073366",
+          "Normalized": "8129eee7da851b6927e2b86d676f823e1efd41dd44fe345a9feeddb969cf4fbd"
+        }
+      }
+    },
+    "S00d.FreeFallDamped": {
+      "version": 1,
+      "scene_sha256": "b39bd8dc998f53e9fad70176160333f0e18d84eece559e7cb216a8ba9b1efc5d",
+      "default_frames": 60,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "0da0745b9cfb16c39eec1b970953ca6d7eb883f303a895426442fad952b7db36",
+          "Normalized": "776ad618c2ee13037e28600c8f3149995e9a04e08cac73a7128da4973ad085e8"
+        },
+        "Debug": {
+          "UEParity": "0da0745b9cfb16c39eec1b970953ca6d7eb883f303a895426442fad952b7db36",
+          "Normalized": "776ad618c2ee13037e28600c8f3149995e9a04e08cac73a7128da4973ad085e8"
+        }
+      }
+    },
+    "S01.UnitImpulse": {
+      "version": 1,
+      "scene_sha256": "8ee4ce82b597c2f6a076dfd08c18ff1f2a362444a16204a86181f0d7cd1b7ecf",
+      "default_frames": 30,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "9f5f1a0d8f5687441df359b5d3d891fd7726958f9e5399e2830065a7ac10e3fb",
+          "Normalized": "654fd3b48e002fd513baf4ffbb387990d05466b04f4d7656553713a5f9f63d2e"
+        },
+        "Debug": {
+          "UEParity": "9f5f1a0d8f5687441df359b5d3d891fd7726958f9e5399e2830065a7ac10e3fb",
+          "Normalized": "654fd3b48e002fd513baf4ffbb387990d05466b04f4d7656553713a5f9f63d2e"
+        }
+      }
+    },
+    "S02.SpinInertia": {
+      "version": 1,
+      "scene_sha256": "7902235d2568dbe21a51b61c4d357a1b74b1fbae90f6465904c1dc57c63c0801",
+      "default_frames": 60,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "538ab04907990644d4d6b10bd44d3968f5285f98ba4b23bbc0caf04c7b6a96bc",
+          "Normalized": "19c0434cac791ff56d65002930f81285250ebebe48c9f6a0a47dc41acdc1d135"
+        },
+        "Debug": {
+          "UEParity": "3bb12d7f2b45de5bdb9ee4575da9a534d23013abacaa6c33dc80f854fe4cfba4",
+          "Normalized": "2b4d69f197e412cdab11e6d2b28360698934ffa65e320b48a42b3e535dd536e5"
+        }
+      }
+    },
+    "S03.CapsuleRest": {
+      "version": 1,
+      "scene_sha256": "55d189cecb71a1c416beee369127f6dbe099c62bbb7dfc41ef9f2ecbfe147fe5",
+      "default_frames": 120,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "5578a971a4075c6e25b458599b90b8356632b7ff2289a2bc1b3faf45c24e2356",
+          "Normalized": "fc28eb721917637a6df4b43d9f0bcd087d9084ca939fbef901ebcac6a78707ac"
+        },
+        "Debug": {
+          "UEParity": "adca28f7db472009b025e65f7c485581bee360cf67518e62810cc93fc2cee12d",
+          "Normalized": "8b4f6ade160f62665deaed64ce9f45f6fcac8734b80ec7c7e90d746173b0194d"
+        }
+      }
+    },
+    "S04.ContactNormal": {
+      "version": 1,
+      "scene_sha256": "4ba0ec3269ca0e89bbff4ee065f65c9694239eab3144e4937a93eb3d24adcd1f",
+      "default_frames": 60,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "c0c4dacc46534e17d0a4163d124b9fc57be02c9fd36fed186cb326ee202b8447",
+          "Normalized": "21e81c6fb9eee393d4104ccbc1ea56333a83bbabd709571bf2691882eaef28b7"
+        },
+        "Debug": {
+          "UEParity": "cf2f8f32cc3921e70e8d9b13a892dbcf70710dbb02b2d7bc1612821d7421bdf4",
+          "Normalized": "9cc509a75d5052c249825e402782f08ccd70e6a28e855d998a72a8ef8561d72f"
+        }
+      }
+    },
+    "S05.RestitutionCombine": {
+      "version": 2,
+      "scene_sha256": "719ef5adcc5d7d1845c7f884a617267d1080d3535d69917c5057821ab4fb6119",
+      "default_frames": 120,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "35875f6e8ca80e6b923be516ca19019e0621ed5b67a94113a4b74fde5794cea2",
+          "Normalized": "f55d63ed6ea7ce70067d7fcd403033981b54809c36193c38995a2768de85c622"
+        },
+        "Debug": {
+          "UEParity": "60fc7675bdd784b29d21f8db7be4d73dccbb6fe6214be77a31f482ff8cb060d5",
+          "Normalized": "718fd44f6e04b9a2cc3dfab32783dae0d357b6ca4009606870f832426101d2c1"
+        }
+      }
+    },
+    "S06.FrictionSlide": {
+      "version": 1,
+      "scene_sha256": "a445eac1436f4eb4ed52bc977a21af926e2651c6299e76dae7cac9339a92207b",
+      "default_frames": 120,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "6380306f364162a07641007460b2bef2fe88f7f52b65b39a740e9919bfb7bf48",
+          "Normalized": "75d0cc70602ae44ebf39bd6c8781564bfd3fcea342becc27466c9691e25ed465"
+        },
+        "Debug": {
+          "UEParity": "6229e0fc22dc865c7387d66dbf58a85facd35026677101507e370e5a0679b84e",
+          "Normalized": "d75fdef5d2e920216164431bbcb41660badcf1efcf9832624887f8cbb66ea521"
+        }
+      }
+    },
+    "S07.ClampProbe": {
+      "version": 1,
+      "scene_sha256": "d8a752023fdbffe51be65fffbbee66feb8a1406838f76b44f16447b15e6ceaa2",
+      "default_frames": 10,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "5341c1ea5ef6e334be8c637be69ec00631d978cc4517d720d0d6afa0b9d3b10a",
+          "Normalized": "4043a5ce2b72214e708bf3497aa045687c13a5f33b109d2a7010b835485c616b"
+        },
+        "Debug": {
+          "UEParity": "5341c1ea5ef6e334be8c637be69ec00631d978cc4517d720d0d6afa0b9d3b10a",
+          "Normalized": "4043a5ce2b72214e708bf3497aa045687c13a5f33b109d2a7010b835485c616b"
+        }
+      }
+    },
+    "S08.StartAsleep": {
+      "version": 1,
+      "scene_sha256": "799d246fe1c2676df4c6afd50ce399d6a695a4e502e6ecaadcdbbf371e5f0530",
+      "default_frames": 60,
+      "desc_sha256": {
+        "Release": {
+          "UEParity": "475e6f2ad044d538388b45997995cc1904b1407d26f8104e3205b3be3128d61c"
+        },
+        "Debug": {
+          "UEParity": "1be2fb53f4f5bbcbec87fa363c9841c0ad22e43be612d2f8f4623c328fd4be64"
+        }
+      }
+    }
+  }
+}

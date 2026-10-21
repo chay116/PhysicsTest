@@ -4,8 +4,8 @@
 // InitPhysScene builds the PxSceneDesc from FPhysXSceneConfig (the variant's [PhysicsTest.Backend.PhysX] keys):
 // broad phase, solver, PCM / stabilisation / CCD / enhanced determinism / active actors flags, kinematic pair filtering,
 // bounce threshold, dynamic tree rebuild rate, the UE4 filter shader, the CPU dispatcher of the thread budget, the
-// viz-only FPhysXSimEventCallback, and PxSceneLimits from the capacity hints. Normalized's sleep off is
-// PxSceneFlag::eDISABLE_SLEEPING (no zero-threshold workaround). The scene's LengthScale must match the process
+// FPhysXSimEventCallback (installed in viz runs or with PT_INSTR_CONTACTS), and PxSceneLimits from the capacity hints.
+// Normalized's sleep off is PxSceneFlag::eDISABLE_SLEEPING (no zero-threshold workaround). The scene's LengthScale must match the process
 // PxTolerancesScale (length = 100 cm in native units): a SdkDefault scene (m) under a UE4Compat PxPhysics (cm) is refused.
 //
 // CreateActors follows UE's FInitBodiesHelper order (02 6, A.14; BodyInstance.cpp:1669, 1695-1706, 4648-4743 [V]):
@@ -36,13 +36,14 @@
 // ADD_ANGULAR_* become a velocity change kept on the body record (the angular one through the world inverse inertia at
 // push time) and added to the PhysX velocity right before simulate; a body asleep then keeps it. ADD_FORCE / ADD_TORQUE
 // are handed to addForce / addTorque(eFORCE) at the step for an awake body only, and the list is cleared every step.
-// Known PhysX behaviour kept as is: a non-zero setLinearVelocity / setAngularVelocity wakes a sleeping body even with
-// autowake false (NpRigidDynamic.cpp:253, :286, :605-622 [V]), so SET_*_VELOCITY without PT_CMDF_AUTO_WAKE cannot leave a
-// sleeping body asleep with a velocity (Null and Jolt can).
+// ABI v1.0 (M6, docs/Abi.md 5.10): every velocity or state write wakes a sleeping body (UE 5.8.3's SetV / SetW); PhysX
+// itself wakes for a non-zero vector even with autowake false (NpRigidDynamic.cpp:253, :286, :605-622 [V]) and the adapter
+// wakes explicitly for a zero one.
 //
 // Debug snapshot (contact listener in viz runs / PT_INSTR_CONTACTS only): the last step's FPhysXSimEventCallback points in
 // the Chaos convention (PhysX's normal already points from the second shape to the first, i.e. lies on Body1 toward
-// Body0; Phi = separation; PointOn1 = position, PointOn0 = position + separation x normal [M]), then Body0 = the more
+// Body0; Phi = separation; M6 contract (c): PointOn1 = the point of the report's second shape on the normal line through
+// PxContactPairPoint::position (PhysXSimEventCallback.h), PointOn0 = PointOn1 + separation x normal), then Body0 = the more
 // mobile body (CanonicalizeContact). PT_CONTACT_ACTIVE is exact: the point carried a normal impulse in its last solved
 // step (PxContactPairPoint::impulse, as Chaos' bIsActive); PT_CONTACT_SPECULATIVE marks a separated point without one.
 // The impulse values themselves stay NaN for now (Q8; the shared snapshot tests expect NaN, M9). PhysX reports no contact
@@ -101,7 +102,7 @@ namespace PhysicsTest::PhysXBackend
 		bool bKinematicMovedLastStep = false;
 		bool bPendingImpulse = false;
 		bool bPendingForce = false;
-		bool bKeptContactsListed = false;           // listed once in KeptContactBodies (viz runs)
+		bool bKeptContactsListed = false;           // listed once in KeptContactBodies (listener present: viz or PT_INSTR_CONTACTS)
 		bool bPutToSleepByCommand = false;
 		bool bPoseSetByCommand = false;
 
@@ -192,6 +193,8 @@ namespace PhysicsTest::PhysXBackend
 		physx::PxArray<uint32> ReportStamps;      // per body: the step stamp of its last listener report
 		uint32 ReportStamp = 0;
 		physx::PxArray<uint32> KeptContactBodies;
+		uint32 NumGyroscopicIgnored = 0;   // PT_BODY_GYROSCOPIC requests a GyroscopicForces=Ignore variant ignored (M6)
+		physx::PxArray<physx::PxTransform> PreStepPoses;   // viz / PT_INSTR_CONTACTS: the actor poses of the step's narrow phase (M6 (c))
 		bool bSleepingContactsDropped = false;
 
 		FPhysXFilterShaderRules FilterRules;   // PxSceneDesc::filterShaderData (PhysX copies it at createScene)

@@ -19,6 +19,7 @@
 #include "Physics/PhysicsBackend.h"
 #include "Physics/PhysicsDebugSnapshot.h"
 #include "Physics/PhysicsProfile.h"
+#include "Physics/PhysicsInterface.h"
 #include "PhysicsTestScenario.h"
 #include "PhysScene.h"
 #include "PhysXBackend/PhysXBackendEntry.h"
@@ -550,6 +551,13 @@ TEST_CASE("PhysicsTest.PhysXBackend.UE4CompatReadback")
 		}
 		CHECK(RequireSetting(Settings, "material.friction_combine").Native.find("1 of 1 PxMaterials hold the host's mode") != std::string::npos);
 		CHECK(RequireSetting(Settings, "material.restitution_combine").Native.find("1 of 1 PxMaterials hold the host's mode") != std::string::npos);
+		// canonical = the engine objects that do not hold the rule (docs/Abi.md 5.14 rule keys; G9 compares it with 0).
+		for (const char* Key : { "contact.offset_rule", "material.static_friction_rule", "material.friction_combine", "material.restitution_combine" })
+		{
+			const std::string KeyText(Key);
+			CAPTURE(KeyText);
+			CHECK(Canonical(Settings, Key) == 0.0);
+		}
 		CHECK(Canonical(Settings, "physx.filter_shader_rules") == 0.0);   // Kill / UnlessKinematicPairs (every variant file)
 		// Adapter counters are SET_ONLY (docs/Abi.md 5.14).
 		for (const char* Key : { "physx.start_asleep_skipped", "physx.error_bits", "physx.dispatcher_max_reentrancy" })
@@ -566,6 +574,67 @@ TEST_CASE("PhysicsTest.PhysXBackend.UE4CompatReadback")
 		CHECK(Mass.Mass == doctest::Approx(Normal->MassProperties.Mass).epsilon(1e-6));
 		CHECK(Mass.Mass == doctest::Approx(37.384).epsilon(1e-4));
 		CHECK(Mass.InertiaDiagonal.X == doctest::Approx(Normal->MassProperties.InertiaTensor.X).epsilon(1e-6));
+	}
+}
+
+// Lead item (e) (M6): UE4 on PhysX 3.4 had no gyroscopic term, so the UE4Compat family never sets
+// eENABLE_GYROSCOPIC_FORCES (GyroscopicForces=Ignore) whatever the body asks; SdkDefault passes the body's request through
+// (FromBody). Both profiles disable gyroscopic torque, so G9's body.gyroscopic rule cannot tell the two apart: this case
+// asks for it. A free 100 x 50 x 20 cm box spinning about a non-principal axis keeps its angular velocity without the term
+// (no torque) and turns it with the term (Euler's equations: dw_y/dt = (Izz - Ixx) / Iyy w_x w_z = 1.85 rad/s^2 here).
+TEST_CASE("PhysicsTest.PhysXBackend.GyroscopicForcesPerVariant")
+{
+	const FPhysXModuleScope Scope;
+	for (const char* Variant : GVariants)
+	{
+		const std::string VariantText(Variant);
+		CAPTURE(VariantText);
+		const bool bFromBody = VariantText == "SdkDefault";
+		const FResolvedPhysicsConfig Config = LoadPhysXConfig(Variant, "UEParity");
+		PreparePhysXModule(Config.InitOptions);
+		FPhysSceneInitParams InitParams;
+		InitParams.DebugName = "PhysXGyroscopic";
+		InitParams.BackendName = "PhysX";
+		InitParams.Config = &Config;
+		FPhysScene Scene(InitParams);
+		FBodySetup Box;
+		Box.AggGeom.BoxElems.emplace_back(100.0, 50.0, 20.0);
+		const FBodySetup* BoxSetup = Scene.CreateBodySetup(std::move(Box));
+		FBodyInstance Template;
+		FProfileResolver::ApplyBodyInstanceDefaults(Config, Template);
+		Template.bSimulatePhysics = true;
+		Template.bEnableGravity = false;
+		Template.LinearDamping = 0.0f;
+		Template.AngularDamping = 0.0f;
+		Template.bOverrideMass = true;
+		Template.MassInKgOverride = 10.0f;
+		Template.bGyroscopicTorqueEnabled = true;
+		FBodyInstance* Body = Scene.SpawnBody(Template, BoxSetup, FTransform(FVector(0.0, 0.0, 1000.0)));
+		Scene.FlushDeferredActors();
+		const std::vector<FEffectiveSetting> Settings = ReadEffective(Scene);
+		const FEffectiveSetting& Gyroscopic = RequireSetting(Settings, "body.gyroscopic");
+		MESSAGE(VariantText << ": " << Gyroscopic.Native);
+		CHECK(Gyroscopic.Source == "READBACK");   // the actor flag, PxRigidBody::getRigidBodyFlags
+		CHECK(Canonical(Settings, "body.gyroscopic") == (bFromBody ? 1.0 : 0.0));
+		CHECK(Gyroscopic.Native.find(bFromBody ? "1 of 1 dynamic bodies have eENABLE_GYROSCOPIC_FORCES" : "0 of 1 dynamic bodies have eENABLE_GYROSCOPIC_FORCES")
+			!= std::string::npos);
+		CHECK(Gyroscopic.Native.find(bFromBody ? "GyroscopicForces=FromBody" : "GyroscopicForces=Ignore; 1 requests ignored") != std::string::npos);
+		const FVector W0(1.0, 0.0, 1.0);
+		FPhysicsInterface::SetAngularVelocity_AssumesLocked(Body->ActorHandle, W0);
+		TickFrames(Scene, 30);
+		const FVector W = Body->State.AngularVelocityInRadians;
+		const double Change = (W - W0).Size();
+		MESSAGE(VariantText << ": w (" << W.X << ", " << W.Y << ", " << W.Z << ") rad/s after 30 frames, |dw| " << Change);
+		if (bFromBody)
+		{
+			CHECK(Change > 0.1);   // about 0.9 rad/s of w_y after 0.5 s
+		}
+		else
+		{
+			// No torque and no gyroscopic term: w is kept - exactly with PGS; TGS drifts by 2e-5 rad/s over 30 frames (its
+			// per-substep integration, also seen in G2's S02), four orders of magnitude below what the term does.
+			CHECK(Change < 1e-3);
+		}
 	}
 }
 
@@ -803,7 +872,7 @@ TEST_CASE("PhysicsTest.PhysXBackend.SleepingContactsAreKept")
 {
 	const FPhysXModuleScope Scope;
 	FResolvedPhysicsConfig Config = LoadPhysXConfig("UE4Compat", "UEParity");
-	Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the listener exists in viz runs only
+	Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the listener exists in viz runs (or with PT_INSTR_CONTACTS)
 	std::unique_ptr<FPhysScene> Scene = MakePhysXScenario("M1.SingleBoxDrop", { { "Case", "a" } }, Config);
 	FBodyInstance& Box = *Scene->GetBodies()[1];
 	int32 Frame = 0;

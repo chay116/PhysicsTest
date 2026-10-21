@@ -12,9 +12,15 @@
 #include "PhysicsTestScenario.h"
 #include "PhysScene.h"
 
+#include "PTBuildInfo.h"
+
 #include "Misc/PtThirdPartyIncludesStart.h"
 #include <doctest/doctest.h>
+#include <nlohmann/json.hpp>
 #include "Misc/PtThirdPartyIncludesEnd.h"
+
+#include <fstream>
+#include <sstream>
 
 #include <algorithm>
 #include <cmath>
@@ -474,4 +480,41 @@ TEST_CASE("PhysicsTest.PhysScene.SpawnBodyDropsTheTemplatesRegistration")
 	CHECK(FromOrphan->ActorHandle.IsValid());
 	CHECK(SceneB.GetBackendScene().GetNumBodies() == 2u);
 	CHECK(SceneB.GetNumDeferredActors() == 0);
+}
+
+// M6 deliverable scene_hashes.json (02 14.1 "scene hash golden"): every gate scene's scene_sha256 and, for this build
+// configuration, its desc_sha256 per physics profile (built on Null with the default parameters and frames) equal the
+// committed golden file. A change to a gate scene must bump its version and regenerate the file in both configurations
+// (PhysicsTestBench -SceneHashes=Config/Golden/scene_hashes.json from dev / test and from dbg: desc_sha256 differs between
+// /O2 and /Od, docs/Scenes.md 1).
+TEST_CASE("PhysicsTest.Scenario.SceneHashesGolden")
+{
+	const std::filesystem::path Path = TestConfigDir() / "Golden" / "scene_hashes.json";
+	std::ifstream File(Path, std::ios::binary);
+	REQUIRE(File);
+	std::stringstream Buffer;
+	Buffer << File.rdbuf();
+	const nlohmann::json Golden = nlohmann::json::parse(Buffer.str(), nullptr, false);
+	REQUIRE_FALSE(Golden.is_discarded());
+	CHECK(Golden.value("schema", std::string()) == "physicstest.scene_hashes/1");
+	std::vector<FSceneHashEntry> Entries;
+	std::string Error;
+	REQUIRE_MESSAGE(ComputeGateSceneHashes(TestConfigDir(), Entries, Error), Error);
+	CHECK(Entries.size() >= 10u);   // S00, S00d, S01-S08
+	for (const FSceneHashEntry& Entry : Entries)
+	{
+		CAPTURE(Entry.Scene);
+		REQUIRE(Golden["scenes"].contains(Entry.Scene));
+		const nlohmann::json& Recorded = Golden["scenes"][Entry.Scene];
+		CHECK(Recorded.value("version", -1) == Entry.Version);
+		CHECK(Recorded.value("scene_sha256", std::string()) == Entry.SceneSha256);
+		CHECK(Recorded.value("default_frames", -1) == Entry.DefaultFrames);
+		REQUIRE(Recorded.contains("desc_sha256"));
+		REQUIRE(Recorded["desc_sha256"].contains(PT_BUILD_CONFIGURATION));
+		for (const auto& [Profile, Sha] : Entry.DescSha256ByProfile)
+		{
+			CAPTURE(Profile);
+			CHECK(Recorded["desc_sha256"][PT_BUILD_CONFIGURATION].value(Profile, std::string()) == Sha);
+		}
+	}
 }

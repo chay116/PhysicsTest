@@ -480,6 +480,7 @@ namespace PhysicsTest::BulletBackend
 		DirtyBodies.reserve(Total);
 		PendingImpulseBodies.reserve(Total);
 		PendingForceBodies.reserve(Total);
+		WokenByCommandBodies.reserve(Total);
 		ReadScratch.reserve(Total);
 
 		btAlignedObjectArray<btRigidBody*> Created;
@@ -583,6 +584,7 @@ namespace PhysicsTest::BulletBackend
 			Record.Mass = Info.Mass;
 			Record.InertiaDiagonal = Info.InertiaDiagonal;
 			Record.HarnessComLocal = Info.CenterOfMassLocal;
+			Record.FirstElementLocal = Batch.Shapes[Info.FirstShape].LocalTransform;   // child 0's element (the COM readback)
 			Record.bComIdentity = !bDynamic || Abi::IsComLocalIdentity(Info.CenterOfMassLocal);
 			Record.ComLocal = Record.bComIdentity ? GIdentityTransform : Info.CenterOfMassLocal;
 			Record.ComLocalInverse = TransformInverse(Record.ComLocal);
@@ -736,6 +738,13 @@ namespace PhysicsTest::BulletBackend
 			return PT_OK;
 		}
 		const double Dt = static_cast<double>(StepDeltaTime);
+		// This step's narrow phase refreshes the pairs of the bodies a command woke: only those records are touched (a list,
+		// as for the pending impulses, not a pass over every dynamic body inside T_step).
+		for (int32 Slot = 0; Slot < WokenByCommandBodies.size(); ++Slot)
+		{
+			Bodies[static_cast<int32>(WokenByCommandBodies[Slot])].bWokenByCommand = false;
+		}
+		WokenByCommandBodies.resizeNoInitialize(0);
 		// Kinematic bodies: a pending target moves the body there for this step (its world transform: the collision
 		// detection of this step sees it there, as Chaos' ApplyKinematicTargets moves the particle first); the pre-tick
 		// gives it the velocity that reaches it (PhysScene_Bullet.h). A body without a target stops (Chaos mode Reset).
@@ -1017,6 +1026,13 @@ namespace PhysicsTest::BulletBackend
 			{
 				Body.activate();   // ACTIVE_TAG, deactivation time 0 (a DISABLE_DEACTIVATION body is always active)
 				MarkDirty(Cmd.Body);
+				// M6 (contract (b)): its pairs were sleeping pairs with the last step's points; until the next narrow phase the
+				// snapshot leaves them out, as Jolt and PhysX drop a woken body's kept pairs (FlushKeptContactCommands).
+				if (!Record.bWokenByCommand)
+				{
+					Record.bWokenByCommand = true;
+					WokenByCommandBodies.push_back(Cmd.Body);   // reserved at CreateActors: no allocation at push
+				}
 			}
 		};
 		switch (Cmd.Type)
@@ -1058,18 +1074,19 @@ namespace PhysicsTest::BulletBackend
 					Body.setAngularVelocity(ToBtVector(Cmd.Vector));
 				}
 				MarkDirty(Cmd.Body);
-				if ((Cmd.Flags & PT_CMDF_AUTO_WAKE) != 0)
-				{
-					Wake();
-				}
+				// ABI v1.0 contract (docs/Abi.md 5.10): a velocity write wakes a sleeping body whatever PT_CMDF_AUTO_WAKE says, as
+				// UE 5.8.3's game-thread SetV / SetW do (SingleParticlePhysicsProxy.h:322-340, :362-380, :1217-1244 [V]). Left
+				// asleep, Bullet would zero the velocity at the next step (updateActivationState, btDiscreteDynamicsWorld.cpp:605-620 [V]).
+				Wake();
 			}
 			break;
 		case PT_CMD_SET_BODY_STATE:
-			SetBodyPose(Record, Cmd.Transform);   // no wake (a sleeping body stays asleep, its pairs without points)
+			SetBodyPose(Record, Cmd.Transform);   // drops the body's manifolds (stale points)
 			if (bDynamic)
 			{
 				Body.setLinearVelocity(ToBtLength(Cmd.Vector));
 				Body.setAngularVelocity(ToBtVector(Cmd.Vector2));
+				Wake();   // ABI v1.0: a state write wakes a sleeping body (UE's SetX / SetV, docs/Abi.md 5.10)
 			}
 			MarkDirty(Cmd.Body);
 			break;
@@ -1293,13 +1310,24 @@ namespace PhysicsTest::BulletBackend
 				continue;
 			}
 			// What the engine has (G2 readback): 1 / inverse mass and the local (principal) inertia of the body frame. The body
-			// frame IS the COM principal frame by construction (BulletMath.h), so its pose in actor space is the COM frame the
-			// adapter placed the shape around (the record): Bullet itself stores no COM offset.
+			// frame IS the COM principal frame by construction (BulletMath.h). Its pose in actor space (the COM frame) is read
+			// from the engine where the engine holds it (M6, lead (d)): a compound's child 0 sits at inverse(ComLocal) * Elem0,
+			// so ComLocal = Elem0 * inverse(child 0 transform). A native primitive has its COM at the actor origin by
+			// construction (no offset exists in Bullet to read), which is the harness identity COM.
 			const btRigidBody& Body = *Record.Body;
 			const btVector3 Inertia = Body.getLocalInertia();
 			Mass.Mass = 1.0 / double(Body.getInvMass());
 			Mass.InertiaDiagonal = PtVec3{ GScale.ToKgCm2(double(Inertia.getX())), GScale.ToKgCm2(double(Inertia.getY())), GScale.ToKgCm2(double(Inertia.getZ())) };
-			Mass.CenterOfMassLocal = Record.bComIdentity ? Record.HarnessComLocal : Record.ComLocal;
+			const btCollisionShape* Shape = Body.getCollisionShape();
+			if (Shape != nullptr && Shape->isCompound() && static_cast<const btCompoundShape*>(Shape)->getNumChildShapes() > 0)
+			{
+				const btTransform Child0 = static_cast<const btCompoundShape*>(Shape)->getChildTransform(0);
+				Mass.CenterOfMassLocal = TransformMultiply(Record.FirstElementLocal, FromBtTransform(Child0.inverse()));
+			}
+			else
+			{
+				Mass.CenterOfMassLocal = Record.bComIdentity ? Record.HarnessComLocal : Record.ComLocal;
+			}
 		}
 		return PT_OK;
 	}
@@ -1422,6 +1450,10 @@ namespace PhysicsTest::BulletBackend
 				}
 				// A sleeping pair: every dynamic body of it asleep (no narrow phase, no solve: the last step's points and impulses).
 				const bool bSleeping = (!bDynamic0 || !Record0.Body->isActive()) && (!bDynamic1 || !Record1.Body->isActive());
+				if (Record0.bWokenByCommand || Record1.bWokenByCommand)
+				{
+					continue;   // a command woke a body of this sleeping pair since the last step: its points are the sleeping ones (M6 (b))
+				}
 				for (int PointIndex = 0; PointIndex < Manifold.getNumContacts(); ++PointIndex)
 				{
 					if (static_cast<uint32>(SnapshotContacts.size()) >= Req.MaxContactPoints)
@@ -1460,8 +1492,10 @@ namespace PhysicsTest::BulletBackend
 					// Active is exact: the last solve applied a normal impulse. A point beyond the surface (Phi > 0) within the
 					// breaking threshold is speculative (Bullet solves it as such). A sleeping pair's points keep their last
 					// flags plus PT_CONTACT_SLEEPING (the M4 rule; Chaos keeps a sleeping constraint's last results).
+					// ABI v1.0 rule (docs/Abi.md 7.1, M6 contract (b)): ACTIVE and SPECULATIVE are exclusive - a point the solver pushed
+					// is ACTIVE even when its Phi is positive (a speculative point that closed), SPECULATIVE is Phi > 0 without an impulse.
 					const bool bActive = Contact.NormalImpulse > 0.0;
-					Contact.Flags |= (bActive ? PT_CONTACT_ACTIVE : 0u) | (Contact.Phi > 0.0 ? PT_CONTACT_SPECULATIVE : 0u) | (bSleeping ? PT_CONTACT_SLEEPING : 0u);
+					Contact.Flags |= (bActive ? PT_CONTACT_ACTIVE : (Contact.Phi > 0.0 ? PT_CONTACT_SPECULATIVE : 0u)) | (bSleeping ? PT_CONTACT_SLEEPING : 0u);
 					SnapshotContacts.push_back(Contact);
 				}
 			}
@@ -1635,21 +1669,30 @@ namespace PhysicsTest::BulletBackend
 			}
 			Out.AppendEffective("contact.speculative_distance", Text, "m", Breaking.bAny ? GScale.ToCm(Breaking.Max) : NaN, "cm", "READBACK");
 		}
+		// Read from Bullet's global callbacks. canonical = engine objects not holding the host's rule (docs/Abi.md 5.14 rule keys):
+		// 0 when the global holds the UE combine callback, 1 otherwise; G9 compares it with 0.
 		const bool bUECombine = gCalculateCombinedFrictionCallback == &CombineFrictionUE;
+		const bool bUERestitutionCombine = gCalculateCombinedRestitutionCallback == &CombineRestitutionUE;
 		Out.AppendEffective("material.friction_combine",
 			bUECombine ? "UE combine mode per pair (larger mode wins), PtCombine dynamic value (gCalculateCombinedFrictionCallback)"
 				: "Bullet native: F0 * F1 clamped to [-10, 10] (btManifoldResult::calculateCombinedFriction)",
-			"", NaN, "", "READBACK");
+			"", bUECombine ? 0.0 : 1.0, "count", "READBACK");
 		Out.AppendEffective("material.restitution_combine",
-			gCalculateCombinedRestitutionCallback == &CombineRestitutionUE ? "UE combine mode per pair (larger mode wins), PtCombine (gCalculateCombinedRestitutionCallback)"
+			bUERestitutionCombine ? "UE combine mode per pair (larger mode wins), PtCombine (gCalculateCombinedRestitutionCallback)"
 				: "Bullet native: R0 * R1 (btManifoldResult::calculateCombinedRestitution)",
-			"", NaN, "", "READBACK");
+			"", bUERestitutionCombine ? 0.0 : 1.0, "count", "READBACK");
 		Out.AppendEffective("material.static_friction_rule", "dynamic_only", "", NaN, "", "COMPILE_TIME");
 		const bool bUEDamping = Options.DampingModel == EDampingModel::UEOrder;
+		// canonical = the formula id of docs/Abi.md 5.14: 1 = UE order (the pre-tick), 2 = Bullet's damping before the forces
+		// (DampingModel=Converted); G1b computes its reference from it.
 		Out.AppendEffective("body.damping_formula",
 			bUEDamping ? "UE: v = (v + a dt) * max(0, 1 - c dt) before the solve (internal pre-tick; btRigidBody damping 0, PtDamping.h)"
 				: "Bullet: v *= (1 - c_b)^dt before the force integration, c_b = 1 - (1 - c dt)^(1/dt) (DampingModel=Converted)",
-			"", NaN, "", "COMPILE_TIME");
+			"formula_id", bUEDamping ? 1.0 : 2.0, "formula_id", "COMPILE_TIME");
+		// docs/Abi.md 9.1 decision 1: every velocity / state write activates a sleeping body, a nearly zero one too (canonical 1);
+		// G6 checks the declared behaviour.
+		Out.AppendEffective("command.nearly_zero_velocity_wakes", "1: a nearly zero velocity write wakes a sleeping body (btRigidBody::activate on every write)",
+			"bool", 1.0, "bool", "COMPILE_TIME");
 
 		// Per-body values (dynamic bodies): read from the engine where Bullet holds them.
 		FRange Linear;
@@ -1750,8 +1793,18 @@ namespace PhysicsTest::BulletBackend
 		Out.AppendEffective("body.gyroscopic", Text, "bodies", NumGyroscopic > 0 ? 1.0 : 0.0, "bool", "READBACK");
 		snprintf(Text, sizeof(Text), "%s (%u of %u dynamic bodies may deactivate; the others are DISABLE_DEACTIVATION; gDisableDeactivation %s)",
 			bSleepingAllowed ? "true" : "false", NumMaySleep, NumDynamic, gDisableDeactivation ? "true" : "false");
-		const bool bMaySleep = bSleepingAllowed && !gDisableDeactivation && (NumDynamic == 0 || NumMaySleep > 0);
-		Out.AppendEffective("sleep.enabled", Text, "bool", bMaySleep ? 1.0 : 0.0, "bool", "READBACK");
+		// M6 (M5 review): READBACK only from what the engine holds - the bodies' activation states and the global
+		// gDisableDeactivation; with no dynamic body there is nothing to read and the value is the scene's own flag (SET_ONLY).
+		if (NumDynamic > 0)
+		{
+			const bool bMaySleep = !gDisableDeactivation && NumMaySleep > 0;
+			Out.AppendEffective("sleep.enabled", Text, "bool", bMaySleep ? 1.0 : 0.0, "bool", "READBACK");
+		}
+		else
+		{
+			const bool bMaySleep = bSleepingAllowed && !gDisableDeactivation;
+			Out.AppendEffective("sleep.enabled", Text, "bool", bMaySleep ? 1.0 : 0.0, "bool", "SET_ONLY");
+		}
 		if (LinearSleep.bAny)
 		{
 			snprintf(Text, sizeof(Text), "per body: linear < [%.9g, %.9g] cm/s and angular < [%.9g, %.9g] rad/s for gDeactivationTime %.9g s, island-wide "

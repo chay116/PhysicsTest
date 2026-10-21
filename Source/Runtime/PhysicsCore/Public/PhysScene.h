@@ -75,6 +75,7 @@ namespace PhysicsTest
 {
 	struct FResolvedPhysicsConfig;
 	struct FBackendInfo;
+	struct FBackendInitParams;
 	struct FPhysicsDebugSnapshot;
 	class FPhysicsBackendScene;
 	class FPhysScene;
@@ -115,6 +116,11 @@ namespace PhysicsTest
 		~FPhysScene();
 		FPhysScene(const FPhysScene&) = delete;
 		FPhysScene& operator=(const FPhysScene&) = delete;
+
+		// The InitGamePhys arguments a scene with this config passes to FPhysicsBackendRegistry::FindOrLoad (nullptr = the
+		// built-in defaults). A caller that initialises a module itself before creating scenes on it (gate A10 on a
+		// PT_MODULE_NO_REINIT backend) uses them, so the scenes reuse that initialisation instead of asking for another.
+		[[nodiscard]] static FBackendInitParams MakeBackendInitParams(const FResolvedPhysicsConfig* Config);
 
 		// ---- assets (stable addresses) ----
 		FPhysicalMaterial* CreatePhysicalMaterial(const FPhysicalMaterial& Template);

@@ -1,15 +1,26 @@
 # PT::Scenarios - scenarios and their static registry (02_Architecture 4.5, A.12, docs/Scenes.md). M3: S00.FreeFall,
 # M1.SingleBoxDrop, M3.BoxPile and the free-fall fixture (moved here from PT::Conformance so that Conformance -> Scenarios
-# has no cycle). Programs link it with WHOLE_ARCHIVE (pt_link_scenarios): the IMPLEMENT_PHYSICS_TEST_SCENARIO registrars
+# has no cycle). M6 adds the gate scenes S00d and S01-S08 (Private/Scenarios/Gates, constants in Public/GateScenes.h).
+# Programs link it with WHOLE_ARCHIVE (pt_link_scenarios): the IMPLEMENT_PHYSICS_TEST_SCENARIO registrars
 # are not referenced otherwise.
 pt_add_module(PtScenarios STATIC ALIAS PT::Scenarios
 	SOURCES
 		Public/PhysicsTestScenario.h
 		Public/Fixtures/FreeFallFixture.h
+		Public/GateScenes.h
 		Private/PhysicsTestScenario.cpp
 		Private/Fixtures/FreeFallFixture.cpp
 		Private/Scenarios/ScenarioHelpers.h
 		Private/Scenarios/Gates/S00_FreeFall.cpp
+		Private/Scenarios/Gates/S00d_FreeFallDamped.cpp
+		Private/Scenarios/Gates/S01_UnitImpulse.cpp
+		Private/Scenarios/Gates/S02_SpinInertia.cpp
+		Private/Scenarios/Gates/S03_CapsuleRest.cpp
+		Private/Scenarios/Gates/S04_ContactNormal.cpp
+		Private/Scenarios/Gates/S05_RestitutionCombine.cpp
+		Private/Scenarios/Gates/S06_FrictionSlide.cpp
+		Private/Scenarios/Gates/S07_ClampProbe.cpp
+		Private/Scenarios/Gates/S08_StartAsleep.cpp
 		Private/Scenarios/Behavior/M1_SingleBoxDrop.cpp
 		Private/Scenarios/Perf/M3_BoxPile.cpp
 	PUBLIC_DEPS PT::PhysicsCore)

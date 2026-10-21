@@ -62,7 +62,9 @@ namespace PhysicsTest
 		//   (c) Substepping and AsyncFixed through FPhysScene with the Native driver run without a step-count mismatch
 		//   (d) Substepping and AsyncFixed, Native vs Harness driver: the same steps and object states, states within the
 		//       tolerances of the step dt (and, with torques in the random scripts, of the per-step world inertia)
-		// The module is left terminated.
+		// The module is initialised once, through the registry module with FPhysScene's default init arguments, and (a)-(d) all
+		// run on that initialisation (a PT_MODULE_NO_REINIT backend cannot be initialised again after a Term); it is left
+		// terminated.
 		FGateReport RunA10FrameModel(std::string_view BackendName);
 	}
 }

@@ -167,9 +167,12 @@ namespace PhysicsTest
 			OutError = "PT_GetBackendApi(" + std::to_string(PT_ABI_VERSION_MAJOR) + ") returned NULL (the module does not support this ABI major)";
 			return false;
 		}
-		if (InApi->StructSize < sizeof(PtBackendApi))
+		// The v1.0 table is the frozen minimum (docs/Abi.md 2): a module built against v1.0 keeps loading after a v1.x host
+		// appends entries. Entries past the module's StructSize are absent; this host reads none (it uses the 25 v1.0 entries),
+		// a later one reads an appended entry only through PT_API_HAS.
+		if (InApi->StructSize < PT_ABI_V1_0_API_SIZE)
 		{
-			OutError = "PtBackendApi.StructSize " + std::to_string(InApi->StructSize) + " is below the host's " + std::to_string(sizeof(PtBackendApi));
+			OutError = "PtBackendApi.StructSize " + std::to_string(InApi->StructSize) + " is below the v1.0 table size " + std::to_string(PT_ABI_V1_0_API_SIZE);
 			return false;
 		}
 		if ((InApi->AbiVersion >> 16) != PT_ABI_VERSION_MAJOR)

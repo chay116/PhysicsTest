@@ -333,8 +333,9 @@ TEST_CASE("PhysicsTest.BulletBackend.ShapeWrapping")
 		PtMassProperties Mass = {};
 		REQUIRE(Scene.GetBackendScene().ReadMassProperties(Index, std::span<PtMassProperties>(&Mass, 1)) == PT_OK);
 		const FBodyInstance& Body = *Scene.GetBodies()[Index];
-		CHECK(Mass.CenterOfMassLocal.Translation.X == doctest::Approx(Body.MassProperties.CenterOfMass.X).epsilon(1e-9));
-		CHECK(Mass.CenterOfMassLocal.Translation.Z == doctest::Approx(Body.MassProperties.CenterOfMass.Z).epsilon(1e-9));
+		// M6 (lead (d)): read from the engine - the compound's child 0 transform (float) - so float resolution, not 1e-9.
+		CHECK(std::abs(Mass.CenterOfMassLocal.Translation.X - Body.MassProperties.CenterOfMass.X) < 1e-4);
+		CHECK(std::abs(Mass.CenterOfMassLocal.Translation.Z - Body.MassProperties.CenterOfMass.Z) < 1e-4);
 		CHECK(Mass.Mass == doctest::Approx(Body.MassProperties.Mass).epsilon(1e-6));
 	}
 	// The actor poses read back where they were created (the COM frame is undone exactly).
@@ -411,7 +412,10 @@ TEST_CASE("PhysicsTest.BulletBackend.PerPointPhi")
 		{
 			const FVector Delta = ToVector(Contact.PointOn0) - ToVector(Contact.PointOn1);
 			CHECK((Delta | ToVector(Contact.Normal)) == doctest::Approx(Contact.Phi).epsilon(1e-4));
-			CHECK(((Contact.Flags & PT_CONTACT_SPECULATIVE) != 0u) == (Contact.Phi > 0.0));
+			// ABI v1.0 rule (docs/Abi.md 7.1, M6): ACTIVE and SPECULATIVE are exclusive; SPECULATIVE = Phi > 0 without an impulse.
+			const bool bActive = (Contact.Flags & PT_CONTACT_ACTIVE) != 0u;
+			CHECK(((Contact.Flags & PT_CONTACT_SPECULATIVE) != 0u) == (Contact.Phi > 0.0 && !bActive));
+			CHECK_FALSE((bActive && (Contact.Flags & PT_CONTACT_SPECULATIVE) != 0u));
 			MinPhi = std::min(MinPhi, Contact.Phi);
 			MaxPhi = std::max(MaxPhi, Contact.Phi);
 		}
@@ -477,8 +481,8 @@ TEST_CASE("PhysicsTest.BulletBackend.SleepingIslandKeepsContacts")
 }
 
 // The kept contacts follow the body commands as in Jolt (M4 fix round 2): PUT_TO_SLEEP between steps keeps the last step's
-// points; a pose command on the sleeping body (SET_BODY_STATE, no wake) drops them (cleanProxyFromPairs: stale points);
-// after a wake the narrow phase reports the pair again; a second PUT_TO_SLEEP keeps it once more.
+// points; a state command on the sleeping body (SET_BODY_STATE, which wakes it from ABI v1.0 on) drops them
+// (cleanProxyFromPairs: stale points) and the narrow phase reports the pair again; a second PUT_TO_SLEEP keeps it once more.
 TEST_CASE("PhysicsTest.BulletBackend.KeptContactsFollowCommands")
 {
 	FResolvedPhysicsConfig Config = LoadBulletConfig("UEParity");
@@ -514,12 +518,11 @@ TEST_CASE("PhysicsTest.BulletBackend.KeptContactsFollowCommands")
 		CHECK(CountContacts(Sleeping) == Touching);
 		CHECK(Sleeping == Touching);
 	}
+	// ABI v1.0 (docs/Abi.md 5.10, M6): SET_BODY_STATE wakes the sleeping box and drops its manifolds (cleanProxyFromPairs:
+	// stale points); the next narrow phase reports the pair afresh.
 	FPhysicsInterface::SetBodyState_AssumesLocked(Box.ActorHandle, Box.State.BodyTM, FVector::ZeroVector, FVector::ZeroVector);
 	Tick(*Scene, 1);
-	CHECK(Box.State.ObjectState == EObjectStateType::Sleeping);
-	CHECK(CountContacts(Sleeping) == 0u);
-	Box.WakeInstance();
-	Tick(*Scene, 1);
+	CHECK(Box.State.ObjectState == EObjectStateType::Dynamic);
 	const uint32 Rewoken = CountContacts(Sleeping);
 	CHECK(Rewoken > 0u);
 	CHECK(Sleeping == 0u);

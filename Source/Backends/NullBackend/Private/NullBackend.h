@@ -176,11 +176,17 @@ namespace PhysicsTest::NullBackend
 		uint64 TotalSteps = 0;
 	};
 
+	// The module flags a Null build declares: 0 for the static Null; the DLL (NullBackendDll.cpp) declares
+	// PT_MODULE_NO_REINIT when the process environment has PT_NULL_DLL_NO_REINIT=1 - the test double of a backend that
+	// cannot be initialised twice (the Chaos bridge), for the bench's one-gate-per-process paths (M6 round 1).
+	uint32 GetNullModuleFlags();
+
 	class FNullBackend final : public ::PhysicsTest::Abi::IPhysicsBackend
 	{
 	public:
 		static constexpr const char* ModuleName = "Null";
 
+		FNullBackend();
 		void GetInfo(PtBackendInfo& Out) const override;
 		PtResult InitGamePhys(const PtInitParams& Params) override;
 		PtResult TermGamePhys() override;
@@ -193,5 +199,6 @@ namespace PhysicsTest::NullBackend
 	private:
 		uint32 NumLiveScenes = 0;
 		uint32 MaxThreads = 1;
+		uint32 ModuleFlags = 0;   // GetNullModuleFlags(), once at construction (the Kit reads GetInfo once, too)
 	};
 }

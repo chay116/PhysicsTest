@@ -8,6 +8,9 @@
 #include "BenchCore.h"
 #include "BuildFlagsSha.h"
 #include "Containers/StringConv.h"
+#include "Abi/AbiGates.h"
+#include "GateScenes.h"
+#include "Gates/PhysicsGates.h"
 #include "HAL/PlatformTime.h"
 #include "Logging/LogMacros.h"
 #include "Physics/EffectiveSettings.h"
@@ -29,6 +32,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <system_error>
 
 DEFINE_LOG_CATEGORY_STATIC(LogPhysicsBench, Log, All);
@@ -484,6 +488,13 @@ namespace PhysicsTest
 		if (!LoadBenchConfig(Spec, Config, Files, Error))
 		{
 			UE_LOG(LogPhysicsBench, Error, "%s", Error.c_str());
+			return EBenchExit::GateFailed;
+		}
+		// M6: a scene that only means something with sleeping allowed (S08.StartAsleep) is refused under a profile without it.
+		if (Scenario->RequiresSleeping() && !Config.TestSettings.bAllowSleeping)
+		{
+			UE_LOG(LogPhysicsBench, Error, "scenario %s needs a profile with sleeping allowed (bAllowSleeping = True, e.g. UEParity); profile %s turns it off "
+				"and skips the start-asleep step (02 6)", Scenario->GetName(), Config.ProfileName.c_str());
 			return EBenchExit::GateFailed;
 		}
 		// The M3 runner hashes the final frame only and writes no per-frame counters: a profile asking for more would get
@@ -976,5 +987,349 @@ namespace PhysicsTest
 		Scene.reset();
 		Module->TermGamePhys();
 		return Exit;
+	}
+
+	// ---- -Conformance (M6) -------------------------------------------------------------------------------------------
+	EBenchExit FBenchmarkRunner::Conformance(const FBenchRunSpec& Spec)
+	{
+		const uint64 RunBegin = FClockBuckets::Begin();
+		const std::vector<std::string> Available = FPhysicsBackendRegistry::Get().GetAvailableNames();
+		if (std::find(Available.begin(), Available.end(), Spec.Backend) == Available.end())
+		{
+			UE_LOG(LogPhysicsBench, Error, "backend '%s' is not available in this build", Spec.Backend.c_str());
+			return EBenchExit::BackendUnavailable;
+		}
+		FResolvedPhysicsConfig Config;
+		FBenchConfig Files;
+		std::string Error;
+		if (!LoadBenchConfig(Spec, Config, Files, Error))
+		{
+			UE_LOG(LogPhysicsBench, Error, "%s", Error.c_str());
+			return EBenchExit::GateFailed;
+		}
+		const std::filesystem::path ConfigDir = Spec.ConfigDir.empty() ? GetDefaultConfigDir() : std::filesystem::path(Spec.ConfigDir).make_preferred();
+		Gates::FTolerances Tolerances;
+		if (!Tolerances.LoadFile(Gates::GetTolerancesPath(ConfigDir), Error))
+		{
+			UE_LOG(LogPhysicsBench, Error, "tolerances: %s", Error.c_str());
+			return EBenchExit::GateFailed;
+		}
+		const std::string RunId = MakeRunId();
+		std::filesystem::path OutDir = !Spec.OutDir.empty() ? Spec.OutDir : GetDefaultResultsDir() / StringConv::Utf8ToPath(Spec.Session) / ("conformance_" + RunId);
+		OutDir.make_preferred();
+		std::error_code DirError;
+		std::filesystem::create_directories(OutDir, DirError);
+		if (DirError)
+		{
+			UE_LOG(LogPhysicsBench, Error, "cannot create '%s': %s", StringConv::PathToUtf8(OutDir).c_str(), DirError.message().c_str());
+			return EBenchExit::GateFailed;
+		}
+
+		Gates::FGateTarget Target;
+		Target.Backend = Spec.Backend;
+		Target.Variant = Files.VariantName;
+		Target.Profile = Config.ProfileName;
+		Target.Config = &Config;
+		Target.Tolerances = &Tolerances;
+		// -Gates= may name ABI gates (A0-A7, A10) as well as physics gates. The ABI gates run first, each on an uninitialised
+		// module (each Inits and Terms it once). A PT_MODULE_NO_REINIT backend (the Chaos bridge) can be initialised once per
+		// process, so one process runs ONE ABI gate or the physics gates (which share one Init); the caller starts a process
+		// for each (docs/ChaosBackendGuide.md 11). Any other list is refused here (exit 2) instead of failing half-way.
+		// -InjectEngineErrorBits (test only) is OR-ed into every physics-gate frame's engine error bits: G12 must fail.
+		std::vector<std::string> AbiGateIds;
+		std::vector<std::string> PhysicsGateIds;
+		for (const std::string& Id : Spec.Gates)
+		{
+			const bool bAbi = Id.size() >= 2 && (Id[0] == 'A' || Id[0] == 'a') && Id[1] >= '0' && Id[1] <= '9';
+			(bAbi ? AbiGateIds : PhysicsGateIds).push_back(Id);
+		}
+		if (!AbiGateIds.empty())
+		{
+			const FPhysicsBackendModule* Loaded = FPhysicsBackendRegistry::Get().FindOrLoadModule(Spec.Backend, Error);
+			if (Loaded == nullptr)
+			{
+				UE_LOG(LogPhysicsBench, Error, "conformance: %s", Error.c_str());
+				return EBenchExit::BackendUnavailable;
+			}
+			if ((Loaded->GetInfo().ModuleFlags & PT_MODULE_NO_REINIT) != 0 && (AbiGateIds.size() > 1 || !PhysicsGateIds.empty()))
+			{
+				std::string List;
+				for (const std::string& Id : Spec.Gates)
+				{
+					List += (List.empty() ? "" : ",") + Id;
+				}
+				UE_LOG(LogPhysicsBench, Error,
+					"backend '%s' declares PT_MODULE_NO_REINIT: one -Conformance process runs one ABI gate (-Gates=A0) or the physics gates, not "
+					"-Gates=%s (an ABI gate terminates the module and it cannot be initialised again; run one process per ABI gate)",
+					Spec.Backend.c_str(), List.c_str());
+				return EBenchExit::GateFailed;
+			}
+		}
+		if (Spec.InjectEngineErrorBits != 0 && PhysicsGateIds.empty() && !AbiGateIds.empty())
+		{
+			UE_LOG(LogPhysicsBench, Error, "-InjectEngineErrorBits applies to the physics gates' frames; -Gates names ABI gates only");
+			return EBenchExit::GateFailed;
+		}
+		Target.InjectedEngineErrorBits = Spec.InjectEngineErrorBits;
+		std::vector<FGateReport> Reports;
+		for (const std::string& Id : AbiGateIds)
+		{
+			std::string Upper = Id;
+			Upper[0] = 'A';
+			if (Upper == "A10")
+			{
+				Reports.push_back(AbiGates::RunA10FrameModel(Spec.Backend));
+				continue;
+			}
+			AbiGates::FAbiGateTarget AbiTarget;
+			if (!AbiGates::PrepareAbiGateTarget(Spec.Backend, AbiTarget, Error))
+			{
+				UE_LOG(LogPhysicsBench, Error, "conformance %s: %s", Upper.c_str(), Error.c_str());
+				return EBenchExit::GateFailed;
+			}
+			using FAbiGate = FGateReport (*)(const AbiGates::FAbiGateTarget&);
+			const std::pair<const char*, FAbiGate> AbiGateTable[] = { { "A0", &AbiGates::RunA0Lifecycle }, { "A1", &AbiGates::RunA1VersionHandshake },
+				{ "A2", &AbiGates::RunA2OtherThread }, { "A3", &AbiGates::RunA3PhaseStateMachine }, { "A4", &AbiGates::RunA4NegativeCases },
+				{ "A5", &AbiGates::RunA5CapacityAndStride }, { "A6", &AbiGates::RunA6FloatingPointState }, { "A7", &AbiGates::RunA7EffectiveKeys } };
+			const auto Found = std::find_if(std::begin(AbiGateTable), std::end(AbiGateTable), [&Upper](const auto& Entry) { return Upper == Entry.first; });
+			if (Found == std::end(AbiGateTable))
+			{
+				UE_LOG(LogPhysicsBench, Error, "unknown ABI gate '%s' (A0-A7, A10; A8 is M14, A9 is Tools/check_modules.py)", Id.c_str());
+				return EBenchExit::GateFailed;
+			}
+			Reports.push_back(Found->second(AbiTarget));
+		}
+		if (!PhysicsGateIds.empty() || AbiGateIds.empty())
+		{
+			std::vector<FGateReport> PhysicsReports;
+			if (!Gates::RunPhysicsGates(Target, PhysicsGateIds, PhysicsReports, Error))
+			{
+				UE_LOG(LogPhysicsBench, Error, "conformance %s: %s", Target.GetLabel().c_str(), Error.c_str());
+				return EBenchExit::GateFailed;
+			}
+			Reports.insert(Reports.end(), PhysicsReports.begin(), PhysicsReports.end());
+		}
+
+		int32 Passed = 0;
+		int32 Failed = 0;
+		int32 Skipped = 0;
+		FJson GateList = FJson::array();
+		// The post-run registrations (tolerances.json "registered": "post-run") the verdicts used, once each, with their sign-off:
+		// M8 / M10 tooling flags or refuses a pass that rests on a deviation the lead has not signed (M6 round 2).
+		FJson PostRunList = FJson::array();
+		std::vector<std::string> PostRunSeen;
+		int32 PendingSignOffs = 0;
+		const auto PostRunJson = [](const FGatePostRunRegistration& Used)
+		{
+			return FJson{ { "key", Used.Key }, { "engine", Used.Engine }, { "variant", Used.Variant }, { "profile", Used.Profile }, { "value", Used.Value },
+				{ "sign_off", Used.SignOff } };
+		};
+		for (const FGateReport& Report : Reports)
+		{
+			Passed += Report.Result == EGateResult::Pass ? 1 : 0;
+			Failed += Report.Result == EGateResult::Fail ? 1 : 0;
+			Skipped += Report.Result == EGateResult::Skip ? 1 : 0;
+			const Gates::IConformanceGate* Gate = Gates::FindPhysicsGate(Report.Gate);
+			FJson Entry;
+			Entry["id"] = Report.Gate;
+			Entry["description"] = Gate != nullptr ? Gate->GetDescription() : "ABI gate (docs/Abi.md 8)";
+			Entry["result"] = ToString(Report.Result);
+			Entry["checks"] = Report.NumChecks;
+			Entry["failures"] = Report.Failures;
+			Entry["notes"] = Report.Notes;
+			FJson Used = FJson::array();
+			for (const FGatePostRunRegistration& Registration : Report.PostRunRegistrations)
+			{
+				Used.push_back(PostRunJson(Registration));
+				const std::string Id = Registration.Key + "|" + Registration.Engine + "|" + Registration.Variant + "|" + Registration.Profile;
+				if (std::find(PostRunSeen.begin(), PostRunSeen.end(), Id) == PostRunSeen.end())
+				{
+					PostRunSeen.push_back(Id);
+					PostRunList.push_back(PostRunJson(Registration));
+					PendingSignOffs += Registration.SignOff == "pending" ? 1 : 0;
+				}
+			}
+			Entry["post_run_registrations"] = Used;
+			GateList.push_back(Entry);
+			UE_LOG(LogPhysicsBench, Display, "%s", Report.Summary().c_str());
+		}
+		FPhysicsBackendModule* Module = FPhysicsBackendRegistry::Get().FindOrLoadModule(Spec.Backend, Error);
+
+		FJson Json;
+		Json["schema"] = "physicstest.conformance/1";
+		Json["gate_suite_version"] = Gates::GateSuiteVersion;
+		Json["result"] = Failed == 0 ? "pass" : "fail";
+		Json["summary"] = { { "passed", Passed }, { "failed", Failed }, { "skipped", Skipped } };
+		Json["post_run_registrations"] = PostRunList;   // what the verdicts rest on beyond the pre-run registrations
+		Json["pending_sign_offs"] = PendingSignOffs;     // of those, the ones the lead has not signed (M10 stamp key)
+		Json["utc"] = GetUtcTimestamp();
+		Json["command_line"] = Spec.CommandLine;
+		Json["target"] = { { "backend", Spec.Backend }, { "variant", Files.VariantName }, { "profile", Config.ProfileName }, { "label", Target.GetLabel() } };
+		if (Spec.InjectEngineErrorBits != 0)
+		{
+			Json["injected_engine_error_bits"] = Spec.InjectEngineErrorBits;   // test only (-InjectEngineErrorBits): not an engine report
+		}
+		if (Module != nullptr)
+		{
+			Json["backend"] = MakeBackendJson(Module->GetInfo(), Files, Config);
+		}
+		{
+			FJson Build;
+			const std::filesystem::path Exe = GetExecutablePath();
+			Build["exe"] = StringConv::PathToUtf8(Exe.filename());
+			Build["exe_sha256"] = HashFileSha256(Exe);
+			Build["preset"] = PT_BUILD_PRESET;
+			Build["configuration"] = PT_BUILD_CONFIGURATION;
+			Build["flag_profile"] = PT_BUILD_FLAG_PROFILE;
+			Build["git_sha"] = PT_BUILD_GIT_SHA;
+			Build["git_dirty"] = PT_BUILD_GIT_DIRTY != 0;
+			Build["abi_version"] = std::to_string(PT_ABI_VERSION_MAJOR) + "." + std::to_string(PT_ABI_VERSION_MINOR);
+			Json["build"] = Build;
+		}
+		{
+			FJson Inputs;
+			Inputs["tolerances_file"] = Tolerances.GetSourceName();
+			Inputs["tolerances_sha256"] = Tolerances.GetSha256();
+			Inputs["tolerances_version"] = Tolerances.GetVersion();
+			Inputs["physics_sha256"] = Config.PhysicsSha256();
+			Inputs["profile_sha256"] = Files.ProfileSha256;
+			Inputs["variant_sha256"] = Files.VariantSha256;
+			Json["inputs"] = Inputs;
+		}
+		{
+			// The gate scenes' identities (scene_sha256: name, version, parameters, seed; build-independent).
+			FJson Scenes = FJson::object();
+			for (const IPhysicsTestScenario* Scenario : FScenarioRegistry::Get().GetAll())
+			{
+				if (Scenario->GetKind() == EScenarioKind::Gate)
+				{
+					FScenarioParams Params;
+					std::string Ignored;
+					Scenario->ResolveParams(FScenarioParams(), Params, Ignored);
+					Scenes[Scenario->GetName()] = Scenario->ComputeSceneSha256(Params);
+				}
+			}
+			Json["scene_sha256"] = Scenes;
+		}
+		Json["gates"] = GateList;
+		Json["wall_time_s"] = FClockBuckets::TicksToNs(FClockBuckets::End(RunBegin)) * 1.0e-9;
+		const std::filesystem::path Path = OutDir / "conformance.json";
+		if (!WriteText(Path, Json.dump(2) + "\n"))
+		{
+			UE_LOG(LogPhysicsBench, Error, "cannot write %s", StringConv::PathToUtf8(Path).c_str());
+			return EBenchExit::GateFailed;
+		}
+		UE_LOG(LogPhysicsBench, Display, "conformance %s: %d pass, %d fail, %d skip -> %s", Target.GetLabel().c_str(), Passed, Failed, Skipped,
+			StringConv::PathToUtf8(Path).c_str());
+		FPhysicsBackendRegistry::Get().TermIdleModules();
+		return Failed == 0 ? EBenchExit::Ok : EBenchExit::GateFailed;
+	}
+
+	// ---- -SceneHashes (M6) -------------------------------------------------------------------------------------------
+	EBenchExit FBenchmarkRunner::WriteSceneHashes(const FBenchRunSpec& Spec)
+	{
+		// The golden hashes (02 14.1 "scene hash golden"): scene_sha256 of every gate scene, and desc_sha256 per physics profile
+		// for this build configuration (it depends on /O2 vs /Od, docs/Scenes.md 1), with the scenario's default frames. Built
+		// on Null: desc_sha256 is engine independent (DL43). Entries of the other configuration in an existing file are kept.
+		FJson Root = FJson::object();
+		{
+			std::ifstream File(Spec.SceneHashesPath, std::ios::binary);
+			if (File)
+			{
+				std::stringstream Buffer;
+				Buffer << File.rdbuf();
+				FJson Existing = FJson::parse(Buffer.str(), nullptr, false);
+				if (!Existing.is_discarded() && Existing.is_object())
+				{
+					Root = std::move(Existing);
+				}
+			}
+		}
+		Root["schema"] = "physicstest.scene_hashes/1";
+		Root["description"] = "Golden scene hashes of the M6 gate scenes (docs/Scenes.md). scene_sha256 is build-independent; desc_sha256 is per build "
+			"configuration (Release = dev / test, Debug = dbg) and physics profile, with the scenario's default frames. Regenerate with "
+			"PhysicsTestBench -SceneHashes=Config/Golden/scene_hashes.json in each configuration; PhysicsTest.Scenario.SceneHashesGolden checks it.";
+		FJson& Scenes = Root["scenes"];
+		const std::filesystem::path ConfigDir = Spec.ConfigDir.empty() ? GetDefaultConfigDir() : std::filesystem::path(Spec.ConfigDir).make_preferred();
+		std::vector<FSceneHashEntry> Entries;
+		std::string Error;
+		if (!ComputeGateSceneHashes(ConfigDir, Entries, Error))
+		{
+			UE_LOG(LogPhysicsBench, Error, "%s", Error.c_str());
+			return EBenchExit::GateFailed;
+		}
+		for (const FSceneHashEntry& Hashes : Entries)
+		{
+			FJson& Entry = Scenes[Hashes.Scene];
+			Entry["version"] = Hashes.Version;
+			Entry["scene_sha256"] = Hashes.SceneSha256;
+			Entry["default_frames"] = Hashes.DefaultFrames;
+			for (const auto& [Profile, Sha] : Hashes.DescSha256ByProfile)
+			{
+				Entry["desc_sha256"][PT_BUILD_CONFIGURATION][Profile] = Sha;
+			}
+		}
+		std::error_code DirError;
+		std::filesystem::create_directories(std::filesystem::path(Spec.SceneHashesPath).parent_path(), DirError);
+		if (!WriteText(Spec.SceneHashesPath, Root.dump(2) + "\n"))
+		{
+			UE_LOG(LogPhysicsBench, Error, "cannot write %s", StringConv::PathToUtf8(Spec.SceneHashesPath).c_str());
+			return EBenchExit::GateFailed;
+		}
+		std::printf("%s\n", Root.dump(2).c_str());
+		FPhysicsBackendRegistry::Get().TermIdleModules();
+		return EBenchExit::Ok;
+	}
+	bool ComputeGateSceneHashes(const std::filesystem::path& ConfigDir, std::vector<FSceneHashEntry>& Out, std::string& OutError)
+	{
+		Out.clear();
+		for (IPhysicsTestScenario* Scenario : FScenarioRegistry::Get().GetAll())
+		{
+			if (Scenario->GetKind() != EScenarioKind::Gate)
+			{
+				continue;
+			}
+			FScenarioParams Params;
+			std::string Ignored;
+			Scenario->ResolveParams(FScenarioParams(), Params, Ignored);
+			FSceneHashEntry Entry;
+			Entry.Scene = Scenario->GetName();
+			Entry.Version = Scenario->GetVersion();
+			Entry.SceneSha256 = Scenario->ComputeSceneSha256(Params);
+			Entry.DefaultFrames = Scenario->GetDefaultFrames(Params);
+			for (const char* Profile : { "UEParity", "Normalized" })
+			{
+				FBenchRunSpec ProfileSpec;
+				ProfileSpec.Backend = "Null";
+				ProfileSpec.PhysicsProfile = Profile;
+				ProfileSpec.ConfigDir = ConfigDir;
+				FResolvedPhysicsConfig Config;
+				FBenchConfig Files;
+				if (!LoadBenchConfig(ProfileSpec, Config, Files, OutError))
+				{
+					return false;
+				}
+				if (Scenario->RequiresSleeping() && !Config.TestSettings.bAllowSleeping)
+				{
+					continue;
+				}
+				const FScenarioCapacity Capacity = Scenario->GetCapacity(Params);
+				FPhysSceneInitParams InitParams;
+				InitParams.DebugName = Scenario->GetName();
+				InitParams.BackendName = "Null";
+				InitParams.Config = &Config;
+				InitParams.MaxBodiesHint = Capacity.MaxBodies;
+				InitParams.MaxBodyPairsHint = Capacity.MaxBodyPairs;
+				InitParams.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
+				FPhysScene Scene(InitParams);
+				FRandomStream Random(Scenario->GetSeed(Params));
+				const FScenarioContext Context{ Params, Random, &Config };
+				Scenario->BuildScene(Scene, Context);
+				const std::vector<float> FrameDts(static_cast<size_t>(Entry.DefaultFrames), Config.TestSettings.FixedDeltaTime);
+				Entry.DescSha256ByProfile.emplace_back(Profile, Scene.ComputeDescSha256(FrameDts));
+			}
+			Out.push_back(std::move(Entry));
+		}
+		return true;
 	}
 }

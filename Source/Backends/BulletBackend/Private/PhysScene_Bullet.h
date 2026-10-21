@@ -35,7 +35,12 @@
 //   - damping in UE's order (DampingModel=UE, the default): Bullet damps BEFORE its solver adds the force impulse, UE / Chaos
 //     after (PtDamping.h). The pre-tick sets v := UEOrderPreSolveVelocity(v, a dt, max(0, 1 - c dt)) with Bullet's own
 //     damping at 0, so the solver's "+ a dt" ends at UE's (v + a dt)(1 - c dt). DampingModel=Converted keeps Bullet's
-//     damping with the 02 8.1 coefficient c_b = 1 - (1 - c dt)^(1/dt) and Bullet's order
+//     damping with the 02 8.1 coefficient c_b = 1 - (1 - c dt)^(1/dt) and Bullet's order.
+//     Known limit (M6, M5 review): the emulation takes the solver's end velocity as W + tau invI dt. A body with a
+//     BT_ENABLE_GYROSCOPIC_FORCE_* flag also gets the gyroscopic impulse added to m_externalTorqueImpulse by the solver, so
+//     its angular damping order and the angular clamp miss that term; it matters only when PT_BODY_GYROSCOPIC and angular
+//     damping or a clamp are both active (both profiles keep gyroscopic off). The fix, if a scene needs it, is to add
+//     computeGyroscopicImpulseImplicit_Body / _World(dt) to the predicted end velocity
 //   - the per-body max angular (UEParity 62.83 rad/s, DL16) and linear speeds, applied to that end velocity as Chaos clamps
 //     after damping. Bullet's own limit is not a velocity clamp: above ANGULAR_MOTION_THRESHOLD = pi/4 per step (47.1 rad/s
 //     at 60 Hz, below UEParity's 62.83) btTransformUtil::integrateTransform caps the exponential map's angle but keeps the
@@ -150,6 +155,7 @@ namespace PhysicsTest::BulletBackend
 		PtTransform ComLocal = {};
 		PtTransform ComLocalInverse = {};
 		PtTransform HarnessComLocal = {};        // PtActorCreateInfo::CenterOfMassLocal as given (ReadMassProperties)
+		PtTransform FirstElementLocal = {};      // the first element's actor-space transform: the COM readback of a compound (M6)
 		uint32 Motion = PT_MOTION_STATIC;
 		uint32 Flags = 0;
 		uint32 MaterialIndex = 0;
@@ -178,6 +184,8 @@ namespace PhysicsTest::BulletBackend
 		bool bPendingImpulse = false;            // listed in FPhysScene_Bullet::PendingImpulseBodies
 		bool bPendingForce = false;              // listed in FPhysScene_Bullet::PendingForceBodies
 		bool bDirtyListed = false;               // listed in FPhysScene_Bullet::DirtyBodies
+		bool bWokenByCommand = false;            // woken by a command since the last step: its sleeping pairs leave the snapshot (M6 (b));
+		                                         // listed in FPhysScene_Bullet::WokenByCommandBodies
 	};
 
 	class FPhysScene_Bullet final : public ::PhysicsTest::Abi::IPhysicsBackendScene
@@ -248,6 +256,7 @@ namespace PhysicsTest::BulletBackend
 		btAlignedObjectArray<uint32> DirtyBodies;         // changed by a command since the previous read (static ones too)
 		btAlignedObjectArray<uint32> PendingImpulseBodies;   // deferred velocity changes (reserved: no allocation at push)
 		btAlignedObjectArray<uint32> PendingForceBodies;     // deferred forces (reserved)
+		btAlignedObjectArray<uint32> WokenByCommandBodies;   // FBulletBody::bWokenByCommand set since the last step (reserved)
 		btAlignedObjectArray<uint32> ReadScratch;         // the report list of one ACTIVE_ONLY read (reserved)
 		btAlignedObjectArray<PtParticleSnapshot> SnapshotParticles;
 		btAlignedObjectArray<PtContactPoint> SnapshotContacts;

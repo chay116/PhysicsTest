@@ -1,12 +1,21 @@
-// PhysXSimEventCallback.h - UE4's FPhysXSimEventCallback, viz only (02_Architecture 8.2, 9.4: no event callback and no
-// eNOTIFY_* pair flag in bench runs; the effective key listeners.installed records it). [MVP M5]   PT_BACKEND_NS=PhysX
+// PhysXSimEventCallback.h - UE4's FPhysXSimEventCallback, installed in viz runs or with PT_INSTR_CONTACTS (02_Architecture
+// 8.2, 9.4: no event callback and no eNOTIFY_* pair flag in bench runs; the effective key listeners.installed records it).
+// [MVP M5]   PT_BACKEND_NS=PhysX
 //
 // PhysX calls it from fetchResults on the thread that calls fetchResults (the owner thread, in WaitPhysScenes), so it
 // may touch the scene's arrays; it still never allocates: the point array is sized once and points past the end are
 // dropped and counted (the snapshot is then marked truncated), as the Jolt listener does.
 // onContact keeps at most 16 points per pair [M] (UE4's per-pair bound), in PhysX's own terms (native units): the
 // normal points from the pair's second shape to its first (PxSimulationEventCallback.h:447 [V]), separation < 0 is
-// penetrating. onWake / onSleep only count (actors carry eSEND_SLEEP_NOTIFIES in viz runs).
+// penetrating. onWake / onSleep only count (actors carry eSEND_SLEEP_NOTIFIES when the callback is installed).
+// M6 contract (c): PxContactPairPoint::position lies on one of the two shapes or between them, depending on the narrow-phase
+// path (PCM capsule / sphere paths: on narrow-phase shape A; box-box / convex-convex: on shape B; non-PCM sphere-sphere:
+// the midpoint) and on whether the pair was flipped for the report (flipContacts negates the normal only). onContact
+// therefore finds the point on the report's second shape (the plane owner: the normal points out of it): the closest point
+// of that shape (PxGeometryQuery::pointDistance) to an origin outside it on the normal line through the reported point, on
+// the shape's pose of the step's narrow phase (the pre-step pose the scene hands in, SetPreStepPoses); PointOn0 = PointOn1
+// + separation x normal (Phi's definition). An origin that is still inside the shape keeps the reported position (counted,
+// GetNumSurfaceFallbacks). (A ray along -normal grazes a face edge and misses; the closest point does not.)
 #pragma once
 
 #include "PhysXSupport.h"
@@ -19,7 +28,8 @@ namespace PhysicsTest::PhysXBackend
 		uint32 Body1 = 0;
 		uint16 Shape0 = 0;  // harness element index of the pair's first shape (PxShape::userData)
 		uint16 Shape1 = 0;
-		double Position[3] = {};   // native units, world
+		double Position[3] = {};   // native units, world: PxContactPairPoint::position as reported
+		double PointOn1[3] = {};   // native units, world: on the pair's second shape (see above)
 		double Normal[3] = {};     // from shape 1 toward shape 0
 		double Separation = 0.0;   // native units, < 0 penetrating
 		double NormalImpulse = 0.0;   // impulse . normal of the step's solver (native kg units/s; 0 = not in the solver)
@@ -41,6 +51,14 @@ namespace PhysicsTest::PhysXBackend
 
 		// The scene clears before each simulate: a snapshot shows the contacts of the last step.
 		void BeginStep();
+		// The actors' poses at the start of the step (indexed by harness body index), valid until the next BeginStep; nullptr
+		// = use the current pose (a static body's never changes).
+		void SetPreStepPoses(const physx::PxTransform* Poses, uint32 NumPoses)
+		{
+			PreStepPoses = Poses;
+			NumPreStepPoses = NumPoses;
+		}
+		uint64 GetNumSurfaceFallbacks() const { return NumSurfaceFallbacks; }
 		uint32 GetNumContacts() const { return static_cast<uint32>(Contacts.size()); }
 		const FPhysXRawContact* GetContacts() const { return Contacts.begin(); }
 		uint32 GetNumPairs() const { return NumPairs; }
@@ -50,6 +68,10 @@ namespace PhysicsTest::PhysXBackend
 		uint64 GetNumOverPairLimit() const { return NumOverPairLimit; }
 
 	private:
+		// PointOn1 of one reported point (see the file comment).
+		void FindPointOnSecondShape(const physx::PxShape& Shape, const physx::PxRigidActor& Actor, uint32 ActorIndex, const physx::PxContactPairPoint& Point,
+			FPhysXRawContact& InOut);
+
 		physx::PxArray<FPhysXRawContact> Contacts;   // reserved once (Capacity); never grows
 		uint32 Capacity = 0;
 		uint32 NumPairs = 0;
@@ -57,5 +79,8 @@ namespace PhysicsTest::PhysXBackend
 		uint64 NumOverPairLimit = 0;   // points beyond GPhysXMaxPointsPerPair of a pair, over the run
 		uint64 NumWakeEvents = 0;
 		uint64 NumSleepEvents = 0;
+		uint64 NumSurfaceFallbacks = 0;                // points whose ray missed the second shape, over the run
+		const physx::PxTransform* PreStepPoses = nullptr;
+		uint32 NumPreStepPoses = 0;
 	};
 }

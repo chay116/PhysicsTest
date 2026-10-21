@@ -729,27 +729,74 @@ namespace PhysicsTest
 			wchar_t ExePath[MAX_PATH] = {};
 			GetModuleFileNameW(nullptr, ExePath, MAX_PATH);
 			std::wstring Line = L"\"" + std::wstring(ExePath) + L"\" " + StringConv::Utf8ToWide(CommandLine);
-			STARTUPINFOW Startup = {};
-			Startup.cb = sizeof(Startup);
-			PROCESS_INFORMATION Process = {};
 			// Headless (M5): the relaunch is part of an automated run - no console window, this process's stdout / stderr, and
 			// this process waits for it and returns its exit code. Windowed: the new viewer runs on its own.
+			// M6 (M5 review): the headless child runs in a job object that kills it when this process ends (a CTest timeout kills
+			// only the parent), and it inherits only the three standard handles (PROC_THREAD_ATTRIBUTE_HANDLE_LIST).
+			STARTUPINFOEXW Startup = {};
+			Startup.StartupInfo.cb = sizeof(Startup.StartupInfo);
+			PROCESS_INFORMATION Process = {};
 			BOOL bInheritHandles = FALSE;
 			DWORD CreationFlags = 0;
+			HANDLE Job = nullptr;
+			std::vector<unsigned char> AttributeStorage;
+			LPPROC_THREAD_ATTRIBUTE_LIST Attributes = nullptr;
+			HANDLE Inherited[3] = {};
+			DWORD NumInherited = 0;
 			if (Options.bHeadless)
 			{
-				Startup.dwFlags = STARTF_USESTDHANDLES;
-				Startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-				Startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-				Startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+				Startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+				Startup.StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+				Startup.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+				Startup.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 				bInheritHandles = TRUE;
-				CreationFlags = CREATE_NO_WINDOW;
+				CreationFlags = CREATE_NO_WINDOW | CREATE_SUSPENDED;
+				for (const HANDLE Handle : { Startup.StartupInfo.hStdInput, Startup.StartupInfo.hStdOutput, Startup.StartupInfo.hStdError })
+				{
+					DWORD HandleFlags = 0;
+					const bool bUsable = Handle != nullptr && Handle != INVALID_HANDLE_VALUE && GetHandleInformation(Handle, &HandleFlags)
+						&& (HandleFlags & HANDLE_FLAG_INHERIT) != 0;
+					if (bUsable && std::find(Inherited, Inherited + NumInherited, Handle) == Inherited + NumInherited)
+					{
+						Inherited[NumInherited++] = Handle;
+					}
+				}
+				SIZE_T AttributeBytes = 0;
+				InitializeProcThreadAttributeList(nullptr, 1, 0, &AttributeBytes);
+				AttributeStorage.resize(AttributeBytes);
+				Attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(AttributeStorage.data());
+				if (NumInherited > 0 && InitializeProcThreadAttributeList(Attributes, 1, 0, &AttributeBytes)
+					&& UpdateProcThreadAttribute(Attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, Inherited, NumInherited * sizeof(HANDLE), nullptr, nullptr))
+				{
+					Startup.lpAttributeList = Attributes;
+					Startup.StartupInfo.cb = sizeof(Startup);   // EXTENDED_STARTUPINFO_PRESENT needs the STARTUPINFOEXW size
+					CreationFlags |= EXTENDED_STARTUPINFO_PRESENT;
+				}
+				else
+				{
+					Attributes = nullptr;   // the standard handles are not inheritable: plain inheritance (as in M5)
+				}
+				Job = CreateJobObjectW(nullptr, nullptr);
+				if (Job != nullptr)
+				{
+					JOBOBJECT_EXTENDED_LIMIT_INFORMATION Limits = {};
+					Limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+					SetInformationJobObject(Job, JobObjectExtendedLimitInformation, &Limits, sizeof(Limits));
+				}
 			}
 			UE_LOG(LogViewer, Display, "restarting: %s", CommandLine.c_str());
 			std::fflush(stdout);
 			std::fflush(stderr);
-			if (CreateProcessW(nullptr, Line.data(), nullptr, nullptr, bInheritHandles, CreationFlags, nullptr, nullptr, &Startup, &Process))
+			if (CreateProcessW(nullptr, Line.data(), nullptr, nullptr, bInheritHandles, CreationFlags, nullptr, nullptr, &Startup.StartupInfo, &Process))
 			{
+				if (Options.bHeadless)
+				{
+					if (Job != nullptr && !AssignProcessToJobObject(Job, Process.hProcess))
+					{
+						UE_LOG(LogViewer, Warning, "restart: AssignProcessToJobObject failed (%lu); the child is not killed with this process", GetLastError());
+					}
+					ResumeThread(Process.hThread);
+				}
 				CloseHandle(Process.hThread);
 				if (Options.bHeadless)
 				{
@@ -765,7 +812,17 @@ namespace PhysicsTest
 			}
 			else
 			{
-				Editor.AddLog("restart failed: CreateProcessW error " + std::to_string(GetLastError()));
+				const DWORD Error = GetLastError();
+				UE_LOG(LogViewer, Error, "restart failed: CreateProcessW error %lu", Error);
+				Editor.AddLog("restart failed: CreateProcessW error " + std::to_string(Error));
+			}
+			if (Attributes != nullptr)
+			{
+				DeleteProcThreadAttributeList(Attributes);
+			}
+			if (Job != nullptr)
+			{
+				CloseHandle(Job);
 			}
 		}
 		if (Editor.ConsumeExitRequest())

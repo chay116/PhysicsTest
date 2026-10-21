@@ -3,6 +3,7 @@
 
 #include "HAL/PlatformMisc.h"
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
@@ -38,6 +39,13 @@ namespace PhysicsTest
 				static std::mutex Mutex;
 				return Mutex;
 			}
+
+			std::atomic<bool> GAllLinesToStderr{ false };
+		}
+
+		void SetAllLinesToStderr(const bool bAllToStderr)
+		{
+			GAllLinesToStderr.store(bAllToStderr, std::memory_order_relaxed);
 		}
 
 		void Write(const FLogCategoryBase& Category, const ELogVerbosity Verbosity, const char* File, const int32 Line, const char* Format, ...)
@@ -64,7 +72,7 @@ namespace PhysicsTest
 
 			{
 				std::lock_guard<std::mutex> Lock(GetLogMutex());
-				FILE* Stream = Verbosity <= ELogVerbosity::Warning ? stderr : stdout;
+				FILE* Stream = (Verbosity <= ELogVerbosity::Warning || GAllLinesToStderr.load(std::memory_order_relaxed)) ? stderr : stdout;
 				std::fputs(LineBuffer, Stream);
 				std::fflush(Stream);
 				if (FPlatformMisc::IsDebuggerPresent())

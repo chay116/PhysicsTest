@@ -261,7 +261,7 @@ namespace PhysicsTest
 		void ApplyConsoleVariables(const FResolvedPhysicsConfig* Config);
 		void VerifyConsoleVariables(const char* Where) const;
 		void PushFrameCommands(uint32 StepIndex, uint32 NumSteps);
-		void RunBackendFrame(const FVector& FrameGravity, const FSetUpForFrameParams& Params, uint32 ExpectedSteps);
+		void RunBackendFrame(const FVector& FrameGravity, const FSetUpForFrameParams& Params, uint32 ExpectedSteps, uint32 ExpectedPushedSteps);
 		void FlushQueueOnly();
 		void AddForce(FBodyInstance* Body, const FVector& Value, bool bAllowSubstepping, bool bAccelChange, bool bIsTorque);
 		void SetForcesClean(const FBodyInstance* Body, bool bClean);
@@ -466,8 +466,10 @@ namespace PhysicsTest
 		return KinematicTargets.emplace_back(FPendingKinematicTarget{ Body, Body->State.BodyTM, Body->State.BodyTM, Body->State.BodyTM, true, false });
 	}
 
-	// One backend frame: [T_push] flush, [T_step] SetUpForFrame -> StartFrame -> WaitPhysScenes -> EndFrame.
-	void FPhysScene::FImpl::RunBackendFrame(const FVector& FrameGravity, const FSetUpForFrameParams& Params, const uint32 ExpectedSteps)
+	// One backend frame: [T_push] flush, [T_step] SetUpForFrame -> StartFrame -> WaitPhysScenes -> EndFrame. ABI v1.0: a backend
+	// that reports PtFrameResult::NumPushedSteps (not PT_INDEX_NONE) must have pushed what the harness planned too.
+	void FPhysScene::FImpl::RunBackendFrame(const FVector& FrameGravity, const FSetUpForFrameParams& Params, const uint32 ExpectedSteps,
+		const uint32 ExpectedPushedSteps)
 	{
 		const uint64 PushBegin = FPlatformTime::Cycles64();
 		const bool bHasCommands = Backend->HasPendingCommands();
@@ -482,7 +484,10 @@ namespace PhysicsTest
 		const uint64 StartEnd = FPlatformTime::Cycles64();
 		const PtResult WaitResult = StartResult >= 0 ? Backend->WaitPhysScenes() : StartResult;
 		const uint64 WaitEnd = FPlatformTime::Cycles64();
+		// EndFrame writes all four fields (docs/Abi.md 5.8); the host still pre-fills NumPushedSteps with "not reported", as the
+		// Kit does, so a backend outside the Kit that writes only the M5 fields cannot trip the push check below.
 		PtFrameResult Frame = {};
+		Frame.NumPushedSteps = PT_INDEX_NONE;
 		const PtResult EndResult = WaitResult >= 0 ? Backend->EndFrame(Frame) : WaitResult;
 		const uint64 EndEnd = FPlatformTime::Cycles64();
 		CheckBackend(SetUpResult, "SetUpForFrame");
@@ -506,6 +511,23 @@ namespace PhysicsTest
 				ExpectedSteps, Params.DeltaSeconds, Params.MinPhysicsDeltaTime, Params.MaxPhysicsDeltaTime, Params.MaxSubstepDeltaTime, Params.MaxSubsteps,
 				Params.bSubstepping ? 1 : 0, AsyncDeltaTime);
 		}
+		if (Frame.NumPushedSteps != PT_INDEX_NONE && Frame.NumPushedSteps != ExpectedPushedSteps)
+		{
+			UE_LOG(LogPhysScene, Fatal, "scene '%s' (backend '%s', %s driver): the backend pushed %u steps, the harness planned %u (dt %.9g, async dt %.9g)",
+				DebugName.c_str(), BackendName.c_str(), ToString(Driver), Frame.NumPushedSteps, ExpectedPushedSteps, Params.DeltaSeconds, AsyncDeltaTime);
+		}
+	}
+
+	FBackendInitParams FPhysScene::MakeBackendInitParams(const FResolvedPhysicsConfig* Config)
+	{
+		const FPhysicsTestSettings TestSettings = Config != nullptr ? Config->TestSettings : FPhysicsTestSettings();
+		FBackendInitParams InitParams;
+		InitParams.MaxThreads = static_cast<uint32>(TestSettings.NumThreads > 0 ? TestSettings.NumThreads : 1);
+		if (Config != nullptr)
+		{
+			InitParams.InitOptions = Config->InitOptions;
+		}
+		return InitParams;
 	}
 
 	FPhysScene::FPhysScene(const FPhysSceneInitParams& Params)
@@ -530,12 +552,7 @@ namespace PhysicsTest
 		Impl->ApplyConsoleVariables(Params.Config);
 
 		// Backend module (loaded and initialised once per process) and the frame driver.
-		FBackendInitParams InitParams;
-		InitParams.MaxThreads = static_cast<uint32>(Impl->TestSettings.NumThreads > 0 ? Impl->TestSettings.NumThreads : 1);
-		if (Params.Config != nullptr)
-		{
-			InitParams.InitOptions = Params.Config->InitOptions;
-		}
+		const FBackendInitParams InitParams = MakeBackendInitParams(Params.Config);
 		std::string Error;
 		Impl->Module = FPhysicsBackendRegistry::Get().FindOrLoad(Impl->BackendName, InitParams, Error);
 		if (Impl->Module == nullptr)
@@ -832,7 +849,7 @@ namespace PhysicsTest
 			}
 			Impl->PushFrameCommands(0, 1);
 			// The original UE arguments, once; the backend plans and steps (NATIVE_FRAME_MODEL).
-			Impl->RunBackendFrame(Impl->Gravity, Plan.Params, NumSteps);
+			Impl->RunBackendFrame(Impl->Gravity, Plan.Params, NumSteps, static_cast<uint32>(Plan.NumPushedSteps > 0 ? Plan.NumPushedSteps : 0));
 			for (uint32 Step = 0; Step < NumSteps; ++Step)
 			{
 				Impl->SimTime += Plan.InternalStepDeltaTime;
@@ -883,7 +900,7 @@ namespace PhysicsTest
 				OnPhysSceneStep(this, Plan.StepDeltaTime);
 			}
 			Impl->PushFrameCommands(Step, NumSteps);
-			Impl->RunBackendFrame(Impl->Gravity, StepParams, 1u);
+			Impl->RunBackendFrame(Impl->Gravity, StepParams, 1u, 1u);
 			++Impl->StepCount;
 			Impl->SimTime += StepDtEngine;
 		}

@@ -334,7 +334,7 @@ TEST_CASE("PhysicsTest.SdkBackend.SingleBoxDropRestingContact")
 			const std::string ProfileText(Profile);
 			CAPTURE(ProfileText);
 			FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, Profile);
-			Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the contact listener exists in viz runs only
+			Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the contact listener exists in viz runs (or with PT_INSTR_CONTACTS)
 			std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("M1.SingleBoxDrop", { { "Case", "a" } }, Backend, Config);
 			if (!Scene->GetBackendInfo().Has(PT_CAP_CONTACT_POINTS))
 			{
@@ -871,14 +871,15 @@ TEST_CASE("PhysicsTest.SdkBackend.PutToSleepKeepsEachContactOnce")
 	}
 }
 
-// M5 round 0, an open item for the M6 ABI freeze (docs/Abi.md 7.1, 9): what a velocity written to a SLEEPING body does,
-// without PT_CMDF_AUTO_WAKE (SET_LINEAR_VELOCITY) and through SET_BODY_STATE. The three behaviours today, pinned here so that
-// a change is seen:
-//   kept   the body stays asleep and moves with the velocity once woken (Null, Jolt)
-//   lost   the body stays asleep and wakes with no velocity: Bullet zeroes the velocities of an ISLAND_SLEEPING body every
-//          step (btDiscreteDynamicsWorld::updateActivationState, btDiscreteDynamicsWorld.cpp:605-620 [V])
-//   wakes  the non-zero velocity wakes the body at once (PhysX: setLinearVelocity wakes whatever autowake says,
-//          NpRigidDynamic.cpp:253 [V])
+// The ABI v1.0 contract (M6, docs/Abi.md 5.10; checkpoint A item O-1): a velocity written to a SLEEPING dynamic body wakes
+// it, whatever PT_CMDF_AUTO_WAKE says, and the body moves with it - UE 5.8.3's game-thread SetV / SetW wake a sleeping
+// particle for a vector that is not nearly zero (SetVBase / SetWBase) and for an exactly zero one (through SetX / SetR),
+// SingleParticlePhysicsProxy.h:322-340, :362-380, :1217-1244, :240-251, :261-271 [V]; FChaosEngineInterface supports only
+// bAutoWake = true (ensure, ChaosEngineInterface.cpp:626-658 [V]). SET_BODY_STATE (a teleport plus velocities) wakes too.
+// Before the freeze the engines differed (M5 round 0): Null and Jolt kept the body asleep with the velocity, Bullet lost
+// the velocity (updateActivationState zeroes an ISLAND_SLEEPING body, btDiscreteDynamicsWorld.cpp:605-620 [V]), PhysX woke
+// it for a non-zero vector only (NpRigidDynamic.cpp:253, :286 [V]). Body 0: SET_LINEAR_VELOCITY without AUTO_WAKE; body 1:
+// SET_BODY_STATE at its own pose with the same velocity; body 2: SET_LINEAR_VELOCITY with the zero vector.
 TEST_CASE("PhysicsTest.SdkBackend.VelocityOfASleepingBody")
 {
 	std::vector<std::string> Backends = SdkBackendNames();
@@ -900,8 +901,9 @@ TEST_CASE("PhysicsTest.SdkBackend.VelocityOfASleepingBody")
 		FProfileResolver::ApplyBodyInstanceDefaults(Config, Template);
 		Template.bSimulatePhysics = true;
 		Template.bEnableGravity = false;
-		const FTransform Poses[2] = { FTransform(FVector(0.0, 0.0, 5000.0)), FTransform(FVector(0.0, 1000.0, 5000.0)) };
-		FBodyInstance* Bodies[2] = { Scene.SpawnBody(Template, BoxSetup, Poses[0]), Scene.SpawnBody(Template, BoxSetup, Poses[1]) };
+		const FTransform Poses[3] = { FTransform(FVector(0.0, 0.0, 5000.0)), FTransform(FVector(0.0, 1000.0, 5000.0)), FTransform(FVector(0.0, 2000.0, 5000.0)) };
+		FBodyInstance* Bodies[3] = { Scene.SpawnBody(Template, BoxSetup, Poses[0]), Scene.SpawnBody(Template, BoxSetup, Poses[1]),
+			Scene.SpawnBody(Template, BoxSetup, Poses[2]) };
 		Scene.FlushDeferredActors();
 		const float Dt = Config.TestSettings.FixedDeltaTime;
 		for (FBodyInstance* Body : Bodies)
@@ -910,9 +912,10 @@ TEST_CASE("PhysicsTest.SdkBackend.VelocityOfASleepingBody")
 		}
 		Scene.Tick(Dt);
 		Scene.Tick(Dt);
-		REQUIRE(Bodies[0]->State.ObjectState == EObjectStateType::Sleeping);
-		REQUIRE(Bodies[1]->State.ObjectState == EObjectStateType::Sleeping);
-		// 0: SET_LINEAR_VELOCITY without PT_CMDF_AUTO_WAKE; 1: SET_BODY_STATE at its own pose with the same velocity.
+		for (FBodyInstance* Body : Bodies)
+		{
+			REQUIRE(Body->State.ObjectState == EObjectStateType::Sleeping);
+		}
 		PtBodyCommand SetVelocity = {};
 		SetVelocity.Type = PT_CMD_SET_LINEAR_VELOCITY;
 		SetVelocity.Body = Bodies[0]->ActorHandle.Index;
@@ -926,38 +929,31 @@ TEST_CASE("PhysicsTest.SdkBackend.VelocityOfASleepingBody")
 		SetState.Transform.Translation = PtVec3{ Poses[1].GetTranslation().X, Poses[1].GetTranslation().Y, Poses[1].GetTranslation().Z };
 		SetState.Vector = PtVec3{ 100.0, 0.0, 0.0 };
 		Scene.GetBackendScene().EnqueueCommand(SetState);
+		PtBodyCommand SetZero = SetVelocity;
+		SetZero.Body = Bodies[2]->ActorHandle.Index;
+		SetZero.Vector = PtVec3{ 0.0, 0.0, 0.0 };
+		Scene.GetBackendScene().EnqueueCommand(SetZero);
 		for (int32 Frame = 0; Frame < 3; ++Frame)
 		{
 			Scene.Tick(Dt);
 		}
-		const bool bAsleep[2] = { Bodies[0]->State.ObjectState == EObjectStateType::Sleeping, Bodies[1]->State.ObjectState == EObjectStateType::Sleeping };
-		for (FBodyInstance* Body : Bodies)
-		{
-			Body->WakeInstance();
-		}
-		for (int32 Frame = 0; Frame < 3; ++Frame)
-		{
-			Scene.Tick(Dt);
-		}
-		std::string Behaviour[2];
-		for (int32 Index = 0; Index < 2; ++Index)
+		for (int32 Index = 0; Index < 3; ++Index)
 		{
 			CAPTURE(Index);
+			CHECK(Bodies[Index]->State.ObjectState == EObjectStateType::Dynamic);
 			const double Vx = Bodies[Index]->State.LinearVelocity.X;
-			Behaviour[Index] = !bAsleep[Index] ? "wakes" : (Vx > 50.0 ? "kept" : "lost");
-			if (Behaviour[Index] == "lost")
+			if (Index < 2)
 			{
-				CHECK(std::abs(Vx) < 1e-3);
+				CHECK(Vx == doctest::Approx(100.0).epsilon(0.01));   // UEParity linear damping 0.01 1/s
+				CHECK(Bodies[Index]->State.BodyTM.GetTranslation().X > 4.0);   // it moved (3 steps at 100 cm/s = 5 cm)
 			}
 			else
 			{
-				CHECK(Vx == doctest::Approx(100.0).epsilon(0.01));   // UEParity linear damping 0.01 1/s
+				CHECK(std::abs(Vx) < 1e-6);
 			}
 		}
-		MESSAGE(Backend << ": SET_LINEAR_VELOCITY on a sleeping body (no AUTO_WAKE): " << Behaviour[0] << "; SET_BODY_STATE: " << Behaviour[1]);
-		const std::string Expected = Backend == "Bullet" ? "lost" : (Backend == "PhysX" ? "wakes" : "kept");
-		CHECK(Behaviour[0] == Expected);
-		CHECK(Behaviour[1] == Expected);
+		MESSAGE(Backend << ": SET_LINEAR_VELOCITY (no AUTO_WAKE), SET_BODY_STATE and a zero SET_LINEAR_VELOCITY wake the sleeping body; v.x "
+			<< Bodies[0]->State.LinearVelocity.X << " / " << Bodies[1]->State.LinearVelocity.X << " cm/s");
 	}
 	for (const std::string& Backend : SdkBackendNames())
 	{
@@ -1024,6 +1020,207 @@ TEST_CASE("PhysicsTest.SdkBackend.ReadbackIsReadFromTheEngine")
 			}
 		}
 		CHECK(NumChecked >= 3);   // max_threads, live_scenes or initializations, kit.mxcsr_restores
+	}
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		PrepareGlobalSettingsModule(Backend, {});
+	}
+}
+
+namespace
+{
+	// Signed distance of a world point to a body's single shape at a pose (the contact-point checks below).
+	double ShapeSignedDistance(const FBodyInstance& Body, const FTransform& Pose, const FVector& Point)
+	{
+		const FKAggregateGeom& Geom = Body.BodySetup->AggGeom;
+		if (!Geom.BoxElems.empty())
+		{
+			const FKBoxElem& Box = Geom.BoxElems[0];
+			const FVector Local = (Box.GetTransform() * Pose).InverseTransformPositionNoScale(Point);
+			const FVector Q(std::abs(Local.X) - 0.5 * Box.X, std::abs(Local.Y) - 0.5 * Box.Y, std::abs(Local.Z) - 0.5 * Box.Z);
+			const FVector Outside(std::max(Q.X, 0.0), std::max(Q.Y, 0.0), std::max(Q.Z, 0.0));
+			return Outside.Size() + std::min(std::max(Q.X, std::max(Q.Y, Q.Z)), 0.0);
+		}
+		if (!Geom.SphereElems.empty())
+		{
+			return (Point - Pose.TransformPositionNoScale(Geom.SphereElems[0].Center)).Size() - Geom.SphereElems[0].Radius;
+		}
+		const FKSphylElem& Capsule = Geom.SphylElems[0];
+		const FVector Local = (Capsule.GetTransform() * Pose).InverseTransformPositionNoScale(Point);
+		const double Z = std::clamp(Local.Z, -0.5 * Capsule.Length, 0.5 * Capsule.Length);
+		return (Local - FVector(0.0, 0.0, Z)).Size() - Capsule.Radius;
+	}
+}
+
+// M6 contract (c) (docs/Abi.md 7.1): PointOn1 lies on Body1's surface and PointOn0 on Body0's, whatever shape pair and report
+// order the engine has. PhysX puts PxContactPairPoint::position on one of the two shapes (or between them) depending on the
+// narrow-phase path and flips only the normal when the report order differs (PhysXSimEventCallback.h); the adapter projects
+// the point onto the report's second shape. Static supports here are not the ground: a dynamic sphere on a static box
+// (the sphere is created first, so the pair order differs from the narrow phase's type order), a lying capsule on a static
+// box, and a dynamic box on a static sphere; each starts 1 cm deep, so step 1's points must be Phi = -1 cm apart along n.
+// Also the ABI v1.0 flag rule (contract (b)): ACTIVE and SPECULATIVE never together.
+TEST_CASE("PhysicsTest.SdkBackend.ContactPointsOnSurfaces")
+{
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		CAPTURE(Backend);
+		for (const char* Profile : { "Normalized", "UEParity" })
+		{
+			const std::string ProfileText(Profile);
+			CAPTURE(ProfileText);
+			FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, Profile);
+			PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+			Config.TestSettings.RunMode = EPhysicsRunMode::Viz;
+			FPhysSceneInitParams InitParams;
+			InitParams.DebugName = "ContactPoints";
+			InitParams.BackendName = Backend;
+			InitParams.Config = &Config;
+			FPhysScene Scene(InitParams);
+			if (!Scene.GetBackendInfo().Has(PT_CAP_CONTACT_POINTS))
+			{
+				MESSAGE(Backend << " declares no contact points: skipped");
+				continue;
+			}
+			FBodyInstance Static;
+			Static.bStatic = true;
+			Static.bSimulatePhysics = false;
+			FBodyInstance Dynamic;
+			FProfileResolver::ApplyBodyInstanceDefaults(Config, Dynamic);
+			Dynamic.bSimulatePhysics = true;
+			Dynamic.bOverrideMass = true;
+			Dynamic.MassInKgOverride = 10.0f;
+			const auto MakeSetup = [&Scene](const int32 Kind, const double A, const double B) -> const FBodySetup*
+			{
+				FBodySetup Setup;
+				if (Kind == 0)
+				{
+					Setup.AggGeom.SphereElems.emplace_back(A);
+				}
+				else if (Kind == 1)
+				{
+					Setup.AggGeom.BoxElems.emplace_back(A);
+				}
+				else
+				{
+					Setup.AggGeom.SphylElems.emplace_back(A, B);
+				}
+				return Scene.CreateBodySetup(std::move(Setup));
+			};
+			// 0: a far static ground plate (keeps body index 0 static, as every scene); then dynamic / static pairs.
+			Scene.SpawnBody(Static, MakeSetup(1, 100.0, 0.0), FTransform(FVector(0.0, 5000.0, -50.0)));
+			Scene.SpawnBody(Dynamic, MakeSetup(0, 25.0, 0.0), FTransform(FVector(-500.0, 0.0, 60.0 + 25.0 - 1.0)));               // 1 sphere
+			Scene.SpawnBody(Static, MakeSetup(1, 60.0, 0.0), FTransform(FVector(-500.0, 0.0, 30.0)));                            // 2 box under it
+			Scene.SpawnBody(Dynamic, MakeSetup(2, 25.0, 100.0), FTransform(FRotator(0.0, 0.0, 90.0), FVector(0.0, 0.0, 100.0 + 25.0 - 1.0)));  // 3 capsule
+			Scene.SpawnBody(Static, MakeSetup(1, 300.0, 0.0), FTransform(FVector(0.0, 0.0, -50.0)));                             // 4 box under it (top z 100)
+			Scene.SpawnBody(Dynamic, MakeSetup(1, 40.0, 0.0), FTransform(FVector(500.0, 0.0, 100.0 + 20.0 - 1.0)));               // 5 box
+			Scene.SpawnBody(Static, MakeSetup(0, 50.0, 0.0), FTransform(FVector(500.0, 0.0, 50.0)));                             // 6 sphere under it
+			Scene.FlushDeferredActors();
+			Scene.PrepareForSimulation();
+			std::vector<FTransform> Initial;
+			for (const FBodyInstance* Body : Scene.GetBodies())
+			{
+				Initial.push_back(Body->State.BodyTM);
+			}
+			Scene.Tick(Config.TestSettings.FixedDeltaTime);
+			FPhysicsDebugSnapshot Snapshot;
+			REQUIRE(Scene.CaptureDebugSnapshot(Snapshot));
+			const std::pair<uint32, uint32> Pairs[3] = { { 1u, 2u }, { 3u, 4u }, { 5u, 6u } };
+			const char* const Names[3] = { "sphere on box", "capsule on box", "box on sphere" };
+			for (int32 Slot = 0; Slot < 3; ++Slot)
+			{
+				const auto [Mobile, Support] = Pairs[Slot];
+				int32 Points = 0;
+				double WorstOn0 = 0.0;
+				double WorstOn1 = 0.0;
+				double WorstPhi = 0.0;
+				for (const PtContactPoint& Contact : Snapshot.Contacts)
+				{
+					CHECK_FALSE(((Contact.Flags & PT_CONTACT_ACTIVE) != 0u && (Contact.Flags & PT_CONTACT_SPECULATIVE) != 0u));
+					CHECK_FALSE(((Contact.Flags & PT_CONTACT_ACTIVE_APPROX) != 0u && (Contact.Flags & PT_CONTACT_SPECULATIVE) != 0u));
+					if (!((Contact.Body0 == Mobile && Contact.Body1 == Support) || (Contact.Body0 == Support && Contact.Body1 == Mobile)))
+					{
+						continue;
+					}
+					++Points;
+					CHECK(Contact.Body0 == Mobile);   // Body0 = the more mobile body
+					const FVector P0(Contact.PointOn0.X, Contact.PointOn0.Y, Contact.PointOn0.Z);
+					const FVector P1(Contact.PointOn1.X, Contact.PointOn1.Y, Contact.PointOn1.Z);
+					const FVector N(Contact.Normal.X, Contact.Normal.Y, Contact.Normal.Z);
+					WorstOn0 = std::max(WorstOn0, std::abs(ShapeSignedDistance(*Scene.GetBodies()[Mobile], Initial[Mobile], P0)));
+					WorstOn1 = std::max(WorstOn1, std::abs(ShapeSignedDistance(*Scene.GetBodies()[Support], Initial[Support], P1)));
+					WorstPhi = std::max(WorstPhi, std::abs(FVector::DotProduct(P0 - P1, N) - Contact.Phi));
+					CHECK(Contact.Phi < 0.0);
+					CHECK(N.Z > 0.99);
+				}
+				const std::string Pair(Names[Slot]);
+				CAPTURE(Pair);
+				MESSAGE(Backend << " " << ProfileText << " " << Pair << ": " << Points << " points, PointOn0 off its body " << WorstOn0 << " cm, PointOn1 off its body "
+					<< WorstOn1 << " cm, |(P0 - P1).n - Phi| " << WorstPhi << " cm");
+				CHECK(Points > 0);
+				CHECK(WorstOn0 <= 0.05);
+				CHECK(WorstOn1 <= 0.05);
+				CHECK(WorstPhi <= 0.05);
+			}
+		}
+	}
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		PrepareGlobalSettingsModule(Backend, {});
+	}
+}
+
+// M6 contract (b) (docs/Abi.md 7.1): a command that wakes a body of a sleeping pair drops the pair's kept points until the
+// next step, on every engine: Jolt and PhysX drop the woken body's kept pairs (FlushKeptContactCommands), and Bullet - which
+// keeps a sleeping pair's manifold itself - leaves the woken body's pairs out of the snapshot until its next narrow phase.
+// After that step the pair is reported afresh, not sleeping.
+TEST_CASE("PhysicsTest.SdkBackend.WakeDropsKeptContacts")
+{
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		CAPTURE(Backend);
+		FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, "UEParity");
+		PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+		Config.TestSettings.RunMode = EPhysicsRunMode::Viz;
+		std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("M1.SingleBoxDrop", { { "Case", "a" } }, Backend, Config);
+		if (!Scene->GetBackendInfo().Has(PT_CAP_CONTACT_POINTS))
+		{
+			continue;
+		}
+		FBodyInstance& Box = *Scene->GetBodies()[1];
+		const float Dt = Config.TestSettings.FixedDeltaTime;
+		for (int32 Frame = 0; Frame < 40; ++Frame)
+		{
+			Scene->Tick(Dt);
+		}
+		const auto Count = [&Scene](uint32& OutSleeping)
+		{
+			FPhysicsDebugSnapshot Snapshot;
+			REQUIRE(Scene->CaptureDebugSnapshot(Snapshot));
+			OutSleeping = 0;
+			for (const PtContactPoint& Contact : Snapshot.Contacts)
+			{
+				OutSleeping += (Contact.Flags & PT_CONTACT_SLEEPING) != 0u ? 1u : 0u;
+			}
+			return static_cast<uint32>(Snapshot.Contacts.size());
+		};
+		uint32 Sleeping = 0;
+		REQUIRE(Count(Sleeping) > 0u);
+		Box.PutInstanceToSleep();
+		Scene->Tick(Dt);
+		Scene->Tick(Dt);
+		const uint32 Kept = Count(Sleeping);
+		CHECK(Kept > 0u);
+		CHECK(Sleeping == Kept);
+		Box.WakeInstance();
+		REQUIRE(Scene->GetBackendScene().FlushCommands() == PT_OK);   // the wake reaches the backend, no step yet
+		const uint32 AfterWake = Count(Sleeping);
+		Scene->Tick(Dt);
+		const uint32 Fresh = Count(Sleeping);
+		MESSAGE(Backend << ": kept " << Kept << " sleeping points; after WAKE_UP before a step " << AfterWake << "; after the step " << Fresh << " (" << Sleeping
+			<< " sleeping)");
+		CHECK(AfterWake == 0u);
+		CHECK(Fresh > 0u);
+		CHECK(Sleeping == 0u);
 	}
 	for (const std::string& Backend : SdkBackendNames())
 	{

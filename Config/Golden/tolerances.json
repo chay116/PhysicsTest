@@ -1,0 +1,190 @@
+{
+  "schema": "physicstest.tolerances/1",
+  "version": 4,
+  "description": "M6 physics gate tolerances, expected per-engine deviations and allowed skips (docs/03_WorkPlan.md M6, docs/02_Architecture.md 14.3, DL23). Every default is the 03 criterion or names the physics it bounds; every override and every allowed skip names the engine behaviour that causes it. 03 M6 asks for registration BEFORE the run: entries marked \"registered\": \"post-run\" were found on a run and registered only after their mechanism was verified in the engine source (docs/Progress.md M6 D-3, D-4, D-6); each carries \"sign_off\": \"pending\" until the lead accepts it, then who accepted it and when (the loader refuses a post-run entry without one). A gate never widens a value by itself, and an unregistered Skip is a Fail (Gates/PhysicsGates.h). Its SHA-256 goes into conformance.json (and into the M10 stamp, DL20).",
+  "gates": {
+    "G1": {
+      "z60_abs_cm": { "default": 2e-3, "unit": "cm", "reason": "03 M6 G1: |z60 - z_ref| <= 2e-3 cm for float engines, z_ref the dt_engine reference (501.83328 cm for dt 1/60, g -980)",
+        "overrides": [
+          { "engine": "Null", "value": 1e-9, "reason": "03 M6 / DL23: Null integrates in double with the dt_engine reference itself (501.8332813705), +-1e-9" },
+          { "engine": "NullDll", "value": 1e-9, "reason": "the Null backend as a DLL: same double integrator" } ] },
+      "v60_abs_cms": { "default": 1e-2, "unit": "cm/s", "reason": "03 M6 G1: |v60 - v_ref| <= 1e-2 cm/s, v_ref the dt_engine reference (-980.00005 cm/s for dt 1/60)",
+        "overrides": [
+          { "engine": "Null", "value": 1e-9, "reason": "double integrator against the dt_engine reference (-980.0000511 cm/s)" },
+          { "engine": "NullDll", "value": 1e-9, "reason": "the Null backend as a DLL" } ] }
+    },
+    "G1b": {
+      "z60_abs_cm": { "default": 1e-3, "unit": "cm", "reason": "03 M6 G1b: within 1e-3 cm of the reference of the damping formula the engine declares (body.damping_formula)" }
+    },
+    "G2": {
+      "allowed_skip": [
+        { "engine": "Null", "reason": "S03 only: Null has no collision (PT_CAP_COLLISION, docs/Abi.md 7), so capsules cannot rest on the ground; S01 / S02 run" },
+        { "engine": "NullDll", "reason": "S03 only: the Null backend as a DLL, no collision" } ],
+      "velocity_rel": { "default": 1e-4, "unit": "", "reason": "03 M6 G2: dv (100 cm/s) and omega = I^-1 L within 1e-4 relative" },
+      "mass_rel": { "default": 1e-5, "unit": "", "reason": "03 M6 G2: mass readback within 1e-5 relative" },
+      "inertia_tensor_rel": { "default": 1e-5, "unit": "", "reason": "03 M6 G2: inertia readback within 1e-5, compared as the tensor R diag(I) R^T (docs/Abi.md 5.7: engines reorder principal moments)" },
+      "com_abs_cm": { "default": 1e-5, "unit": "cm", "reason": "03 M6 G2: COM readback within 1e-5, read as 1e-5 cm absolute (03 names no unit; the harness length unit is cm, and 1e-5 cm is at most 2e-7 of the 50-100 cm bodies of S01 / S02)" },
+      "com_drift_cm": { "default": 1e-5, "unit": "cm", "reason": "S02 body 2 spins about its nudged COM for 60 frames: the COM must stay put to the readback tolerance (1e-5 cm), else the shape is not placed around the COM" },
+      "com_speed_cms": { "default": 1e-3, "unit": "cm/s", "reason": "a pure angular impulse gives the COM no velocity; 1e-3 cm/s is what a COM misplaced by 5e-4 cm would get at the 2 rad/s of S02" },
+      "capsule_height_abs_cm": { "default": 0.5, "unit": "cm", "reason": "03 M6 G2: a capsule R 25 L 100 rests at 75 cm standing, 25 cm lying, +-0.5 cm" },
+      "capsule_axis_standing_min": { "default": 0.999, "unit": "", "reason": "the standing capsule keeps its pose: its axis . (+Z) stays above 0.999 (2.6 deg of tilt)" },
+      "capsule_axis_lying_max": { "default": 1e-3, "unit": "", "reason": "the lying capsule stays level: |axis . (+Z)| below 1e-3 (0.06 deg; one end 0.1 mm higher than the other over the 100 cm segment)" }
+    },
+    "G3": {
+      "allowed_skip": [
+        { "engine": "Null", "reason": "Null captures no contacts (no PT_CAP_CONTACT_POINTS: it has no collision); the viewer draws its particles from the host state" },
+        { "engine": "NullDll", "reason": "the Null backend as a DLL: no contacts" } ],
+      "normal_z_min": { "default": 0.999, "unit": "", "reason": "03 M6 G3: normal . (+Z) > 0.999 after the backend's conversion to the Chaos convention" },
+      "point_on_surface_cm": { "default": 0.05, "unit": "cm", "reason": "M6 contract (c): PointOn1 on Body1's surface, PointOn0 on Body0's surface at the step's narrow-phase pose, Phi = (PointOn0 - PointOn1) . n; 0.05 cm covers float contact points in cm and m. The narrow-phase pose is the start-of-step pose (Jolt, Bullet, PhysX) or the free-motion predicted pose X0 + (v0 + g dt) dt (Chaos collides P, Q after Integrate); G3 takes the one that fits the whole scene (they are 0.27 cm apart in S04, M6 round 2)" },
+      "normal_impulse_eps": { "default": 0.05, "unit": "kg cm/s", "reason": "G3 ties ACTIVE and a finite NormalImpulse one way only: impulse > eps implies ACTIVE, ACTIVE implies impulse >= -eps (docs/Abi.md 9.1 decision 2, M6 round 2). Chaos' bIsActive tests NetImpulse (kg cm/s) and NetPushOut (kg cm) with IsNearlyZero, 1e-4 per component (ChaosDebugDraw.cpp:1453 [V]): a point it calls inactive can still carry |NetPushOut| / dt up to 1.7e-4 x 60 = 0.0104 kg cm/s at 60 Hz (0.021 at 120 Hz) in the NormalImpulse that includes the push-out. 0.05 kg cm/s is above that and is a velocity change of 5e-4 cm/s on the 100 kg S04 bodies" },
+      "wake_rest_frames": { "default": 40, "unit": "frames", "reason": "UEParity wake-drop check (contract (b), docs/Abi.md 9.1 decision 2): the S04 box rests before the command puts it to sleep; 40 frames is the SdkBackend.WakeDropsKeptContacts setting" }
+    },
+    "G4": {
+      "allowed_skip": [
+        { "engine": "Null", "reason": "Null has no collision: nothing to bounce off" },
+        { "engine": "NullDll", "reason": "the Null backend as a DLL: no collision" } ],
+      "restitution_velocity_model": { "default": 0, "unit": "model", "reason": "which normal velocity an engine applies -e to: 0 = the velocity before the contact step (v_after = e |v_before|; Jolt and Bullet measure e 0.80000, M6)",
+        "overrides": [
+          { "engine": "PhysX", "value": 1, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "1 = the contact step's pre-solve velocity with that step's gravity in it: PhysX integrates gravity into the velocity before the contact prep (bodyCoreComputeUnconstrainedVelocity, DyDynamics.cpp:1979 [V]) and targets -e x that pre-solve normal velocity (DyContactPrepShared.h:305-323 [V]), so v_after = e (|v_before| + g dt) and the measured e = e (1 + g dt / |v_before|) = 0.8 x 1.0263 = 0.82105 (M6: PGS 0.82105, TGS 0.81949 with S05 v1; with S05 v2, M6 round 2, PGS and TGS both 0.82105). Found on the first M6 run (Progress D-3)" } ] },
+      "e_abs": { "default": 0.02, "unit": "", "reason": "03 M6 G4: e = -v_after / v_before from the normal velocities of the frames just before and after the contact, against the registered velocity model's prediction, default +-0.02. The gate also requires the measured e to be closer to the registered model than to the other one" },
+      "apex_ratio_abs": { "default": 0.02, "unit": "", "reason": "03 M6 G4 secondary: the apex ratio against the discrete flight from the measured height after the contact step with the model's expected v_after (e^2 = 0.64 / 0.16 / 0 continuous)" },
+      "contact_frame_slack": { "default": 0, "unit": "frames", "reason": "the drop height makes the discrete trajectory end step 38 0.01 cm above the ground (DL23; S05 version 2 TouchGap, M6 round 2): every engine starts the contact in step 39, whether its narrow phase uses the start-of-step pose (Jolt, Bullet, PhysX) or the predicted end-of-step pose (Chaos: an exact touch would give Phi = 0 +- rounding and bounce in step 38 about half the time)" },
+      "contact_detect_cms": { "default": 1.0, "unit": "cm/s", "reason": "a frame leaves free fall when its velocity differs from v - g dt by more than 1 cm/s (or contact_detect_rel): float free fall stays within 1e-2 cm/s of it (G1), a bounce changes it by hundreds of cm/s" },
+      "contact_detect_rel": { "default": 0.01, "unit": "", "reason": "the relative part of the free-fall departure test (1% of the free-fall velocity)" }
+    },
+    "G5": {
+      "allowed_skip": [
+        { "engine": "Null", "reason": "Null has no collision: no friction" },
+        { "engine": "NullDll", "reason": "the Null backend as a DLL: no collision" } ],
+      "stop_distance_rel": { "default": 0.01, "unit": "", "reason": "03 M6 G5: stop distance 250.947 cm +-1% (dt_engine, discrete)" },
+      "final_speed_cms": { "default": 1.0, "unit": "cm/s", "reason": "the mu 0.5 slider has stopped after 120 frames (it stops near frame 61): under 1 cm/s, 0.2% of its 500 cm/s start" },
+      "hold_displacement_cm": { "default": 0.1, "unit": "cm", "reason": "03 M6 G5: mu 0.6 >= tan 30 deg holds on the 30 deg incline; 0.1 cm in 20 frames is no slide (a slider at mu 0.55 moves 1.35 cm)",
+        "overrides": [
+          { "engine": "PhysX", "variant": "UE4Compat", "value": 1.0, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "PhysX PGS creep (measured M6, Progress D-4; 03 says mu 0.6 holds, so this needs the lead's acceptance): the mu 0.6 box does not accelerate (hold_acceleration_cms2 holds) but creeps down the 30 deg slope at a constant ~2.5 cm/s and never stops in Normalized (0.73 cm by frame 20, 4.6 cm by frame 120; bounded by hold_speed_cms). It is a property of PGS patch friction near the friction limit, not of the backend or of UE4's single velocity iteration. A raw PhysX 5.11 program with no harness and no adapter (the M6 checker's rawpx_incline: the same 50 cm / 10 kg cube, UE4-style scene in cm, tolerances 100 / 1000, PGS 8 / 1, PCM, contact offset 2, sleep off; Progress M6 section 8) reproduces it to within 0.01 cm: 0.7322 cm at frame 20, 4.6304 cm at frame 120, 2.504 / 2.478 cm/s; PGS 4 / 1 the same; mu 0.65 1.05 / 0.95 cm/s, mu 0.70 0.39 cm/s (about 0.2-0.4 cm/s at mu 0.7 depending on the setup), mu 0.75 and 0.80 hold; TGS 0.07 cm/s. Through the harness (Progress M6 section 7, Normalized, frame 20 / creep): 4 velocity iterations 0.32 cm / 0.93-1.05 cm/s, 32 position iterations 0.73 cm / 2.3-2.5 cm/s (no change), PxSceneFlag::eENABLE_FRICTION_EVERY_ITERATION 0.14 cm / 0.45 cm/s (still creeping, and UE4 did not set it); TGS, Jolt and Bullet hold (<= 0.05 cm). The SDK documents it: PGS processes the two friction axes separately, which 'can lead to asymmetries when transitioning from dynamic to static friction', and applies friction in the last 3 position iterations and the velocity iterations only (PxSceneDesc.h:34-42, :245-259 [V])" },
+          { "engine": "PhysX", "variant": "UE4Compat-Stab", "value": 1.0, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "the same PGS creep as UE4Compat (PGS, 8 / 1 iterations; a PGS friction property, see the UE4Compat entry); stabilization and sleep stop it later in UEParity (0.89 cm), in Normalized it never stops" },
+          { "engine": "PhysX", "variant": "SdkDefault", "value": 1.0, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "the same PGS creep with PhysX's own 4 / 1 iterations (0.73 cm by frame 20; a PGS friction property, see the UE4Compat entry)" } ] },
+      "hold_speed_cms": { "default": 0.75, "unit": "cm/s", "reason": "holding = no motion: the hold box's displacement along the slope surface over frames 10-20 and 110-120, divided by 10 dt (positions, not the reported velocity), stays under 10% of the 7.7 cm/s a mu 0.55 box reaches by frame 20 (23.2 cm/s^2 x 1/3 s)",
+        "overrides": [
+          { "engine": "PhysX", "variant": "UE4Compat", "value": 3.0, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "the PGS creep of hold_displacement_cm (a PGS patch-friction property, not the velocity iteration count) is a constant 2.50 cm/s along the surface over frames 10-20 and 2.48 cm/s over 110-120 (it has a 0.8 cm/s part across the slope, +Y: PGS solves the two friction axes separately); 3 cm/s, set after that measurement, bounds it, so a creep that grows or accelerates fails" },
+          { "engine": "PhysX", "variant": "UE4Compat-Stab", "value": 3.0, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "the same PGS creep (Normalized; UEParity stops it through stabilization and sleep)" },
+          { "engine": "PhysX", "variant": "SdkDefault", "value": 3.0, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "the same PGS creep with PhysX's own iterations" } ] },
+      "hold_acceleration_cms2": { "default": 2.0, "unit": "cm/s^2", "reason": "holding = no acceleration down the slope between frames 10 and 20: 2 cm/s^2 is under 10% of the 23.2 cm/s^2 a mu 0.55 box gets" },
+      "slide_fraction_min": { "default": 0.5, "unit": "", "reason": "03 M6 G5: mu 0.55 slides; at least half of the kinetic-friction displacement g (sin 30 - 0.55 cos 30) t^2 / 2 by frame 20" },
+      "slide_fraction_max": { "default": 1.5, "unit": "", "reason": "the slider must not move faster than 1.5 x the kinetic-friction reference (friction is acting)" }
+    },
+    "G6": {
+      "asleep_dz_cm": { "default": 1e-6, "unit": "cm", "reason": "03 M6 G6: the bStartAwake = false body's z does not change: a sleeping body is not integrated (1e-6 cm allows the cm <-> m round trip of the engine pose)" },
+      "awake_fall_min_cm": { "default": 100.0, "unit": "cm", "reason": "03 M6 G6: the other box falls; in 60 frames free fall alone takes it 490 cm, so 100 cm below z0 proves it fell" },
+      "wake_velocity_rel": { "default": 1e-4, "unit": "", "reason": "ABI v1.0 decision 1 (docs/Abi.md 9.1): a velocity written to a sleeping body (no PT_CMDF_AUTO_WAKE) wakes it and the next step runs at that velocity; the S08 bodies have damping 0, so it is the G2 velocity tolerance (1e-4)" },
+      "wake_displacement_rel": { "default": 0.01, "unit": "", "reason": "the woken step moves the body by v dt (semi-implicit Euler): 1% of v dt (1.67 cm, g dt^2 = 0.27 cm, |w| dt = 0.033 rad) covers the float resolution of a pose at z 500 cm (3e-5 cm in cm units, 5e-5 cm in m) and the 1e-4 relative difference of the Chaos / Null rotation model (G7)" }
+    },
+    "G7": {
+      "omega_abs_rads": { "default": 0.01, "unit": "rad/s", "reason": "03 M6 G7: UEParity 62.83 +-0.01 rad/s; Normalized released (the initial speed kept within 0.01)" },
+      "step_angle_abs_rad": { "default": 1e-3, "unit": "rad", "reason": "a spinning body turns |w| dt per step (semi-implicit Euler on the orientation)" },
+      "step_angle_model": { "default": 0, "unit": "model", "reason": "how an engine turns a body by w in one step: 0 = the exact rotation |w| dt (Jolt, PhysX rotate by the full angle)",
+        "overrides": [
+          { "engine": "Null", "value": 1, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "Null mirrors Chaos: q' = normalize(q + dt/2 (w, 0) q) (ChaosCore Rotation.cpp:158-162 IntegrateRotationWithAngularVelocity [V]) turns 2 atan(|w| dt / 2) per step (0.79 rad instead of 0.83 at 50 rad/s); the Chaos bridge registers the same model (Progress D-6)" },
+          { "engine": "NullDll", "value": 1, "registered": "post-run", "sign_off": "lead 2026-10-22, M6 commit (accepted: mechanism verified in engine source; D-4 = engine behaviour, reproduced in raw PhysX 5.11)", "reason": "the Null backend as a DLL (Chaos' first-order quaternion update)" },
+          { "engine": "Bullet", "value": 2, "reason": "DL16 (M5 correction) registered exception: above pi/4 per step (47.1 rad/s at 60 Hz) btTransformUtil::integrateTransform turns the body by 2 atan((|w| dt / (pi/4)) tan(pi/8)) instead of |w| dt (btTransformUtil.h:19, 44-72 [V]); the velocity itself is kept, so omega is checked as for every engine" } ] }
+    },
+    "G9": {
+      "description": "Every READBACK key of the M3.BoxPile 1k effective dump must match one rule here: compared with its resolved value (profile:, option:, init:, capacity:, const:, min:, text rules) or registered as 'unchecked' with the reason it has no resolved counterpart. A key whose backend checks each engine object against the host's rule reads back canonical = the number of objects that do NOT hold it (docs/Abi.md 5.14), compared with const:0. Rule lookup: '<Engine>.<Variant>', then '<Engine>', then '*'. An unregistered READBACK key fails G9.",
+      "readback": {
+        "*": {
+          "world.gravity": { "expect": "profile:gravity_z", "rel": 1e-6, "reason": "[/Script/Engine.PhysicsSettings] DefaultGravityZ" },
+          "contact.restitution_threshold": { "expect": "profile:restitution_threshold", "fallback": "1000dt", "rel": 1e-6, "reason": "Normalized 50 cm/s; UEParity leaves it to the engine: Chaos' native 1000 dt (Jolt and Bullet use the Chaos equivalent, DL35 / Q11)" },
+          "body.damping": { "expect": "profile:linear_damping", "rel": 1e-6, "reason": "M3.BoxPile bodies take the profile's [BodyInstanceDefaults] LinearDamping (the largest per-body value)" },
+          "body.max_angular_velocity": { "expect": "profile:max_angular_velocity", "rel": 1e-6, "reason": "UEParity: the project's 3600 deg/s; Normalized: the 1e7 deg/s override (02 10)" },
+          "body.max_linear_velocity": { "expect": "min:1e9", "reason": "UE has no linear limit: every engine must read back an unreachable ceiling (>= 1e9 cm/s)" },
+          "body.gyroscopic": { "expect": "profile:gyroscopic", "reason": "[BodyInstanceDefaults] bGyroscopicTorqueEnabled" },
+          "sleep.enabled": { "expect": "profile:sleep_enabled", "reason": "[/Script/PhysicsTest.PhysicsTestSettings] bAllowSleeping (DL48)" },
+          "ccd.enabled": { "expect": "profile:ccd", "reason": "[BodyInstanceDefaults] bUseCCD (canonical: any body uses CCD)" },
+          "threads.workers": { "expect": "profile:workers", "reason": "NumThreads T = 1: no worker besides the calling thread" },
+          "determinism.flag": { "expect": "profile:enhanced_determinism", "reason": "UPhysicsSettingsCore bEnableEnhancedDeterminism (PT_SIM_ENHANCED_DETERMINISM)" },
+          "shape.wrapping": { "expect": "const:0", "reason": "03 M6 G9: M3.BoxPile is native boxes with the COM at the centre (DL42)" },
+          "listeners.installed": { "expect": "const:0", "reason": "bench runs install no contact listener (02 9.4)" }
+        },
+        "Null": {
+          "body.max_linear_velocity": { "expect": "const:0", "reason": "Null reads back the ABI value; <= 0 means unclamped" },
+          "determinism.flag": { "expect": "profile:enhanced_determinism", "reason": "Null records the ABI flag (it is deterministic either way)" },
+          "null.async_dt": { "expect": "const:-1", "reason": "sync scene: PT_ASYNC_DT_SYNC (FixedStep, DL40)" },
+          "null.max_bodies_hint": { "expect": "capacity:bodies", "reason": "the scene's declared body count (02 9.4)" },
+          "null.start_asleep_skipped": { "expect": "const:0", "reason": "M3.BoxPile has no bStartAwake = false body" }
+        },
+        "NullDll": {
+          "body.max_linear_velocity": { "expect": "const:0", "reason": "Null reads back the ABI value; <= 0 means unclamped" },
+          "null.async_dt": { "expect": "const:-1", "reason": "sync scene" },
+          "null.max_bodies_hint": { "expect": "capacity:bodies", "reason": "the scene's declared body count" },
+          "null.start_asleep_skipped": { "expect": "const:0", "reason": "no bStartAwake = false body" }
+        },
+        "Jolt": {
+          "solver.type": { "unchecked": "descriptive text (sequential impulse, step counts, island splitter); the counts are checked as solver.iterations" },
+          "solver.iterations": { "expect": "option:NumVelocitySteps", "reason": "Jolt.Default.ini NumVelocitySteps" },
+          "contact.speculative_distance": { "expect": "option:SpeculativeContactDistance", "rel": 1e-6, "reason": "Jolt.Default.ini SpeculativeContactDistance (cm)" },
+          "material.friction_combine": { "expect": "const:0", "reason": "canonical = engine objects not holding the host rule: PhysicsSystem::GetCombineFriction must be the UE combine callback the backend installed (0), else 1" },
+          "material.restitution_combine": { "expect": "const:0", "reason": "canonical = 0 when PhysicsSystem::GetCombineRestitution is the backend's UE combine callback, else 1" },
+          "sleep.criteria": { "expect": "const:3", "rel": 1e-6, "reason": "Jolt's own PhysicsSettings::mPointVelocitySleepThreshold 0.03 m/s for mTimeBeforeSleep 0.5 s (PhysicsSettings.h:95, :102 [V]); UE material thresholds are mapped in M9" },
+          "determinism.flag": { "expect": "option:DeterministicSimulation", "reason": "Jolt's own determinism switch PhysicsSettings::mDeterministicSimulation (Jolt.Default.ini, PhysicsSettings.h:105 [V]); it is not UE's bEnableEnhancedDeterminism and the backend does not map the ABI flag to it" },
+          "shape.box_margin": { "expect": "option:ConvexRadius", "rel": 1e-6, "reason": "Jolt.Default.ini ConvexRadius 5 cm, below every half extent of the 100 cm cubes" },
+          "jolt.capacity": { "expect": "capacity:bodies", "reason": "PhysicsSystem::GetMaxBodies = the scene's declared body count (02 9.4)" },
+          "jolt.penetration_slop": { "expect": "option:PenetrationSlop", "rel": 1e-6, "reason": "Jolt.Default.ini PenetrationSlop (cm)" },
+          "jolt.baumgarte": { "expect": "option:Baumgarte", "rel": 1e-6, "reason": "Jolt.Default.ini Baumgarte" }
+        },
+        "Bullet": {
+          "solver.type": { "unchecked": "descriptive text (btSequentialImpulseConstraintSolver, mode, split impulse); the numbers are checked as solver.iterations and bullet.solver_mode" },
+          "solver.iterations": { "expect": "option:NumIterations", "reason": "Bullet.Default.ini NumIterations" },
+          "contact.speculative_distance": { "expect": "const:1.7320508075688772", "rel": 1e-6, "reason": "Bullet's manifold breaking threshold = gContactBreakingThreshold 0.02 x the shape's angular motion disc (sqrt(3) x 50 cm for the 100 cm cube): 1.732 cm (btCollisionShape::getContactBreakingThreshold, M5 round 0)" },
+          "material.friction_combine": { "expect": "const:0", "reason": "canonical = 0 when Bullet's global gCalculateCombinedFrictionCallback is the backend's UE combine callback, else 1 (read from the engine global)" },
+          "material.restitution_combine": { "expect": "const:0", "reason": "canonical = 0 when gCalculateCombinedRestitutionCallback is the backend's UE combine callback, else 1" },
+          "sleep.criteria": { "expect": "option:LinearSleepingThreshold", "rel": 1e-6, "reason": "Bullet.Default.ini LinearSleepingThreshold (cm/s); UE material thresholds are mapped in M9" },
+          "shape.box_margin": { "expect": "const:4", "rel": 1e-6, "reason": "btBoxShape setSafeMargin = min(0.04 m, 0.1 x 50 cm) for the 100 cm cube (btConvexInternalShape.h:66-81 [V], DL19)" },
+          "bullet.solver_mode": { "expect": "option:SolverMode", "reason": "Bullet.Default.ini SolverMode 0x104" },
+          "bullet.erp2": { "expect": "option:Erp2", "rel": 1e-6, "reason": "Bullet.Default.ini Erp2" },
+          "bullet.split_impulse_penetration_threshold": { "expect": "option:SplitImpulsePenetrationThreshold", "rel": 1e-6, "reason": "Bullet.Default.ini SplitImpulsePenetrationThreshold (cm)" },
+          "bullet.linear_slop": { "expect": "option:LinearSlop", "abs": 1e-9, "reason": "Bullet.Default.ini LinearSlop" },
+          "bullet.warmstarting_factor": { "expect": "option:WarmstartingFactor", "rel": 1e-6, "reason": "Bullet.Default.ini WarmstartingFactor" },
+          "bullet.deactivation_time": { "expect": "init:DeactivationTime:2.0", "rel": 1e-6, "reason": "module option DeactivationTime (Bullet.Default.ini sets none: Bullet's 2 s, btRigidBody.cpp:25 [V])" },
+          "bullet.force_update_all_aabbs": { "expect": "option:ForceUpdateAllAabbs", "reason": "Bullet.Default.ini ForceUpdateAllAabbs" },
+          "bullet.pools": { "expect": "capacity:contacts", "reason": "the manifold pool is sized from the scene's declared contact count (MaxContactConstraintsHint, M5 B-10)" },
+          "bullet.debug_drawer": { "expect": "const:0", "reason": "no debug drawer in bench runs (it would override gDisableDeactivation, btDiscreteDynamicsWorld.cpp:418-421 [V])" }
+        },
+        "PhysX": {
+          "body.gyroscopic": { "expect": "const:0", "reason": "UE4Compat family GyroscopicForces=Ignore: UE4 on PhysX 3.4 had no gyroscopic term, so no body carries eENABLE_GYROSCOPIC_FORCES whatever the profile asks (M6, lead (e); PhysXBackend.GyroscopicForcesPerVariant)" },
+          "solver.type": { "expect": "text_contains_options", "options": [ "SolverType" ], "reason": "the variant's SolverType (PGS / TGS) as PxScene::getSolverType reports it" },
+          "solver.iterations": { "expect": "option:PositionIterations", "reason": "the variant's PositionIterations for bodies without an override (M5 P-4)" },
+          "broadphase.type": { "expect": "text_contains_options", "options": [ "BroadPhaseType" ], "reason": "the variant's BroadPhaseType as PxScene::getBroadPhaseType reports it" },
+          "contact.restitution_threshold": { "expect": "profile:restitution_threshold", "fallback": "option:BounceThresholdVelocity", "rel": 1e-6, "reason": "Normalized 50 cm/s; UEParity: the variant's BounceThresholdVelocity (UE4 project 200 cm/s, SdkDefault 0.2 x speed = 200 cm/s)" },
+          "contact.offset_rule": { "expect": "const:0", "reason": "canonical = PxShapes whose PxShape::getContactOffset does not hold the variant's contact offset rule (the backend compares every shape): 0" },
+          "contact.speculative_distance": { "expect": "const:4", "rel": 1e-6, "reason": "PhysX creates a contact once two shapes are closer than the sum of their contact offsets: 2 + 2 cm for every M3.BoxPile pair (UE4 clamp(0.02 x 50, 2, 8) cm; SdkDefault 0.02 m)" },
+          "material.friction_combine": { "expect": "const:0", "reason": "canonical = PxMaterials whose getFrictionCombineMode is not the host's friction combine mode: 0" },
+          "material.restitution_combine": { "expect": "const:0", "reason": "canonical = PxMaterials whose getRestitutionCombineMode is not the host's mode: 0" },
+          "material.static_friction_rule": { "expect": "const:0", "reason": "canonical = PxMaterials whose static / dynamic friction do not follow the variant's static-friction rule: 0" },
+          "sleep.criteria": { "expect": "const:50", "rel": 1e-6, "reason": "PhysX's default sleep threshold 5e-5 x speed^2 = 50 cm^2/s^2 at both tolerance scales (PxvDynamics.h:132 [V]) x SleepFamily Normal" },
+          "physx.contact_offset_min": { "expect": "const:2", "rel": 1e-6, "reason": "UE4 clamp(0.02 x MinExtent, 2, 8) cm = 2 cm for 100 cm cubes and the ground; SdkDefault 0.02 x 1 m" },
+          "physx.contact_offset_max": { "expect": "const:2", "rel": 1e-6, "reason": "as physx.contact_offset_min (no larger element in M3.BoxPile)" },
+          "physx.rest_offset": { "expect": "const:0", "reason": "UE4 and the PhysX default rest offset 0" },
+          "physx.cpu_dispatcher": { "expect": "profile:workers", "reason": "T = 1: no worker thread (single-thread dispatcher or PxDefaultCpuDispatcherCreate(0))" },
+          "physx.dynamic_tree_rebuild_rate": { "expect": "option:DynamicTreeRebuildRateHint", "reason": "the variant's DynamicTreeRebuildRateHint" },
+          "physx.filter_shader_rules": { "expect": "text_contains_options", "options": [ "NonBlockingPairFilter", "KinematicStaticPairFilter" ], "reason": "the [M] filter rules the variant sets, as the scene holds them (getFilterShaderData)" },
+          "physx.friction_offset_threshold": { "expect": "const:4", "rel": 1e-6, "reason": "PhysX default 0.04 x tolerances length = 4 cm at both scales (PxSceneDesc.h [V])" },
+          "physx.kinematic_pair_filtering": { "expect": "text_contains_options", "options": [ "KineKineFilteringMode", "StaticKineFilteringMode" ], "reason": "the variant's kinematic pair filtering modes" },
+          "physx.scene_flags": { "expect": "text_flags", "flags": { "PCM": "option:bEnablePCM", "stabilization": "option:bEnableStabilization", "CCD": "option:bEnableCCD", "enhanced determinism": "profile:enhanced_determinism", "active actors": "option:bEnableActiveActors", "disable sleeping": "profile:sleep_disabled" }, "reason": "the PxSceneFlags the variant and the profile ask for" },
+          "physx.scene_limits": { "expect": "capacity:bodies", "reason": "PxSceneLimits from the scene's declared counts (M5 P-10)" },
+          "physx.sleep_threshold_min": { "expect": "const:50", "rel": 1e-6, "reason": "5e-5 x speed^2 = 50 cm^2/s^2 (PxvDynamics.h:132 [V]) x SleepFamily Normal (1)" },
+          "physx.sleep_threshold_max": { "expect": "const:50", "rel": 1e-6, "reason": "as physx.sleep_threshold_min" },
+          "physx.stabilization_threshold_min": { "expect": "const:25", "rel": 1e-6, "reason": "2.5e-5 x speed^2 = 25 cm^2/s^2 (PxvDynamics.h:136 [V])" },
+          "physx.stabilization_threshold_max": { "expect": "const:25", "rel": 1e-6, "reason": "as physx.stabilization_threshold_min" },
+          "physx.tolerances_length": { "expect": "const:100", "reason": "UE4Compat family: UE's p.ToleranceScale_Length 100 (PhysicsInitialization.cpp:18-28 [V]), the backend default (the ini states no init key, M5 I-1)" },
+          "physx.tolerances_speed": { "expect": "const:1000", "reason": "UE4Compat family: p.ToleranceScale_Speed 1000 (PhysicsInitialization.cpp:18-28 [V])" },
+          "physx.max_depenetration_velocity": { "expect": "const:3.4028234663852886e38", "rel": 1e-6, "reason": "MaxDepenetrationRule=UE4Project: the project value 0 means unlimited = PX_MAX_F32 (M5 P-3)" }
+        },
+        "PhysX.SdkDefault": {
+          "body.gyroscopic": { "expect": "profile:gyroscopic", "reason": "GyroscopicForces=FromBody: the bodies' bGyroscopicTorqueEnabled reaches eENABLE_GYROSCOPIC_FORCES" },
+          "physx.tolerances_length": { "expect": "const:1", "reason": "PhysX.SdkDefault.ini ToleranceScale=(Length=1,Speed=10) (PxTolerancesScale.h:55 [V])" },
+          "physx.tolerances_speed": { "expect": "const:10", "reason": "PhysX.SdkDefault.ini ToleranceScale speed 10" },
+          "physx.max_depenetration_velocity": { "expect": "const:1e34", "rel": 1e-6, "reason": "MaxDepenetrationRule=SdkDefault: an unset body keeps PhysX's default maxPenBias -1e32 native = 1e32 m/s = 1e34 cm/s (PxvDynamics.h [V], M5 P-3)" }
+        }
+      }
+    }
+  }
+}

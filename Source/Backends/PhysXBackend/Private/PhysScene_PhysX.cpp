@@ -427,7 +427,16 @@ namespace PhysicsTest::PhysXBackend
 				}
 				if ((Info.Flags & PT_BODY_GYROSCOPIC) != 0)
 				{
-					Dynamic->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_GYROSCOPIC_FORCES, true);
+					// UE4 on PhysX 3.4 had no gyroscopic term: the UE4Compat family ignores the request (GyroscopicForces=Ignore,
+					// counted in body.gyroscopic); eENABLE_GYROSCOPIC_FORCES exists since PhysX 5.1 (PxRigidBody.h [V]).
+					if (Config.GyroscopicRule == EPhysXGyroscopicRule::FromBody)
+					{
+						Dynamic->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_GYROSCOPIC_FORCES, true);
+					}
+					else
+					{
+						++NumGyroscopicIgnored;
+					}
 				}
 			}
 			const double MaxLinearCm = Info.MaxLinearVelocity > 0.0 ? Info.MaxLinearVelocity : Desc.MaxLinearVelocity;
@@ -457,7 +466,7 @@ namespace PhysicsTest::PhysXBackend
 		uint32 Epdf = 0;
 		Epdf |= Info.Motion == PT_MOTION_STATIC ? EPDF_StaticShape : 0u;
 		Epdf |= (Info.Flags & PT_BODY_USE_CCD) != 0 && Info.Motion == PT_MOTION_DYNAMIC ? EPDF_CCD : 0u;
-		Epdf |= EventCallback ? EPDF_ContactNotify : 0u;   // viz only (02 9.4)
+		Epdf |= EventCallback ? EPDF_ContactNotify : 0u;   // the listener only (viz or PT_INSTR_CONTACTS, 02 9.4)
 		for (uint32 Offset = 0; Offset < Info.NumShapes; ++Offset)
 		{
 			const PtShapeElem& Element = Shapes[Info.FirstShape + Offset];
@@ -912,6 +921,13 @@ namespace PhysicsTest::PhysXBackend
 			// Before the listener forgets the last step's contacts: the commands' kept pairs, and the previous step's reports.
 			FlushKeptContactCommands();
 			EventCallback->BeginStep();
+			// The narrow phase of this step sees the poses of now: the callback places PointOn1 on the second shape at them.
+			PreStepPoses.resizeUninitialized(Bodies.size());
+			for (uint32 Index = 0; Index < Bodies.size(); ++Index)
+			{
+				PreStepPoses[Index] = Bodies[Index].Actor != nullptr && !Bodies[Index].bReleased ? Bodies[Index].Actor->getGlobalPose() : physx::PxTransform(physx::PxIdentity);
+			}
+			EventCallback->SetPreStepPoses(PreStepPoses.begin(), PreStepPoses.size());
 		}
 		CheckPhysXErrors(false);   // the kinematic targets and pending dynamics above
 		// UE4 TG_StartPhysics: simulate with the scene's scratch block. With FPhysXCPUDispatcherSingleThread the whole step
@@ -1173,24 +1189,26 @@ namespace PhysicsTest::PhysXBackend
 		case PT_CMD_SET_ANGULAR_VELOCITY:
 			if (bDynamic)
 			{
+				// ABI v1.0 contract (docs/Abi.md 5.10): a velocity write wakes a sleeping body whatever PT_CMDF_AUTO_WAKE says, as
+				// UE 5.8.3's game-thread SetV / SetW do (SingleParticlePhysicsProxy.h:322-340, :362-380, :1217-1244 [V]). PhysX
+				// itself would leave a body asleep for a zero vector without autowake (NpRigidDynamic.cpp:253, :286, :605-622 [V]).
 				const bool bWasAsleep = Dynamic->isSleeping();
-				const bool bAutoWake = (Cmd.Flags & PT_CMDF_AUTO_WAKE) != 0;
 				if (Cmd.Type == PT_CMD_SET_LINEAR_VELOCITY)
 				{
-					Dynamic->setLinearVelocity(U2PVector(Cmd.Vector, Scale), bAutoWake);
+					Dynamic->setLinearVelocity(U2PVector(Cmd.Vector, Scale), false);
 				}
 				else
 				{
-					Dynamic->setAngularVelocity(U2PUnitless(Cmd.Vector), bAutoWake);
+					Dynamic->setAngularVelocity(U2PUnitless(Cmd.Vector), false);
 				}
 				MarkDirty(Cmd.Body);
-				if (bAutoWake)
+				if (Dynamic->isSleeping())
 				{
 					Wake();
 				}
-				if (bWasAsleep && !Dynamic->isSleeping())
+				else if (bWasAsleep)
 				{
-					NoteKeptContactCommand(Cmd.Body, false, false);   // a non-zero velocity woke it (PhysX, see the header)
+					NoteKeptContactCommand(Cmd.Body, false, false);   // a non-zero vector already woke it: its kept pairs go too
 				}
 			}
 			break;
@@ -1200,6 +1218,7 @@ namespace PhysicsTest::PhysXBackend
 			{
 				Dynamic->setLinearVelocity(U2PVector(Cmd.Vector, Scale), false);
 				Dynamic->setAngularVelocity(U2PUnitless(Cmd.Vector2), false);
+				Wake();   // ABI v1.0: a state write wakes a sleeping body (UE's SetX / SetV, docs/Abi.md 5.10)
 			}
 			MarkDirty(Cmd.Body);
 			NoteKeptContactCommand(Cmd.Body, false, true);
@@ -1528,7 +1547,8 @@ namespace PhysicsTest::PhysXBackend
 				}
 				PtContactPoint Contact = {};
 				const PtVec3 Normal{ Raw.Normal[0], Raw.Normal[1], Raw.Normal[2] };
-				Contact.PointOn1 = PtVec3{ Scale.ToCm(Raw.Position[0]), Scale.ToCm(Raw.Position[1]), Scale.ToCm(Raw.Position[2]) };
+				// PointOn1 on the report's second shape (found by the callback, M6 contract (c)), PointOn0 = PointOn1 + Phi n.
+				Contact.PointOn1 = PtVec3{ Scale.ToCm(Raw.PointOn1[0]), Scale.ToCm(Raw.PointOn1[1]), Scale.ToCm(Raw.PointOn1[2]) };
 				const double PhiCm = Scale.ToCm(Raw.Separation);
 				Contact.PointOn0 = PtVec3{ Contact.PointOn1.X + PhiCm * Normal.X, Contact.PointOn1.Y + PhiCm * Normal.Y, Contact.PointOn1.Z + PhiCm * Normal.Z };
 				Contact.Normal = Normal;
@@ -1763,10 +1783,24 @@ namespace PhysicsTest::PhysXBackend
 			snprintf(Text, sizeof(Text), "SDK: PxShape default 0.02 x PxTolerancesScale::length; %u of %u shapes hold it (PxShape::getContactOffset)", NumShapesFollowingRule,
 				NumShapes);
 		}
-		// READBACK when the engine's shapes were checked against the rule; a scene without shapes can only echo it.
-		Out.AppendEffective("contact.offset_rule", Text, "", NaN, "", NumShapes > 0 ? "READBACK" : "SET_ONLY");
-		Out.AppendEffective("contact.speculative_distance", "n/a: PhysX generates contacts within the shapes' contact offsets (physx.contact_offset_*)", "", NaN, "",
-			"COMPILE_TIME");
+		// READBACK when the engine's shapes were checked against the rule; a scene without shapes can only echo it. canonical =
+		// the shapes that do not hold the rule (docs/Abi.md 5.14 rule keys: 0 = every engine object holds the host's rule).
+		Out.AppendEffective("contact.offset_rule", Text, "", NumShapes > 0 ? static_cast<double>(NumShapes - NumShapesFollowingRule) : NaN, "count",
+			NumShapes > 0 ? "READBACK" : "SET_ONLY");
+		// M6 (M5 review): PhysX creates a contact once two shapes are closer than the sum of their contact offsets, so the
+		// pair range is read back from the shapes (PxShape::getContactOffset): [2 x min, 2 x max] over the scene's shapes,
+		// canonical = the largest pair sum (Bullet's key is the manifold breaking threshold, Jolt's mSpeculativeContactDistance).
+		if (ContactOffset.bAny)
+		{
+			snprintf(Text, sizeof(Text), "pairs [%.9g, %.9g] cm: the sum of the two shapes' contact offsets (PxShape::getContactOffset, %u shapes)", 2.0 * ContactOffset.Min,
+				2.0 * ContactOffset.Max, NumShapes);
+			Out.AppendEffective("contact.speculative_distance", Text, "cm", 2.0 * ContactOffset.Max, "cm", "READBACK");
+		}
+		else
+		{
+			Out.AppendEffective("contact.speculative_distance", "no shape: PhysX generates contacts within the sum of the two shapes' contact offsets", "", NaN, "",
+				"COMPILE_TIME");
+		}
 		// Read back from the materials: each PxMaterial's combine modes (PxMaterial::getFrictionCombineMode /
 		// getRestitutionCombineMode) and static / dynamic friction against the host material it was made from.
 		uint32 NumFrictionCombineHeld = 0;
@@ -1790,24 +1824,45 @@ namespace PhysicsTest::PhysXBackend
 			Config.StaticFrictionRule == EPhysXStaticFrictionRule::EqualsDynamic ? "equals_dynamic" : "chaos_pair",
 			Config.StaticFrictionRule == EPhysXStaticFrictionRule::EqualsDynamic ? "createMaterial(F, F, R), UE4" : "createMaterial(max(F, SF), F, R)", NumMaterialsFollowingRule,
 			Materials.size(), NumStaticAboveDynamic);
-		Out.AppendEffective("material.static_friction_rule", Text, "", NaN, "", Materials.empty() ? "SET_ONLY" : "READBACK");
+		// canonical = the PxMaterials that do not follow the rule (0 = all do).
+		const double NumMaterialObjects = static_cast<double>(Materials.size());
+		Out.AppendEffective("material.static_friction_rule", Text, "", Materials.empty() ? NaN : NumMaterialObjects - NumMaterialsFollowingRule, "count",
+			Materials.empty() ? "SET_ONLY" : "READBACK");
 		// The host resolves each material's UE combine modes (PT_COMBINE_*, the values of PxCombineMode, static_asserted in
 		// PhysXBackend.cpp); PhysX combines a pair with the larger mode (PxsMaterialCombiner.h [V]). READBACK when the
 		// materials were checked, as above.
 		snprintf(Text, sizeof(Text), "PxMaterial friction combine mode per material, the larger PxCombineMode wins (PxsMaterialCombiner.h); %u of %u PxMaterials hold "
 			"the host's mode (PxMaterial::getFrictionCombineMode)", NumFrictionCombineHeld, Materials.size());
-		Out.AppendEffective("material.friction_combine", Text, "", NaN, "", Materials.empty() ? "SET_ONLY" : "READBACK");
+		Out.AppendEffective("material.friction_combine", Text, "", Materials.empty() ? NaN : NumMaterialObjects - NumFrictionCombineHeld, "count",
+			Materials.empty() ? "SET_ONLY" : "READBACK");
 		snprintf(Text, sizeof(Text), "PxMaterial restitution combine mode per material, the larger PxCombineMode wins (PxsMaterialCombiner.h); %u of %u PxMaterials hold "
 			"the host's mode (PxMaterial::getRestitutionCombineMode)", NumRestitutionCombineHeld, Materials.size());
-		Out.AppendEffective("material.restitution_combine", Text, "", NaN, "", Materials.empty() ? "SET_ONLY" : "READBACK");
-		Out.AppendEffective("body.damping_formula", "v *= max(0, 1 - c*dt) per step (DyBodyCoreIntegrator.h:26-42)", "", NaN, "", "COMPILE_TIME");
+		Out.AppendEffective("material.restitution_combine", Text, "", Materials.empty() ? NaN : NumMaterialObjects - NumRestitutionCombineHeld, "count",
+			Materials.empty() ? "SET_ONLY" : "READBACK");
+		// canonical = the formula id of docs/Abi.md 5.14: 1 = UE order (gravity into the velocity, then v *= max(0, 1 - c dt),
+		// DyBodyCoreIntegrator.h:26-42 [V]); G1b checks it.
+		Out.AppendEffective("body.damping_formula", "UE order: v = (v + a dt) * max(0, 1 - c dt) per step (DyBodyCoreIntegrator.h:26-42)", "formula_id", 1.0,
+			"formula_id", "COMPILE_TIME");
+		// docs/Abi.md 9.1 decision 1: every velocity / state write wakes a sleeping body, a nearly zero one too (canonical 1);
+		// G6 checks the declared behaviour.
+		Out.AppendEffective("command.nearly_zero_velocity_wakes", "1: a nearly zero velocity write wakes a sleeping body (PxRigidDynamic::wakeUp on every write)",
+			"bool", 1.0, "bool", "COMPILE_TIME");
 		snprintf(Text, sizeof(Text), "linear [%.9g, %.9g] angular [%.9g, %.9g] over %u dynamic bodies", Linear.Min, Linear.Max, Angular.Min, Angular.Max, NumDynamic);
 		Out.AppendEffective("body.damping", Text, "1/s", Linear.bAny ? Linear.Max : NaN, "1/s", "READBACK");
 		snprintf(Text, sizeof(Text), "[%.9g, %.9g] rad/s (%.9g = unclamped)", MaxAngular.Min, MaxAngular.Max, static_cast<double>(GUnclampedAngularVelocity));
 		Out.AppendEffective("body.max_angular_velocity", Text, "rad/s", MaxAngular.bAny ? MaxAngular.Max : NaN, "rad/s", "READBACK");
 		snprintf(Text, sizeof(Text), "[%.9g, %.9g] cm/s (PhysX ceiling %.9g native/s = unclamped)", MaxLinear.Min, MaxLinear.Max, static_cast<double>(GUnclampedLinearVelocity));
 		Out.AppendEffective("body.max_linear_velocity", Text, "cm/s", MaxLinear.bAny ? MaxLinear.Max : NaN, "cm/s", "READBACK");
-		snprintf(Text, sizeof(Text), "%u of %u dynamic bodies have eENABLE_GYROSCOPIC_FORCES", NumGyroscopic, NumDynamic);
+		if (Config.GyroscopicRule == EPhysXGyroscopicRule::Ignore)
+		{
+			snprintf(Text, sizeof(Text), "%u of %u dynamic bodies have eENABLE_GYROSCOPIC_FORCES (GyroscopicForces=Ignore; %u requests ignored: UE4 on PhysX 3.4 "
+				"had no gyroscopic term)", NumGyroscopic, NumDynamic, NumGyroscopicIgnored);
+		}
+		else
+		{
+			snprintf(Text, sizeof(Text), "%u of %u dynamic bodies have eENABLE_GYROSCOPIC_FORCES (GyroscopicForces=FromBody: each body's bGyroscopicTorqueEnabled)",
+				NumGyroscopic, NumDynamic);
+		}
 		Out.AppendEffective("body.gyroscopic", Text, "bodies", NumGyroscopic > 0 ? 1.0 : 0.0, "bool", "READBACK");
 		const bool bSleepEnabled = !(Flags & physx::PxSceneFlag::eDISABLE_SLEEPING);
 		snprintf(Text, sizeof(Text), "%s (PxSceneFlag::eDISABLE_SLEEPING %s)", bSleepEnabled ? "true" : "false", bSleepEnabled ? "off" : "on");

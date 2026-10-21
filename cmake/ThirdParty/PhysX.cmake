@@ -48,7 +48,9 @@ endif()
 # PX_DEBUG = PX_CHECKED = 0 (PxPreprocessor.h defaults). They are deliberately NOT forwarded: no public PhysX header
 # changes a type layout on them - they only gate inline parameter checks, PX_WARN_ONCE, PX_ASSERT and profile zones
 # (PxErrors.h:60-90, PxAssert.h, PxProfileZone.h, PxPhysXCommonConfig.h:11) - so the adapter sees release-style inline
-# helpers in every configuration while the dbg libraries keep their own checks. The dev/test choice of PhysX "release"
+# helpers in every configuration. In dbg the adapter's and the checked libraries' copies of shared inline / template
+# functions (PxArray, PxVec3, ... with PX_ASSERT inside) are ODR-different COMDATs and the linker keeps one of them
+# (M6, M5 review: benign, dbg is not a measurement build; see PhysXIncludes.h). The dev/test choice of PhysX "release"
 # (UE4 Development may have linked PROFILE) is a UE4Compat question for the user (04_DecisionLog Q19).
 add_library(pt_physx INTERFACE)
 add_library(PT::PhysX ALIAS pt_physx)

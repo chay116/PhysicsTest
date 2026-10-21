@@ -35,7 +35,8 @@ namespace PhysicsTest
 	// The generic set every backend reports (a concept a backend lacks is native "n/a", source COMPILE_TIME):
 	//   world.gravity, solver.type, solver.iterations, broadphase.type, contact.restitution_threshold, contact.offset_rule,
 	//   contact.speculative_distance, material.friction_combine, material.restitution_combine, material.static_friction_rule,
-	//   body.damping_formula, body.damping, body.max_angular_velocity, body.max_linear_velocity, body.gyroscopic,
+	//   body.damping_formula, command.nearly_zero_velocity_wakes, body.damping, body.max_angular_velocity,
+	//   body.max_linear_velocity, body.gyroscopic,
 	//   sleep.enabled, sleep.criteria, ccd.enabled, threads.workers, determinism.flag, shape.box_margin, shape.convex_radius,
 	//   shape.wrapping, listeners.installed
 	[[nodiscard]] std::span<const char* const> GetGenericEffectiveKeys();

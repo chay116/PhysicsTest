@@ -41,7 +41,7 @@
 // a body that is awake then; the buffer is cleared every step, so a force never survives a PUT_TO_SLEEP into a later wake
 // (Jolt resets mForce only for active bodies, PhysicsSystem.cpp:2541 [V]).
 //
-// Debug snapshot (viz only, PROVISIONAL(M9)): particles with Jolt's world bounds, and the contacts of the last step from
+// Debug snapshot (contact listener in viz runs / PT_INSTR_CONTACTS only, PROVISIONAL(M9)): particles with Jolt's world bounds, and the contacts of the last step from
 // FJoltContactListener in the Chaos convention: Normal = -mWorldSpaceNormal, Phi = -(p1 - p2) . n per point (M4; M3 gave
 // every point the manifold's mPenetrationDepth), then Body0 = the more mobile body (CanonicalizeContact). Impulses are NaN
 // (Q8: no local patch), "active" is PT_CONTACT_ACTIVE_APPROX for Phi <= 0. The contacts of sleeping islands are kept from
@@ -117,8 +117,8 @@ namespace PhysicsTest::JoltBackend
 		bool bKinematicMovedLastStep = false;
 		bool bPendingImpulse = false;            // listed in FPhysScene_Jolt::PendingImpulseBodies
 		bool bPendingForce = false;              // listed in FPhysScene_Jolt::PendingForceBodies
-		// Viz runs: a command since the last FlushKeptContactCommands that changes this body's kept sleeping contacts (listed
-		// once in FPhysScene_Jolt::KeptContactBodies).
+		// With the listener (viz runs or PT_INSTR_CONTACTS): a command since the last FlushKeptContactCommands that changes this
+		// body's kept sleeping contacts (listed once in FPhysScene_Jolt::KeptContactBodies).
 		bool bKeptContactsListed = false;
 		bool bPutToSleepByCommand = false;       // PT_CMD_PUT_TO_SLEEP deactivated it: keep its last-step contacts
 		bool bPoseSetByCommand = false;          // SET_GLOBAL_POSE / SET_BODY_STATE: its kept points are stale
@@ -160,11 +160,11 @@ namespace PhysicsTest::JoltBackend
 		// Every live body's BoxShape convex radius as the shapes hold it (shape.box_margin readback), through decorated and
 		// compound shapes. false when there is no box.
 		bool ReadBoxConvexRadii(double& OutMinCm, double& OutMaxCm) const;
-		// Viz runs (the listener exists), after each Update: keeps the contacts of bodies that are asleep now. Jolt runs no
-		// collision detection for sleeping bodies, so the listener reports nothing for them; Chaos keeps a sleeping island's
-		// constraints, and the snapshot reports these as PT_CONTACT_SLEEPING (M4, islands and DrawCollisions).
+		// With the listener (viz runs or PT_INSTR_CONTACTS), after each Update: keeps the contacts of bodies that are asleep
+		// now. Jolt runs no collision detection for sleeping bodies, so the listener reports nothing for them; Chaos keeps a
+		// sleeping island's constraints, and the snapshot reports these as PT_CONTACT_SLEEPING (M4, islands and DrawCollisions).
 		void UpdateSleepingContacts();
-		// Viz runs, StartFrame before the listener is cleared: what commands did to the kept contacts since the last step.
+		// With the listener, StartFrame before it is cleared: what commands did to the kept contacts since the last step.
 		// A body put to sleep between steps (PT_CMD_PUT_TO_SLEEP) keeps its pairs from the last step's listener contents, as
 		// if it had fallen asleep in that step; the kept pairs of a body whose pose a command set (SET_GLOBAL_POSE,
 		// SET_BODY_STATE - a static or DontActivate pose leaves a sleeping pair asleep) are dropped, because their world
@@ -207,7 +207,7 @@ namespace PhysicsTest::JoltBackend
 		JPH::Array<PtContactPoint> SnapshotContacts;
 		JPH::Array<FJoltRawContact> SleepingContacts;   // see UpdateSleepingContacts (reserved to the listener capacity)
 		JPH::Array<FJoltRawContact> SleepingScratch;
-		JPH::Array<uint32> KeptContactBodies;           // see FJoltBody::bKeptContactsListed (reserved to MaxBodies in viz runs)
+		JPH::Array<uint32> KeptContactBodies;           // see FJoltBody::bKeptContactsListed (reserved to MaxBodies with the listener)
 		bool bSleepingContactsDropped = false;
 		uint32 AssertsSeen = 0;                         // GetNumJoltAsserts() at the last CheckJoltAsserts
 

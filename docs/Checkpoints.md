@@ -81,11 +81,11 @@
 | # | 찾은 것 | 영향 | 처리 | 확인 |
 |---|---|---|---|---|
 | 1 | Bullet은 힘 적분 **전에** 감쇠한다 (02 §8.1의 계수 변환은 배수만 맞춘다) | UE 기본 감쇠 0.01에서 30 프레임에 0.08 cm/s 차이, `CommandsMatchNull` 실패 | pre-tick이 UE 순서를 에뮬레이트 (`DampingModel=UE`, 변환은 `Converted`로 남김) | `BulletBackend.DampingOrder`, `SdkBackend.CommandsMatchNull` |
-| 2 | Bullet 각속도 한계의 근거가 틀렸다: 94.2 rad/s 클램프는 `btDiscreteDynamicsWorld`가 부르지 않는 함수의 값 | Normalized에서 47.1 rad/s 위의 회전각이 줄어드는 것을 놓쳤다 (속도는 그대로) | `bullet.angular_motion_threshold` π/4 per step(COMPILE_TIME)과 넘은 수(READBACK). 02·03·04(DL16)·ini 주석 정정 | `BulletBackend.AngularVelocityLimits` (57.8°·82.6° per step이 식과 같다) |
+| 2 | Bullet 각속도 한계의 근거가 틀렸다: 94.2 rad/s 클램프는 `btDiscreteDynamicsWorld`가 부르지 않는 함수의 값 | Normalized에서 47.1 rad/s 위의 회전각이 줄어드는 것을 놓쳤다 (속도는 그대로) | `bullet.angular_motion_threshold` π/4 per step(COMPILE_TIME)과 넘은 수(`bullet.angular_motion_limit_hits`, SET_ONLY: 어댑터의 post-tick이 센다. M5 수정 라운드 0에서 READBACK을 고쳤다). 02·03·04(DL16)·ini 주석 정정 | `BulletBackend.AngularVelocityLimits` (57.8°·82.6° per step이 식과 같다) |
 | 3 | Bullet `calculateVelocity`(float acos)가 회전하지 않은 kinematic 바디에 약 0.04 rad/s를 만든다 | kinematic 원점 속도 오차 | 목표 속도를 double로 계산해 pre-tick이 넣는다 | `SdkBackend.KinematicOriginVelocity` (ω.z = 31.4159) |
 | 4 | Bullet `setGravity`는 깨어 있는 바디만 바꾼다 | 잠든 채 중력이 바뀐 바디가 깨면 옛 중력으로 떨어진다 | 잠든 dynamic 바디도 직접 바꾼다 | `BulletBackend.GravityChangeReachesSleepingBodies` (음성 대조 포함) |
 | 5 | PhysX: SdkDefault 씬(m)이 UE4Compat PxPhysics(cm, (100, 1000))에서 돌 수 있었다 | sleep 임계·contact offset이 100배 어긋난 결과가 조용히 나온다 | CreateScene이 `tolerances.length = 100 × LengthScale`을 요구하고, 레지스트리·Kit도 다른 init 옵션을 거부 | `PhysXBackend.UE4CompatFamilySharesOneProcess` |
-| 6 | PhysX는 섬이 잠드는 스텝에 그 섬의 접촉을 보고하지 않는다 | 잠든 섬이 접촉 없이(고립된 것처럼) 그려진다 | viz에서 직전 스텝 보고를 유지해 `PT_CONTACT_SLEEPING`으로 낸다 (Jolt M4 규칙과 같은 의미) | `PhysXBackend.SleepingContactsAreKept` |
+| 6 | PhysX는 섬이 잠드는 스텝에 그 섬의 접촉을 보고하지 않는다 | 잠든 섬이 접촉 없이(고립된 것처럼) 그려진다 | 리스너가 있을 때(viz 또는 `PT_INSTR_CONTACTS`) 직전 스텝 보고를 유지해 `PT_CONTACT_SLEEPING`으로 낸다 (Jolt M4 규칙과 같은 의미) | `PhysXBackend.SleepingContactsAreKept` |
 | 7 | PhysX 속도 한계 "무제한" 값이 PhysX 범위 밖(1e16 초과 거부, 각속도 1e7에서 잘림)이고 MaxDepenetration 0은 거부된다 | 생성 오류 또는 조용한 클램프 | 1e16 native/s, 1e7 rad/s, `MaxDepenetrationRule`로 UE4 프로젝트 값 0 → PX_MAX_F32 | `PhysXBackend.OptionsAreValidated`, effective 키 |
 | 8 | 정지 PhysX 접촉은 Phi ≈ +0(float)이라 하네스 섬 간선 규칙(Phi ≤ 0)이 놓친다 | Normalized M1에서 하네스 섬 0 | 간선 = Phi ≤ 0 또는 솔버 임펄스(ACTIVE) | `DebugDraw.IslandBuilder` (Phi +1e-5 + ACTIVE는 간선, SPECULATIVE는 아님) |
 | 9 | 스냅샷 소비자가 백엔드가 보낸 `BodyIndex`로 배열 크기를 정했다 (M4 검토) | PT_INDEX_NONE이면 범위 밖 쓰기, 쓰레기 값이면 거대 할당 | 호스트 캡처가 버리고 로그, 소비자는 `GetBodyIndexBound` | `DebugDraw.SnapshotBodyIndexBounds` |
@@ -98,7 +98,7 @@
 
 | # | 찾은 것 | 처리 계획 |
 |---|---|---|
-| O-1 | 잠든 바디에 쓴 속도(`PT_CMDF_AUTO_WAKE` 없는 `SET_*_VELOCITY`, `SET_BODY_STATE`)가 엔진마다 다르다 (M5 수정 라운드 0에서 정리): Null·Jolt는 재운 채 유지(깨운 뒤 그 속도로 움직임), Bullet은 잃음(`updateActivationState`가 `ISLAND_SLEEPING` 바디의 속도를 스텝마다 0으로, btDiscreteDynamicsWorld.cpp:605-620 [V]), PhysX는 0이 아닌 속도로 바로 깨움(NpRigidDynamic.cpp:253, :286 [V], `SET_BODY_STATE` 포함) | `SdkBackend.VelocityOfASleepingBody`가 세 동작을 고정한다. M6 ABI 동결 전에 하나로 맞출지 계약으로 둘지 정한다 ([Abi.md](Abi.md) §9) |
+| O-1 | 잠든 바디에 쓴 속도(`PT_CMDF_AUTO_WAKE` 없는 `SET_*_VELOCITY`, `SET_BODY_STATE`)가 엔진마다 다르다 (M5 수정 라운드 0에서 정리): Null·Jolt는 재운 채 유지(깨운 뒤 그 속도로 움직임), Bullet은 잃음(`updateActivationState`가 `ISLAND_SLEEPING` 바디의 속도를 스텝마다 0으로, btDiscreteDynamicsWorld.cpp:605-620 [V]), PhysX는 0이 아닌 속도로 바로 깨움(NpRigidDynamic.cpp:253, :286 [V], `SET_BODY_STATE` 포함) | **닫음 (M6, ABI v1.0 계약):** 속도·상태 쓰기는 잠든 dynamic 바디를 깨운다 (UE 5.8.3 `SetV`/`SetW`, SingleParticlePhysicsProxy.h:322-340, :362-380 [V]. `PT_CMDF_AUTO_WAKE`는 정보용. 0이 아니지만 nearly zero인 속도만 UE처럼 백엔드 정의이고, M6 수정 라운드 1부터 effective 키 `command.nearly_zero_velocity_wakes`로 선언하며 G6가 확인한다). Null과 세 엔진 모두 같다 (`SdkBackend.VelocityOfASleepingBody`; 모든 변형과 Chaos DLL은 G6, [Abi.md](Abi.md) §9.1 결정 1) |
 | O-2 | PhysX `NormalImpulse`/`FrictionImpulse` 값은 아직 NaN (점별 impulse는 ACTIVE 판정에만 쓴다) | M9 (`PT_CAP_CONTACT_NORMAL_IMPULSE`) |
 
 **거동 메모** (규약 버그가 아니다)

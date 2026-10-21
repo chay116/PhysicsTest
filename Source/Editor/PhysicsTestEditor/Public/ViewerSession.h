@@ -1,10 +1,12 @@
 // ViewerSession.h - FViewerSession: the one scene of the viewer and its life cycle (02_Architecture 11.2, 03 M4). [MVP M4]
 // Renderer-free (unit tests PhysicsTest.Viewer.Session*). A selection (backend, variant, physics profile, scenario,
 // parameters, threads) is resolved like a bench run (LoadBenchConfig: Base -> profile -> variant -> -ini: / -ExecCmds) and
-// then switched to RunMode=Viz, so every manifest the viewer writes says mode viz and SDK backends install their
-// viz-only listeners (Jolt's contact listener). Opening a selection destroys the previous scene first; backend modules stay
-// initialised for the life of the process (a module is never TermGamePhys'd and re-initialised: PhysX allows one
-// InitGamePhys, 02 8.2).
+// then switched to RunMode=Viz, so every manifest the viewer writes says mode viz and SDK backends install their contact
+// listeners (present in viz runs or with PT_INSTR_CONTACTS, never in bench runs: Jolt's listener, PhysX's event
+// callback). Opening a selection destroys the previous scene first; backend modules stay initialised for the life of the
+// process (the viewer never calls TermGamePhys: a GLOBAL_SCENE_SETTINGS module such as PhysX holds one tolerances scale per
+// process, and switching it would need a Term on an idle module, so the viewer reports RestartRequired instead, 02 8.2,
+// 11.2; the gate runner does Term and re-initialise an idle PhysX module, PhysicsGates.h RunPhysicsGates).
 // Switching that one process cannot do is reported as RestartRequired instead of failing (03 M4):
 //   - the target module is a second UE_RUNTIME module (ONE_PER_PROCESS: Chaos);
 //   - the target module has GLOBAL_SCENE_SETTINGS and is already initialised with other init options (PhysX SdkDefault vs

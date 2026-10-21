@@ -26,4 +26,37 @@ namespace PhysicsTest::Analytic
 		State.Z = Z0 + N * V0 * Dt + GravityZ * Dt * Dt * N * (N + 1.0) * 0.5;
 		return State;
 	}
+
+	FFreeFallState DampedFreeFall(const double Z0, const double GravityZ, const double LinearDamping, const double Dt, const int32 Steps,
+		const EDampingFormula Formula)
+	{
+		const double Multiplier = LinearDamping * Dt < 1.0 ? 1.0 - LinearDamping * Dt : 0.0;
+		FFreeFallState State;
+		State.Z = Z0;
+		for (int32 Step = 0; Step < Steps; ++Step)
+		{
+			State.Vz = Formula == EDampingFormula::UEOrder ? (State.Vz + GravityZ * Dt) * Multiplier : State.Vz * Multiplier + GravityZ * Dt;
+			State.Z += State.Vz * Dt;
+		}
+		return State;
+	}
+
+	double FrictionSlideStopDistance(const double V0, const double Mu, const double G, const double Dt)
+	{
+		const double Decrement = Mu * G * Dt;
+		double Speed = V0;
+		double Distance = 0.0;
+		while (Speed > 0.0 && Decrement > 0.0)
+		{
+			Speed = Speed > Decrement ? Speed - Decrement : 0.0;
+			Distance += Speed * Dt;
+		}
+		return Distance;
+	}
+
+	double StepBoundaryDropHeight(const double G, const double Dt, const int32 K)
+	{
+		const double N = static_cast<double>(K);
+		return G * Dt * Dt * N * (N + 1.0) * 0.5;
+	}
 }

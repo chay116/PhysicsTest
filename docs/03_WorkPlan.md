@@ -370,7 +370,7 @@ Chaos 행까지:
 | # | 작업 | pd |
 |---|---|---|
 | 1 | `FPhysScene_Jolt` (Jolt 백엔드 본체) | 2.0 |
-| 2 | Jolt 디버그 스냅샷 (viz 전용) | 0.5 |
+| 2 | Jolt 디버그 스냅샷 (M3 당시 문구 "viz 전용". M6 정정: 리스너는 viz 또는 `PT_INSTR_CONTACTS`일 때 설치된다) | 0.5 |
 | 3 | 씬 레지스트리 + 씬 3개 + `docs/Scenes.md` | 0.5 |
 | 4 | 최소 벤치 exe: `PT::BenchCore`, `PT::Benchmark`(최소), `PhysicsTestBench.exe` | 1.0 |
 
@@ -386,7 +386,7 @@ Chaos 행까지:
   - 임펄스·속도 변화·힘은 push 때 엔진에 넣지 않고 스텝 직전에 넣는다 (Chaos·Null과 같은 "다음 스텝 적분" 의미, [Abi.md](Abi.md) §7.1, Progress.md M3 §7).
   - 중력은 값이 바뀔 때만 설정한다.
   - `DumpEffectiveSettings`는 공통 키와 Jolt 키를 내보내고, 읽을 수 있는 값은 READBACK으로 표시한다. `GetInfo`의 BuildFlagsJson은 어댑터 TU 자기보고다.
-- **Jolt 스냅샷:** viz 전용 contact listener(구현은 잡 스레드에서 잠금·할당 없는 atomic 슬롯 배열, Progress.md M3 §3 #13). `Normal = −mWorldSpaceNormal`, 점마다 `Phi = −(p1 − p2)·n`으로 Chaos 규약에 맞춘다 (M4에서 정정: 처음 문장의 `−mPenetrationDepth`는 매니폴드에서 가장 깊은 점의 값이라 점마다 다른 Chaos의 Phi와 맞지 않았다). 임펄스는 NaN, active 여부는 근사 플래그다. Jolt island ID는 internal API(`GetIslandIndexInternal`)뿐이라 쓰지 않고, 하네스 `FIslandBuilder`(M4)에 맡긴다.
+- **Jolt 스냅샷:** contact listener(viz run 또는 `PT_INSTR_CONTACTS`일 때만 설치, 구현은 잡 스레드에서 잠금·할당 없는 atomic 슬롯 배열, Progress.md M3 §3 #13). `Normal = −mWorldSpaceNormal`, 점마다 `Phi = −(p1 − p2)·n`으로 Chaos 규약에 맞춘다 (M4에서 정정: 처음 문장의 `−mPenetrationDepth`는 매니폴드에서 가장 깊은 점의 값이라 점마다 다른 Chaos의 Phi와 맞지 않았다). 임펄스는 NaN, active 여부는 근사 플래그다. Jolt island ID는 internal API(`GetIslandIndexInternal`)뿐이라 쓰지 않고, 하네스 `FIslandBuilder`(M4)에 맡긴다.
 - **씬:** `IMPLEMENT_PHYSICS_TEST_SCENARIO` 정적 등록, `WHOLE_ARCHIVE(PT::Scenarios)`, 시작 시 레지스트리가 비어 있지 않은지 assert.
   - `S00.FreeFall`: M2 자유낙하 픽스처와 같은 설정.
   - `M1.SingleBoxDrop` a/b: 100 cm 정육면체, 1000 kg 고정(bOverrideMass), 중심 z = 150 cm, b는 roll 30° 후 pitch 20°, μ 0.5, e 0, 300 프레임.
@@ -502,7 +502,7 @@ Chaos 행까지:
   - `FPhysXCPUDispatcherSingleThread`: `submitTask`는 thread-local LIFO 스택을 쓴다. 재진입 호출은 push만 하고 돌아가고, 가장 바깥 호출이 스택을 비운다. 재귀하지 않는다. T ≥ 2는 `PxDefaultCpuDispatcherCreate(T)`.
   - `PhysicsFiltering` + 필터 셰이더: word 배치는 [M], word3의 EPDF 비트 배치는 UE5 PhysicsFiltering.h:18-35 [V].
   - 머티리얼: `createMaterial(staticFriction, dynamicFriction, restitution)` 순서다 (PxPhysics.h:764 [V]). `UE4Compat` 계열은 UE4처럼 `createMaterial(F, F, R)`, 즉 정지마찰 = 동적마찰이다 [M]. `SdkDefault`는 `createMaterial(max(F, SF), F, R)`이다. 어느 규칙을 썼는지 effective 키로 기록한다.
-  - `FPhysXSimEventCallback`(viz 전용), `FPhysScene_PhysX::InitPhysScene`이 변형 ini로 PxSceneDesc를 구성한다. 모든 UE4 유래 키에 증거 태그가 붙는다.
+  - `FPhysXSimEventCallback`(리스너가 있을 때: viz 또는 `PT_INSTR_CONTACTS`), `FPhysScene_PhysX::InitPhysScene`이 변형 ini로 PxSceneDesc를 구성한다. 모든 UE4 유래 키에 증거 태그가 붙는다.
   - 바디 생성 순서: `createRigidStatic/Dynamic`(생성 플래그) → `FBodySetupShapeIterator`로 셰이프(요소마다 exclusive PxShape, contact offset = clamp(0.02 × MinExtent, 2, 8) cm [M 공식, V 상수]) → `addActors` 1회 → InitDynamicProperties를 UE 순서로 (BodyInstance.cpp:4648-4743 [V]) → `!bStartAwake`이면 `putToSleep`. `putToSleep`은 씬에 들어간 바디에서만 허용된다 (NpRigidDynamic.cpp:527 [V]).
   - 스텝은 StartFrame = `simulate(dt, nullptr, scratch, 262144)`, WaitPhysScenes = `fetchResults(true)`. 동기화는 `getActiveActors`.
   - Normalized sleep 끔은 `PxSceneFlag::eDISABLE_SLEEPING`이다 (임계값 0 같은 우회를 쓰지 않는다).
@@ -552,7 +552,7 @@ Chaos 행까지:
 
 작업별 세부:
 - **게이트 씬**
-  - `S05.RestitutionCombine`: e 0.8, 임계 50 cm/s. 해석 기준은 `dt_engine`으로 만든다. 낙하 높이는 이산 궤적이 스텝 경계에서 정확히 바닥에 닿도록 고른다: h0 = 980 × dt_engine² × k(k+1)/2, k = 38이면 h0 = 201.7167 cm, 충돌 속도 620.67 cm/s. 반발 계수는 접촉 프레임 직전과 직후의 법선 속도 비로 잰다. apex 비는 보조 지표다.
+  - `S05.RestitutionCombine`: e 0.8, 임계 Normalized 50 cm/s, UEParity는 엔진 매핑(PhysX 200 cm/s, Chaos·Jolt·Bullet 1000·dt. 모두 첫 충돌 속도 620.67 cm/s 아래라 G4의 첫 반발에 영향이 없다, Progress M6 D-24). 해석 기준은 `dt_engine`으로 만든다. 낙하 높이는 이산 궤적이 스텝 경계에서 정확히 바닥에 닿도록 고른다: h0 = 980 × dt_engine² × k(k+1)/2, k = 38이면 h0 = 201.7167 cm, 충돌 속도 620.67 cm/s. (M6 수정 라운드 2: 씬 v2는 여기에 0.01 cm를 더한다. narrow phase를 스텝 끝 예측 자세에서 돌리는 Chaos가 정확한 접점의 반올림으로 한 스텝 일찍 튀지 않게 하기 위해서다. 충돌 속도와 접촉 스텝 39는 그대로다, Progress M6 D-27.) 반발 계수는 접촉 프레임 직전과 직후의 법선 속도 비로 잰다. apex 비는 보조 지표다.
   - `S08.StartAsleep`: 공중(z0 = 500 cm)에 `bStartAwake = false` 박스 하나와 `bStartAwake = true` 박스 하나를 둔다. UEParity(sleep 켬)에서만 돈다.
   - 나머지 씬의 설정은 [02_Architecture.md](02_Architecture.md)의 게이트 표를 따른다.
 - **게이트와 허용치**
@@ -623,7 +623,7 @@ Chaos 행까지:
 골격의 세부:
 - Target.cs: `Type = Program`, `LinkType = Monolithic`, `bShouldCompileAsDLL = true`, `FPSemantics = Imprecise`(Program 타깃의 V7 기본값은 /fp:precise, VCToolChain.cs:1324-1330 [V]), `bCompileAgainstEngine = false`, `NOINITCRASHREPORTER=1`, `bHasExports = false`. 마지막 값은 이미 Monolithic의 기본값이다 (TargetRules.cs:1792-1795 [V]). `*_API`가 비어 있게 명시하고, `PT_GetBackendApi`는 자기 `__declspec(dllexport)`로 export된다.
 - Build.cs: Core, CoreUObject, ApplicationCore, Projects, GeometryCore, PhysicsCore, Chaos, ChaosCore + `PrivateIncludePathModuleNames.Add("Launch")`. `RequiredProgramMainCPPInclude.h`가 `LaunchEngineLoop.h`와 `LaunchEngineLoop.cpp`를 include하기 때문이다 (RequiredProgramMainCPPInclude.h:6, 11 [V]).
-- 스파이크 DLL은 ABI major 0 (v0.9)을 쓴다. 호스트는 자신이 빌드된 major를 요청한다.
+- 스파이크 DLL은 ABI major 0 (v0.9)을 쓴다. 호스트는 자신이 빌드된 major를 요청한다. M6 동결(v1.0, major 1) 뒤에 스파이크를 하면 v1.0 헤더로 빌드한다 (지금 호스트는 major 0 DLL을 로드하지 않는다).
 
 **게이트**
 

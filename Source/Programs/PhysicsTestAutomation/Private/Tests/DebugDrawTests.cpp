@@ -931,7 +931,7 @@ namespace
 		FBenchConfig Files;
 		std::string Error;
 		REQUIRE_MESSAGE(LoadBenchConfig(Spec, Config, Files, Error), Error);
-		Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the contact listener (viz only)
+		Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the contact listener (present in viz runs or with PT_INSTR_CONTACTS)
 		return Config;
 	}
 
@@ -1049,9 +1049,9 @@ TEST_CASE("PhysicsTest.DebugDraw.JoltSleepingIslandKeepsContacts")
 }
 
 // The kept contacts follow the body commands (M4 fix round 2, FlushKeptContactCommands): a box put to sleep between steps
-// (PT_CMD_PUT_TO_SLEEP) keeps the contacts of the last step, as if it had fallen asleep in it; setting its pose while it
-// sleeps (SET_BODY_STATE, DontActivate: it stays asleep) drops them, since their points would be stale; after a wake and a
-// second PUT_TO_SLEEP they are kept again.
+// (PT_CMD_PUT_TO_SLEEP) keeps the contacts of the last step, as if it had fallen asleep in it; setting its state while it
+// sleeps (SET_BODY_STATE, which wakes it from ABI v1.0 on) drops them, since their points would be stale, and the next step
+// reports the pair afresh; a second PUT_TO_SLEEP keeps them again.
 TEST_CASE("PhysicsTest.DebugDraw.JoltKeptContactsFollowCommands")
 {
 	for (const std::string& Backend : JoltLikeBackends())
@@ -1092,14 +1092,12 @@ TEST_CASE("PhysicsTest.DebugDraw.JoltKeptContactsFollowCommands")
 			CHECK(CountContacts(Sleeping) == Touching);
 			CHECK(Sleeping == Touching);
 		}
-		// SET_BODY_STATE leaves it asleep (DontActivate) and drops the kept pairs.
+		// ABI v1.0 (docs/Abi.md 5.10, M6): SET_BODY_STATE is a teleport plus velocities and wakes the sleeping box; its kept
+		// pairs are dropped (stale points) and the listener reports the pair afresh in the next step. A second PUT_TO_SLEEP
+		// keeps it once more (no duplicates).
 		FPhysicsInterface::SetBodyState_AssumesLocked(Box.ActorHandle, Box.State.BodyTM, FVector::ZeroVector, FVector::ZeroVector);
 		Scene->Tick(Dt);
-		CHECK(Box.State.ObjectState == EObjectStateType::Sleeping);
-		CHECK(CountContacts(Sleeping) == 0u);
-		// Awake again, the listener reports the pair; a second PUT_TO_SLEEP keeps it once more (no duplicates).
-		Box.WakeInstance();
-		Scene->Tick(Dt);
+		CHECK(Box.State.ObjectState == EObjectStateType::Dynamic);
 		const uint32 Rewoken = CountContacts(Sleeping);
 		CHECK(Rewoken > 0u);
 		CHECK(Sleeping == 0u);

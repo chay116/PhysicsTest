@@ -1,5 +1,6 @@
 // PhysicsTestScenario.h - scenarios and their static registry (02_Architecture 4.5, A.12, docs/Scenes.md). [MVP M3:
-// S00.FreeFall, M1.SingleBoxDrop, M3.BoxPile; gate scenes M6; performance / behaviour scenes M7 / M9]
+// S00.FreeFall, M1.SingleBoxDrop, M3.BoxPile; M6: the gate scenes S00d, S01-S08 (GateScenes.h); performance / behaviour
+// scenes M7 / M9]
 // A scenario authors one scene through the FPhysScene API only (materials, body setups, SpawnBody, FlushDeferredActors),
 // so every backend receives the same marshalled bytes (desc_sha256 is equal across engines, DL43). Scenarios register
 // themselves with IMPLEMENT_PHYSICS_TEST_SCENARIO; programs link PT::Scenarios with WHOLE_ARCHIVE (the registrars are
@@ -98,8 +99,13 @@ namespace PhysicsTest
 		[[nodiscard]] virtual FScenarioCapacity GetCapacity(const FScenarioParams& Params) const = 0;
 		// Builds the scene (ground = static box, body index 0, where the scenario has a ground) and flushes it.
 		virtual void BuildScene(FPhysScene& Scene, const FScenarioContext& Context) = 0;
+		// Runs at the start of every frame (FPhysScene::OnPhysScenePreTick, wired by the bench, the viewer and the gates). The
+		// scenario object is a shared static instance: it keeps no per-scene state (frame 0 is Scene.GetFrameCount() == 0).
 		virtual void OnPreTick(FPhysScene& /*Scene*/, float /*DeltaSeconds*/) {}
 		[[nodiscard]] virtual uint64 GetRequiredCapabilities() const { return 0; }
+		// True for a scene that only means something with sleeping allowed (M6: S08.StartAsleep, G6 - Normalized skips the
+		// start-asleep step, 02 6). The bench refuses it under a profile with bAllowSleeping = False (exit 2).
+		[[nodiscard]] virtual bool RequiresSleeping() const { return false; }
 		// The random seed when no Seed parameter is given (FRandomStream::DefaultSeed, 0x5EED).
 		[[nodiscard]] virtual int32 GetDefaultSeed() const { return FRandomStream::DefaultSeed; }
 

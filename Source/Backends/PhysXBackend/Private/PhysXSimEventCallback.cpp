@@ -26,6 +26,34 @@ namespace PhysicsTest::PhysXBackend
 		NumSleepEvents += Count;
 	}
 
+	void FPhysXSimEventCallback::FindPointOnSecondShape(const physx::PxShape& Shape, const physx::PxRigidActor& Actor, const uint32 ActorIndex,
+		const physx::PxContactPairPoint& Point, FPhysXRawContact& InOut)
+	{
+		InOut.PointOn1[0] = InOut.Position[0];
+		InOut.PointOn1[1] = InOut.Position[1];
+		InOut.PointOn1[2] = InOut.Position[2];
+		// The pose of the step's narrow phase: the pre-step actor pose (a dynamic second shape moved during the solve).
+		const bool bPreStep = PreStepPoses != nullptr && ActorIndex < NumPreStepPoses && Actor.is<physx::PxRigidDynamic>() != nullptr;
+		const physx::PxTransform ShapePose = (bPreStep ? PreStepPoses[ActorIndex] : Actor.getGlobalPose()) * Shape.getLocalPose();
+		// From outside the shape: the reported point lies within |separation| of its surface along the normal (plus the
+		// contact offsets of a speculative point), and the normal points out of it (PxSimulationEventCallback.h:447 [V]).
+		const physx::PxReal Reach = physx::PxAbs(Point.separation) + 2.0f * Shape.getContactOffset() + 1e-2f;
+		const physx::PxVec3 Origin = Point.position + Point.normal * Reach;
+		// The closest point of the shape to that outside origin: on a face it is the point under the origin along the normal,
+		// on a curved surface or an edge the point on the normal line (a ray would graze an edge and miss).
+		physx::PxVec3 Closest(0.0f);
+		const physx::PxReal Distance = physx::PxGeometryQuery::pointDistance(Origin, Shape.getGeometry(), ShapePose, &Closest);
+		if (!(Distance > 0.0f))
+		{
+			++NumSurfaceFallbacks;   // the origin was inside the shape: keep the reported point
+			return;
+		}
+		const physx::PxVec3 Hit = Closest;
+		InOut.PointOn1[0] = static_cast<double>(Hit.x);
+		InOut.PointOn1[1] = static_cast<double>(Hit.y);
+		InOut.PointOn1[2] = static_cast<double>(Hit.z);
+	}
+
 	void FPhysXSimEventCallback::onContact(const physx::PxContactPairHeader& PairHeader, const physx::PxContactPair* Pairs, const physx::PxU32 InNumPairs)
 	{
 		if (PairHeader.flags & (physx::PxContactPairHeaderFlag::eREMOVED_ACTOR_0 | physx::PxContactPairHeaderFlag::eREMOVED_ACTOR_1))
@@ -73,6 +101,16 @@ namespace PhysicsTest::PhysXBackend
 				Contact.Normal[1] = static_cast<double>(Points[Point].normal.y);
 				Contact.Normal[2] = static_cast<double>(Points[Point].normal.z);
 				Contact.Separation = static_cast<double>(Points[Point].separation);
+				if (const physx::PxRigidActor* Rigid1 = PairHeader.actors[1]->is<physx::PxRigidActor>())
+				{
+					FindPointOnSecondShape(*Pair.shapes[1], *Rigid1, Actor1.Index, Points[Point], Contact);
+				}
+				else
+				{
+					Contact.PointOn1[0] = Contact.Position[0];
+					Contact.PointOn1[1] = Contact.Position[1];
+					Contact.PointOn1[2] = Contact.Position[2];
+				}
 				Contact.NormalImpulse = static_cast<double>(Points[Point].impulse.dot(Points[Point].normal));
 				Contacts.pushBack(Contact);
 			}

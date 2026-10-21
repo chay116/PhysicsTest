@@ -8,7 +8,13 @@
 // defaults) while the dbg libraries are built with PX_DEBUG=1 PX_CHECKED=1 PX_SUPPORT_PVD=1. That is deliberate: no
 // public PhysX header changes a type layout on these macros (they only gate inline parameter checks PX_CHECK_*,
 // PX_WARN_ONCE, PX_ASSERT and profile zones: PxErrors.h:60-90, PxAssert.h, PxProfileZone.h, PxPhysXCommonConfig.h:11
-// [V]), so the adapter sees release-style inline helpers in every configuration and the libraries keep their own checks.
+// [V]), so no layout differs. In dbg only (M6, M5 review): the adapter and the checked libraries instantiate the same
+// templates and inline functions (physx::PxArray<uint32>, PxArray<uint8>, PxVec3 / PxQuat / PxTransform inlines) with
+// different PX_ASSERT content (PxArray.h:155, :166), ODR-different COMDATs that /Od keeps out of line; the linker keeps one
+// copy, so either the libraries lose some checks or adapter call sites get the checked __debugbreak versions. Accepted:
+// dbg is not a measurement build and the behaviour is benign; dev / test link the release libraries (no asserts on either
+// side). Probe.AdapterComdatsPhysX cannot see it (the physx namespace is allowed). Revisit when a preset gives the adapter
+// another /arch (M10 test-physx).
 #pragma once
 
 #include "PtThirdPartyIncludes.h"

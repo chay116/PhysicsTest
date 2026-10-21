@@ -8,6 +8,12 @@
 //                        [-ExecCmds="cvar value, ..."]
 //   PhysicsTestBench.exe -List
 //   PhysicsTestBench.exe -Describe -Backend=Jolt [-BackendProfile=..] [-Profile=..] [-Scenario=.. -Param:..]
+//   PhysicsTestBench.exe -Conformance -Backend=PhysX [-BackendProfile=UE4Compat] [-Profile=UEParity] [-Gates=G1,G9]
+//                        [-Out=<dir>] [-ConfigDir=<dir>] [-InjectEngineErrorBits=0x...]       (M6: conformance.json; a
+//                        PT_MODULE_NO_REINIT backend: one ABI gate or the physics gates per process, else exit 2)
+//   PhysicsTestBench.exe -SceneHashes=<path>                                                  (M6: Config/Golden/scene_hashes.json)
+// -List, -Describe and -SceneHashes print pure JSON on stdout: every log line goes to stderr in these modes (M6, for the
+// M7 / M8 tools).
 //
 // Exit codes (02 12.2): 0 ok, 2 gate / preflight failure (in M3 also: an invalid command line, profile, scenario or
 // parameter; HashEvery / CountersEvery > 0, which need the M7 recorder; the backend rejecting the variant's engine
@@ -59,9 +65,17 @@ namespace PhysicsTest
 		std::vector<std::string> ExtraRequiredKeys;   // -RequireEffectiveKey=a,b: required by this run's preflight on top of
 		                                              // the backend's set (a variant check; CTest drives the preflight path)
 		uint32 InjectEngineErrorBits = 0;    // -InjectEngineErrorBits=0x200: test only, OR-ed into the run's engine error bits
-		                                     // after the loop (CTest drives exit codes 3 / 5 through the exe); the manifest says so
+		                                     // after the loop (CTest drives exit codes 3 / 5 through the exe); the manifest says so.
+		                                     // With -Conformance: OR-ed into every physics-gate frame, so G12 fails (M6 round 1)
 		bool bList = false;
 		bool bDescribe = false;
+		// -Conformance (M6, 02 14.3): the physics gate suite on this backend / variant / profile -> conformance.json in the
+		// run directory; exit 0 when every gate passes or skips, 2 when one fails. -Gates=G1,G9 selects (default: all).
+		bool bConformance = false;
+		std::vector<std::string> Gates;
+		// -SceneHashes=<path> (M6): writes / updates the golden scene hashes of every gate scene (scene_sha256, and
+		// desc_sha256 of this build configuration per profile) at <path>; the other configuration's entries are kept.
+		std::filesystem::path SceneHashesPath;
 
 		// UE-style switches (FParse). False + OutError for a malformed value (e.g. -Threads=4x, -Frames=0).
 		static bool FromCommandLine(const char* CommandLine, FBenchRunSpec& Out, std::string& OutError);
@@ -120,5 +134,24 @@ namespace PhysicsTest
 		// -Describe: the backend's info, capabilities, required keys and the effective settings of a scene built with the
 		// resolved profile (the scenario's scene when -Scenario is given, else an empty scene), as JSON on stdout.
 		static EBenchExit Describe(const FBenchRunSpec& Spec);
+		// -Conformance (M6): the physics gates on the backend / variant / profile of Spec; writes conformance.json (schema
+		// physicstest.conformance/1) into the run directory and prints its path. 0 = every gate passed or skipped.
+		static EBenchExit Conformance(const FBenchRunSpec& Spec);
+		// -SceneHashes=<path> (M6): the golden scene hashes of the gate scenes (and S00.FreeFall), built on Null.
+		static EBenchExit WriteSceneHashes(const FBenchRunSpec& Spec);
 	};
+
+	// One gate scene's golden hashes (Config/Golden/scene_hashes.json, M6): scene_sha256 (build-independent) and desc_sha256
+	// per physics profile for the build configuration this code was compiled in (PT_BUILD_CONFIGURATION), with the scene's
+	// default parameters and frames, built on Null (desc_sha256 is engine independent, DL43).
+	struct FSceneHashEntry
+	{
+		std::string Scene;
+		int32 Version = 0;
+		std::string SceneSha256;
+		int32 DefaultFrames = 0;
+		std::vector<std::pair<std::string, std::string>> DescSha256ByProfile;   // (profile, desc_sha256); S08 has UEParity only
+	};
+	// Every EScenarioKind::Gate scenario. False + OutError when a profile does not load.
+	bool ComputeGateSceneHashes(const std::filesystem::path& ConfigDir, std::vector<FSceneHashEntry>& Out, std::string& OutError);
 }

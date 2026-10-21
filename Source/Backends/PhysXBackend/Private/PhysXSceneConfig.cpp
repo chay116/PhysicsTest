@@ -207,6 +207,12 @@ namespace PhysicsTest::PhysXBackend
 			const EPhysXDispatcherKind Values[] = { EPhysXDispatcherKind::Auto, EPhysXDispatcherKind::SingleThread, EPhysXDispatcherKind::PxDefault };
 			return ParseEnum(Value, Names, Values, Config.Dispatcher) ? PT_OK : Fail(Error, Key, "Auto, SingleThread or PxDefault");
 		}
+		if (EqualsNoCase("GyroscopicForces", Key))
+		{
+			const char* const Names[] = { "Ignore", "FromBody" };
+			const EPhysXGyroscopicRule Values[] = { EPhysXGyroscopicRule::Ignore, EPhysXGyroscopicRule::FromBody };
+			return ParseEnum(Value, Names, Values, Config.GyroscopicRule) ? PT_OK : Fail(Error, Key, "Ignore or FromBody");
+		}
 		snprintf(Error, sizeof(Error), "PhysX: unknown scene option '%.*s' (see Config/Profiles/Backend/PhysX.UE4Compat.ini for the keys)", static_cast<int>(Key.Length),
 			Key.Data);
 		return PT_E_INVALID_ARG;
@@ -275,5 +281,10 @@ namespace PhysicsTest::PhysXBackend
 		case EPhysXDispatcherKind::PxDefault: return "PxDefault";
 		}
 		return "?";
+	}
+
+	const char* ToString(const EPhysXGyroscopicRule Value)
+	{
+		return Value == EPhysXGyroscopicRule::Ignore ? "Ignore" : "FromBody";
 	}
 }

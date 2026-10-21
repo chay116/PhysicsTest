@@ -475,6 +475,7 @@ namespace PhysicsTest::NullBackend
 		// Forces were consumed by the push (StartFrame), kinematic targets by the step that reached them.
 		Out.NumStepsTaken = StepsTakenThisFrame;
 		Out.EngineErrorBits = 0;
+		Out.NumPushedSteps = FramePlan.NumPushedSteps;   // v1.0: the steps this frame pushed (UE AdvanceAndDispatch_External's NumSteps)
 		return PT_OK;
 	}
 
@@ -571,7 +572,6 @@ namespace PhysicsTest::NullBackend
 	PtResult FNullScene::ApplyBodyCommand(const PtBodyCommand& Cmd)
 	{
 		FNullBody& Body = Bodies[Cmd.Body];
-		const bool bAutoWake = (Cmd.Flags & PT_CMDF_AUTO_WAKE) != 0;
 		const bool bAccelChange = (Cmd.Flags & PT_CMDF_ACCEL_CHANGE) != 0;
 		switch (Cmd.Type)
 		{
@@ -601,10 +601,12 @@ namespace PhysicsTest::NullBackend
 			{
 				(Cmd.Type == PT_CMD_SET_LINEAR_VELOCITY ? Body.V : Body.W) = Cmd.Vector;
 				Body.bDirty = true;
-				if (bAutoWake)
-				{
-					Wake(Body);
-				}
+				// ABI v1.0 contract (docs/Abi.md 5.10): the game-thread SetV / SetW wake a sleeping particle - a vector that is not
+				// nearly zero through SetVBase / SetWBase, an exactly zero one through SetX / SetR (SingleParticlePhysicsProxy.h:
+				// 322-340, :362-380, :1217-1244, :240-251, :261-271 [V]); FChaosEngineInterface only supports bAutoWake = true
+				// (ensure, ChaosEngineInterface.cpp:626-658 [V]). PT_CMDF_AUTO_WAKE is informational. The one vector UE leaves
+				// asleep (non-zero but nearly zero, every component <= 1e-4) is backend-defined; Null wakes for it too.
+				Wake(Body);
 			}
 			break;
 		case PT_CMD_SET_BODY_STATE:
@@ -613,6 +615,7 @@ namespace PhysicsTest::NullBackend
 			{
 				Body.V = Cmd.Vector;
 				Body.W = Cmd.Vector2;
+				Wake(Body);   // ABI v1.0: a state write is SetX + SetV and wakes a sleeping body
 			}
 			Body.bDirty = true;
 			break;
@@ -822,7 +825,12 @@ namespace PhysicsTest::NullBackend
 		Out.AppendEffective("material.friction_combine", "n/a", "", NaN, "", "COMPILE_TIME");
 		Out.AppendEffective("material.restitution_combine", "n/a", "", NaN, "", "COMPILE_TIME");
 		Out.AppendEffective("material.static_friction_rule", "n/a", "", NaN, "", "COMPILE_TIME");
-		Out.AppendEffective("body.damping_formula", "v *= max(0, 1 - c*dt) per step", "", NaN, "", "COMPILE_TIME");
+		// canonical = the formula id of docs/Abi.md 5.14 (1: UE order, v = (v + a dt) * max(0, 1 - c dt); G1b computes its reference from it)
+		Out.AppendEffective("body.damping_formula", "UE order: v = (v + a dt) * max(0, 1 - c dt) per step", "formula_id", 1.0, "formula_id", "COMPILE_TIME");
+		// docs/Abi.md 9.1 decision 1: canonical 1 = a nearly zero velocity write (every component <= 1e-4) wakes a sleeping body
+		// like any other write; 0 = it stays asleep (UE: SingleParticlePhysicsProxy.h:331 !InV.IsNearlyZero() [V]). G6 checks it.
+		Out.AppendEffective("command.nearly_zero_velocity_wakes", "1: a nearly zero velocity write wakes a sleeping body (every write wakes)", "bool", 1.0,
+			"bool", "COMPILE_TIME");
 		double MinLinear = 0.0, MaxLinear = 0.0, MinAngular = 0.0, MaxAngular = 0.0, MinMaxAng = 0.0, MaxMaxAng = 0.0, MinMaxLin = 0.0, MaxMaxLin = 0.0;
 		bool bFirst = true;
 		for (uint32 Index = 0; Index < Bodies.Num(); ++Index)
@@ -892,16 +900,28 @@ namespace PhysicsTest::NullBackend
 	}
 
 	// ---- FNullBackend ------------------------------------------------------------------------------------------------
+#if !defined(PT_NULL_BACKEND_DLL)
+	uint32 GetNullModuleFlags()
+	{
+		return 0;   // the static Null: re-initialisable (gate A0 re-initialises it), no environment switch
+	}
+#endif
+
+	FNullBackend::FNullBackend()
+		: ModuleFlags(GetNullModuleFlags())
+	{
+	}
+
 	void FNullBackend::GetInfo(PtBackendInfo& Out) const
 	{
 		Out.Name = ModuleName;
-		Out.DisplayName = "Null (SDK-free reference backend)";
-		Out.EngineVersion = "PhysicsTest Null, ABI v0.9";
+		Out.DisplayName = (ModuleFlags & PT_MODULE_NO_REINIT) != 0 ? "Null (SDK-free reference backend; NO_REINIT test double)" : "Null (SDK-free reference backend)";
+		Out.EngineVersion = "PhysicsTest Null, ABI v1.0";
 		Out.SourceCommit = "n/a";
 		Out.BuildConfig = GetBuildConfig();
 		Out.BuildFlagsJson = GNullBuildReport;
 		Out.Capabilities = PT_CAP_KINEMATIC | PT_CAP_NATIVE_FRAME_MODEL | PT_CAP_ACTIVE_LIST | PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH;
-		Out.ModuleFlags = 0;
+		Out.ModuleFlags = ModuleFlags;
 		Out.NumPhaseTimers = 0;
 		Out.PhaseTimerNames = nullptr;
 		Out.NumRequiredEffectiveKeys = 0;   // the generic set only (A.13)

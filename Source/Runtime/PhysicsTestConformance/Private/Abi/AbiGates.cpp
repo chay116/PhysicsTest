@@ -116,6 +116,7 @@ namespace PhysicsTest::AbiGates
 		R.Check(Api.GetInfo(&Info) == PT_OK, "GetInfo after TermGamePhys -> PT_OK");
 		// Re-initialisation follows PT_MODULE_NO_REINIT.
 		const bool bNoReinit = (Info.ModuleFlags & PT_MODULE_NO_REINIT) != 0;
+		R.Note(std::string("PT_MODULE_NO_REINIT ") + (bNoReinit ? "set: a second InitGamePhys after the Term must be refused" : "not set: the module re-initialises"));
 		const PtResult Again = Api.InitGamePhys(&Init);
 		R.Check(bNoReinit ? Again == PT_E_BAD_STATE : Again == PT_OK, std::string("InitGamePhys after TermGamePhys follows PT_MODULE_NO_REINIT (")
 			+ (bNoReinit ? "set" : "not set") + ")");
@@ -139,17 +140,29 @@ namespace PhysicsTest::AbiGates
 		R.Check(Target.Entry(PT_ABI_VERSION_MAJOR) == &Api, "PT_GetBackendApi(host major " + std::to_string(PT_ABI_VERSION_MAJOR) + ") returns the table");
 		R.Check(Target.Entry(PT_ABI_VERSION_MAJOR + 1) == nullptr, "PT_GetBackendApi(major + 1) returns NULL");
 		R.Check(Target.Entry(0xFFFFu) == nullptr, "PT_GetBackendApi(0xFFFF) returns NULL");
-		R.Check(Api.StructSize == sizeof(PtBackendApi), "PtBackendApi.StructSize == sizeof(PtBackendApi)");
-		R.Check(Api.AbiVersion == PT_ABI_VERSION, "PtBackendApi.AbiVersion == PT_ABI_VERSION (0.9)");
+		// A module built against this header writes sizeof(PtBackendApi); one built against a later v1.x header more. The
+		// frozen minimum is the v1.0 table (docs/Abi.md 2).
+		R.Check(Api.StructSize >= PT_ABI_V1_0_API_SIZE && Api.StructSize % sizeof(void*) == 0, "PtBackendApi.StructSize "
+			+ std::to_string(Api.StructSize) + " >= the v1.0 table size " + std::to_string(PT_ABI_V1_0_API_SIZE) + " (whole entries)");
+		R.Check(Api.AbiVersion == PT_ABI_VERSION, "PtBackendApi.AbiVersion == PT_ABI_VERSION (1.0)");
+		R.Check(Target.Entry(0u) == nullptr, "PT_GetBackendApi(0) returns NULL (a v0.9 host or spike DLL is refused after the freeze)");
 		R.Check(Api.ModuleName != nullptr && Api.ModuleName[0] != '\0', "PtBackendApi.ModuleName is set");
 		std::string Error;
 		R.Check(FPhysicsBackendModule::ValidateApiTable(&Api, Error), "the host accepts the table: " + Error);
-		// The host refuses tables it cannot use.
+		// The host refuses tables it cannot use, and accepts any v1.x table of at least the v1.0 size (v1.x appends entries:
+		// a v1.0 module - the Chaos bridge - must keep loading in a later v1.x host, M6 round 2).
 		PtBackendApi Copy = Api;
-		Copy.StructSize = sizeof(PtBackendApi) - 8;
-		R.Check(!FPhysicsBackendModule::ValidateApiTable(&Copy, Error), "the host refuses a smaller StructSize");
+		Copy.StructSize = PT_ABI_V1_0_API_SIZE;
+		R.Check(FPhysicsBackendModule::ValidateApiTable(&Copy, Error), "the host accepts a v1.0-sized table (StructSize " + std::to_string(PT_ABI_V1_0_API_SIZE)
+			+ "): " + Error);
+		R.Check(PT_API_HAS(&Copy, GetLastErrorMessage) && PT_API_HAS(&Copy, GetInfo), "PT_API_HAS sees the v1.0 entries of a v1.0-sized table");
+		Copy.StructSize = PT_ABI_V1_0_API_SIZE + 2u * static_cast<uint32_t>(sizeof(void*));
+		R.Check(FPhysicsBackendModule::ValidateApiTable(&Copy, Error), "the host accepts a larger table (a newer v1.x module): " + Error);
+		Copy.StructSize = PT_ABI_V1_0_API_SIZE - static_cast<uint32_t>(sizeof(void*));
+		R.Check(!FPhysicsBackendModule::ValidateApiTable(&Copy, Error), "the host refuses a table smaller than v1.0");
+		R.Check(!PT_API_HAS(&Copy, GetLastErrorMessage) && PT_API_HAS(&Copy, GetMemoryStats), "PT_API_HAS treats an entry past StructSize as absent");
 		Copy = Api;
-		Copy.AbiVersion = (1u << 16) | 0u;
+		Copy.AbiVersion = ((PT_ABI_VERSION_MAJOR + 1u) << 16) | 0u;
 		R.Check(!FPhysicsBackendModule::ValidateApiTable(&Copy, Error), "the host refuses another major");
 		Copy = Api;
 		Copy.GetLastErrorMessage = nullptr;
@@ -230,7 +243,7 @@ namespace PhysicsTest::AbiGates
 		char Text[256];
 		memset(Text, 0x5A, sizeof(Text));
 		PtTextBuffer TextBuffer = { Text, sizeof(Text), 0xDEADu };
-		PtFrameResult Frame = { 0xDEADu, 0xDEADu };
+		PtFrameResult Frame = { 0xDEADu, 0xDEADu, 0xDEADu, 0xDEADu };
 		PtBodyCommand Command = MakeCommand(PT_CMD_ADD_IMPULSE, 1);
 		Command.Vector = PtVec3{ 0.0, 0.0, 1000.0 };
 		std::vector<uint32> Indices(16, 0xDEADu);

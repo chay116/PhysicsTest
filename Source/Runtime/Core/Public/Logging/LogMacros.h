@@ -65,6 +65,9 @@ namespace PhysicsTest
 	{
 		// Formats and writes one line. Fatal never returns.
 		void Write(const FLogCategoryBase& Category, ELogVerbosity Verbosity, const char* File, int32 Line, const char* Format, ...);
+		// M6: a program whose stdout carries data (PhysicsTestBench -Describe / -List / -SceneHashes: pure JSON for the M7 / M8
+		// tools) sends every log line to stderr from here on. By default Warning and worse go to stderr, the rest to stdout.
+		void SetAllLinesToStderr(bool bAllToStderr);
 	}
 }
 

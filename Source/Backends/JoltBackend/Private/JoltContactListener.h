@@ -1,4 +1,4 @@
-// JoltContactListener.h - the viz-only contact listener of the Jolt debug snapshot (02_Architecture 8.3, 11.1). [MVP M3]
+// JoltContactListener.h - the contact listener of the Jolt debug snapshot (viz runs or PT_INSTR_CONTACTS) (02_Architecture 8.3, 11.1). [MVP M3]
 // Installed only in viz runs or with PT_INSTR_CONTACTS (bench runs must not pay for a listener, 02 9.4; the effective key
 // listeners.installed records it). It records each manifold of the step in Jolt's own terms (metres); the scene turns
 // them into the Chaos convention when a snapshot is captured.

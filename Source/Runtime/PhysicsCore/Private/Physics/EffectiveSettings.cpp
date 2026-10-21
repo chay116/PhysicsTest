@@ -26,6 +26,7 @@ namespace PhysicsTest
 			"material.restitution_combine",
 			"material.static_friction_rule",
 			"body.damping_formula",
+			"command.nearly_zero_velocity_wakes",
 			"body.damping",
 			"body.max_angular_velocity",
 			"body.max_linear_velocity",

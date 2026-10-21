@@ -35,6 +35,26 @@ pt_add_script_test(PhysicsTest.Bench.M3Matrix
 		-DPT_FRAMES=30
 	LABELS "bench")
 
+# 03 M6: PhysicsTestBench -Conformance writes conformance.json for every backend x variant x physics profile (one fresh
+# process each), every gate passing or skipped; -Describe / -List stdout is pure JSON (lead (g)).
+pt_add_script_test(PhysicsTest.Bench.Conformance
+	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunConformanceMatrix.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${CMAKE_BINARY_DIR}/_bench/Conformance" "-DPT_BACKEND=${_pt_bench_backends}"
+	LABELS "bench")
+# G12 can fail (M6 round 1): the test-only -InjectEngineErrorBits is OR-ed into every gate frame's engine error bits, so
+# G12 reports Fail, the bench exits 2 and conformance.json records the injected bits.
+pt_add_script_test(PhysicsTest.Bench.ConformanceG12Injected SCRIPT "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=G12 Null / UEParity: Fail.*FAIL engine error bits 0x1 over"
+		"-DPT_ARGS=-Conformance|-Backend=Null|-Profile=UEParity|-Gates=G12|-InjectEngineErrorBits=0x1|-Out=${CMAKE_BINARY_DIR}/_bench/ConformanceG12Injected"
+		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ConformanceG12Injected/conformance.json"
+		"-DPT_EXPECT_FILE_REGEX=.result.: .fail.,.*.injected_engine_error_bits.: 1,.*.id.: .G12.,.*.result.: .Fail."
+	LABELS "bench")
+# S08.StartAsleep means something only with sleeping allowed: the bench refuses it under Normalized (exit 2).
+pt_add_script_test(PhysicsTest.Bench.ExitSceneNeedsSleeping SCRIPT "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=needs a profile with sleeping allowed"
+		"-DPT_ARGS=-Backend=Null|-Scenario=S08.StartAsleep|-Profile=Normalized"
+	LABELS "bench")
+
 # Exit codes (02 12.2): 6 no backend, 2 an invalid command line / scenario / parameter / engine option (the last writes
 # manifest.json with status preflight_failed) or HashEvery / CountersEvery > 0 (M7 recorder), 5 a capacity overflow (the
 # Jolt temp block forced to 1 MiB overflows on M3.BoxPile 1k: the heap fallback becomes engine error bit 0x100), 3 an

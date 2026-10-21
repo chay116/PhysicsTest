@@ -228,7 +228,7 @@ TEST_CASE("PhysicsTest.Backend.EffectiveSettingsParser")
 	Info.RequiredEffectiveKeys = { "jolt.config_string" };
 	const std::vector<std::string> Required = GetRequiredEffectiveKeys(Info);
 	CHECK(Required.size() == GetGenericEffectiveKeys().size() + 1);
-	CHECK(GetGenericEffectiveKeys().size() == 24u);
+	CHECK(GetGenericEffectiveKeys().size() == 25u);   // M6 round 1: + command.nearly_zero_velocity_wakes
 	CHECK(std::find(Required.begin(), Required.end(), "jolt.config_string") != Required.end());
 	REQUIRE(ParseEffectiveSettings(Twice, Settings, Error));
 	CHECK(FindMissingEffectiveKeys(Settings, Info).size() == Required.size());

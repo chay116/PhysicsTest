@@ -465,6 +465,27 @@ namespace PhysicsTest::AbiGates
 		}
 		const PtBackendApi& Api = *Target.Api;
 
+		// One InitGamePhys for the whole gate, through the registry module and with the arguments FPhysScene passes for the
+		// default config: the raw-ABI part (a) runs on it and the FPhysScene runs of (b)-(d) reuse it (FindOrLoad finds the
+		// module initialised). A PT_MODULE_NO_REINIT backend (the Chaos bridge) refuses a second Init after a Term, so the
+		// gate must not Init and Term the raw table in (a) and then ask the registry again (M6 round 1).
+		{
+			const PtResult InitResult = Target.Module->InitGamePhys(FPhysScene::MakeBackendInitParams(nullptr));
+			if (!R.Check(InitResult == PT_OK, std::string("InitGamePhys (once, through the registry module): ") + GetPtResultName(InitResult) + " "
+					+ (InitResult == PT_OK ? std::string() : Target.Module->GetLastErrorMessage())))
+			{
+				if (Target.Module->IsInitialized())
+				{
+					Target.Module->TermGamePhys();
+				}
+				return R;
+			}
+			const uint32 ModuleFlags = Target.Module->GetInfo().ModuleFlags;
+			char Flags[32];
+			std::snprintf(Flags, sizeof(Flags), "module flags 0x%x", ModuleFlags);
+			R.Note(std::string(Flags) + ((ModuleFlags & PT_MODULE_NO_REINIT) != 0 ? " (PT_MODULE_NO_REINIT set: one InitGamePhys for (a)-(d))" : ""));
+		}
+
 		// (a) NumStepsTaken == FStepPlan::NumSteps through the raw ABI, frame by frame.
 		const float Sixtieth = RuntimeFloat(1.0f / 60.0f);
 		const std::vector<FPlanCase> Cases = {
@@ -478,9 +499,6 @@ namespace PhysicsTest::AbiGates
 			{ "FixedStep", EPhysicsTickMode::FixedStep, -1.0f, { RuntimeFloat(0.1f), RuntimeFloat(0.01f), Sixtieth } },
 		};
 		{
-			const FTerminateOnExit Terminate(Api);
-			const PtInitParams Init = MakeInitParams();
-			R.Check(Api.InitGamePhys(&Init) == PT_OK, "InitGamePhys");
 			for (const FPlanCase& Case : Cases)
 			{
 				FPhysicsSettings Settings;
@@ -504,13 +522,17 @@ namespace PhysicsTest::AbiGates
 					const FSetUpForFrameParams Params = FStepPlanner::MakeSetUpForFrameParams(Case.FrameDeltaTimes[Frame], Settings, TestSettings);
 					const FStepPlan Plan = FStepPlanner::PlanFrame(Params, AsyncDt, TestSettings.SubstepClampRule, Accumulator);
 					const PtVec3 Gravity = { 0.0, 0.0, -980.0 };
-					PtFrameResult Result = { 0xFFFFFFFFu, 0 };
+					PtFrameResult Result = { 0xFFFFFFFFu, 0, 0xFFFFFFFEu, 0 };
 					const bool bOk = Api.SetUpForFrame(Scene, &Gravity, Params.DeltaSeconds, Params.MinPhysicsDeltaTime, Params.MaxPhysicsDeltaTime,
 										 Params.MaxSubstepDeltaTime, Params.MaxSubsteps, Params.bSubstepping ? 1u : 0u) == PT_OK
 						&& Api.StartFrame(Scene) == PT_OK && Api.WaitPhysScenes(Scene) == PT_OK && Api.EndFrame(Scene, &Result) == PT_OK;
 					R.Check(bOk && static_cast<int32>(Result.NumStepsTaken) == Plan.NumSteps,
 						std::string(Case.Name) + " frame " + std::to_string(Frame) + " dt " + std::to_string(Case.FrameDeltaTimes[Frame]) + ": NumStepsTaken "
 							+ std::to_string(Result.NumStepsTaken) + " == FStepPlan::NumSteps " + std::to_string(Plan.NumSteps));
+					// v1.0: a NATIVE_FRAME_MODEL backend reports the pushed steps too (Null does; PT_INDEX_NONE = not reported).
+					R.Check(Result.NumPushedSteps == PT_INDEX_NONE || static_cast<int32>(Result.NumPushedSteps) == Plan.NumPushedSteps,
+						std::string(Case.Name) + " frame " + std::to_string(Frame) + ": NumPushedSteps " + std::to_string(Result.NumPushedSteps)
+							+ " == FStepPlan::NumPushedSteps " + std::to_string(Plan.NumPushedSteps));
 					Sequence += (Sequence.empty() ? "" : " ") + std::to_string(Plan.NumSteps);
 				}
 				R.Note(std::string(Case.Name) + " steps per frame: " + Sequence);
@@ -678,7 +700,7 @@ namespace PhysicsTest::AbiGates
 			}
 		}
 
-		// The registry module is initialised by the FPhysScene runs: leave it terminated, as the other gates do.
+		// Leave the module terminated, as the other gates do (one Term for the gate's one Init).
 		if (Target.Module->IsInitialized())
 		{
 			Target.Module->TermGamePhys();

@@ -17,6 +17,7 @@ set_property(TARGET PtBackendNull PROPERTY FOLDER "PhysicsTest/Backends")
 add_library(PtBackend_Null SHARED ${_pt_null_sources} Private/NullBackendDll.cpp)
 target_include_directories(PtBackend_Null PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
 target_link_libraries(PtBackend_Null PRIVATE PT::BackendCommon)
-target_compile_definitions(PtBackend_Null PRIVATE PT_BACKEND_NS=Null)
+# PT_NULL_BACKEND_DLL: the DLL reads PT_NULL_DLL_NO_REINIT (the NO_REINIT test double, NullBackendDll.cpp).
+target_compile_definitions(PtBackend_Null PRIVATE PT_BACKEND_NS=Null PT_NULL_BACKEND_DLL=1)
 pt_target_defaults(PtBackend_Null)
 set_property(TARGET PtBackend_Null PROPERTY FOLDER "PhysicsTest/Backends")

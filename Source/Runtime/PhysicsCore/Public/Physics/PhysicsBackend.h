@@ -4,7 +4,7 @@
 //   FPhysicsBackendScene     the proxy over one PtSceneId: FBodyInstance -> Pt* marshalling, the frame verbs, the command
 //                            buffer (T_push) and the state pull (T_pull). The timed path calls function pointers directly
 //                            and does not allocate.
-// The host always requests the ABI major it was built with (PT_ABI_VERSION_MAJOR: 0 until the M6 freeze).
+// The host always requests the ABI major it was built with (PT_ABI_VERSION_MAJOR: 1 since the M6 freeze, 0 before).
 #pragma once
 
 #include "CoreTypes.h"
@@ -87,8 +87,9 @@ namespace PhysicsTest
 		// the host's unhandled-exception filter and error mode are re-installed (a module's CRT or engine init may replace
 		// them). Never unloaded (no FreeLibrary).
 		[[nodiscard]] static std::unique_ptr<FPhysicsBackendModule> LoadDll(std::string_view Name, const std::filesystem::path& DllPath, std::string& OutError);
-		// The A1 host checks on a returned table: non-NULL, StructSize >= sizeof(PtBackendApi), AbiVersion major ==
-		// PT_ABI_VERSION_MAJOR, every entry non-NULL.
+		// The A1 host checks on a returned table: non-NULL, StructSize >= PT_ABI_V1_0_API_SIZE (the frozen v1.0 table; a
+		// larger one is a newer module, a smaller one is refused), AbiVersion major == PT_ABI_VERSION_MAJOR, every v1.0 entry
+		// non-NULL (docs/Abi.md 2).
 		[[nodiscard]] static bool ValidateApiTable(const PtBackendApi* Api, std::string& OutError);
 
 		[[nodiscard]] const PtBackendApi& GetApi() const { return *Api; }

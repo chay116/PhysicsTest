@@ -1420,6 +1420,7 @@ inline namespace PT_BACKEND_NS
 					return Kit.SetLastError(PT_E_INVALID_ARG, "EndFrame: OutResult is NULL");
 				}
 				PtFrameResult Frame = {};
+				Frame.NumPushedSteps = PT_INDEX_NONE;   // v1.0: not reported unless the backend fills it (a NATIVE_FRAME_MODEL backend)
 				const PtResult Result = Scene->EndFrame(Frame);
 				if (Result >= 0)
 				{

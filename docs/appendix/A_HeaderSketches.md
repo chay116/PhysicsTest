@@ -129,6 +129,8 @@ UE 전문가가 읽을 때 걸릴 만한 차이를 모았다. 모두 의도한 �
 - 구조체 크기는 MSVC 14.44에서 C와 C++ 양쪽으로 확인했다 **[V]**. 이 판에서 크기가 바뀐 구조체는 없다. `PtBackendInfo`는 필드가 늘었지만 `StructSize`로 버전을 맞추며 `static_assert` 대상이 아니다.
 - 주요 변경: `PT_ABI_VERSION_MAJOR 0`, `PT_ASYNC_DT_SYNC`, 충돌 채널 근거, `PtPhysicalMaterial` 쌍 규칙, `CreateActors` 순서, 스레드 매핑 주석, `PT_CMD_ADD_VELOCITY` 분리, `PtBackendInfo.RequiredEffectiveKeys`.
 
+> **M6 (v1.0 동결):** 아래 초안은 M2 전의 스케치이고 **정본은 소스 헤더** `Source/Runtime/PhysicsTestAbi/Public/PhysicsTestAbi/PtBackendAbi.h`다. v1.0에서 바뀐 것: `PT_ABI_VERSION_MAJOR 1u` / `MINOR 0u`, `PtFrameResult`가 16 B `{NumStepsTaken, EngineErrorBits, NumPushedSteps, Reserved}`, `SET_*_VELOCITY`·`SET_BODY_STATE`는 잠든 바디를 깨움(`PT_CMDF_AUTO_WAKE`는 정보용, nearly zero 속도만 백엔드 정의), 접촉 flag ACTIVE / ACTIVE_APPROX / SPECULATIVE 배타(ACTIVE = 법선 임펄스 또는 push-out), `EndFrame`은 네 필드를 다 쓰고 호스트·Kit이 `NumPushedSteps = PT_INDEX_NONE`을 미리 채움, `PointOn0`/`PointOn1`은 각 셰이프 표면 위. 계약 목록은 [Abi.md](../Abi.md) §9.1이다. M2~M5의 추가(`PT_CMDF_NO_WAKE`, `PT_CONTACT_SLEEPING`, Kit 해제 집합 등)도 소스 헤더에만 있다. M6 수정 라운드 2: 함수 표의 동결된 최소 크기 `PT_ABI_V1_0_API_SIZE`(216 B)와 `PT_API_HAS(Api, Entry)` (호스트는 v1.0 크기 이상의 표를 받는다, Abi.md §9.1 결정 13), `PT_CAP_SLEEP_THRESHOLD_INFO`를 잠정 마스크로, `PtContactPoint::NormalImpulse`의 정의(push-out 포함)와 ACTIVE와의 한 방향 규칙, PointOn의 narrow phase 자세(Chaos는 예측 자세).
+
 ```c
 /* PtBackendAbi.h - pure C11. The ONLY header shared with the Chaos DLL.
    Units: cm, kg, s, rad, Z-up, double.
@@ -1539,6 +1541,7 @@ std::vector<FEffectiveSetting> ParseEffectiveSettings(std::string_view JsonLines
 //   body.damping_formula, body.damping, body.max_angular_velocity, body.max_linear_velocity, body.gyroscopic,
 //   sleep.enabled, sleep.criteria, ccd.enabled, threads.workers, determinism.flag, shape.box_margin (per shape, e.g.
 //   Bullet getMargin()), shape.convex_radius, shape.wrapping, listeners.installed.
+//   [M6 round 1: + command.nearly_zero_velocity_wakes (1 / 0, docs/Abi.md 5.14, 9.1 decision 1): 25 keys]
 // Backend sets: PhysX physx.pcm / stabilization / scratch / tolerances / active_actors / filter_shader / dispatcher;
 //   Jolt jolt.config_string / temp_allocator_bytes; Bullet bullet.max_angvel_compile_time / debug_drawer_attached;
 //   Chaos threads.single_worker / threads.max_num_workers / chaos.threading_mode / chaos.async_dt /
@@ -1706,6 +1709,8 @@ public:
 - UE_RUNTIME 모듈(Chaos)을 쓴 run은 모든 출력과 `exit.json`을 쓰고 flush한 뒤 `TerminateProcess`로 끝낸다. 러너는 프로세스 종료 코드보다 `exit.json`을 믿는다 (확장 M7, 러너 쪽은 확장 M8).
 - 게이트 단계: A0~A7, A9는 M2, A10과 G1~G7, G9, G12는 M6 [MVP]. G0 교차검증, G8(DET1), G10a, G11은 확장 M7, G10b는 확장 M10이다.
 - 적합성 스탬프 키와 comparability key는 확장 M10이다.
+
+> M6 구현의 게이트 인터페이스는 아래 초안과 다르다: `PhysicsTest::Gates::IConformanceGate::Run(const FGateTarget&, FGateRunState&)`(대상 = 백엔드·변형·프로필·리졸브된 설정·허용치, 상태 = G12가 모으는 오류 bit)이고, 게이트 목록은 `GetPhysicsGates()`, 실행은 `RunPhysicsGates`다 (`PhysicsTestConformance/Public/Gates/PhysicsGates.h`). 초안의 `Run(Module, Config)`로는 GLOBAL_SCENE_SETTINGS 모듈의 재초기화와 G12의 누적을 표현할 수 없어서다 ([Progress.md](../Progress.md) M6 §3). M6 수정 라운드 0: `FTolerances::FindAllowedSkip`(등록되지 않은 Skip은 `RunPhysicsGates`가 Fail로 바꾼다), override의 `"registered": "post-run"`, `-Gates=G12`만 골라도 앞 게이트를 함께 돌림, `GateSuiteVersion` 2. 수정 라운드 2: `FTolerances::FindOverride`, `FGateReport::PostRunRegistrations`(conformance.json `post_run_registrations`·`pending_sign_offs`), `GateSuiteVersion` 4.
 
 > M3 구현은 아래 두 초안(`PhysicsTestScenario.h`, `BenchmarkRunner.h`)과 시그니처가 다르다. `BuildScene(FPhysScene&, const FScenarioContext&)`, 파라미터 선언·검증(`GetParamDescs`, `ResolveParams`, `EScenarioParamType`, `GetSeed`), 용량 힌트(`GetCapacity`), `GetDescription`/`GetDefaultFrames`, 정규 JSON(`MakeCanonicalJson`/`ComputeSceneSha256`), `FBenchRunSpec::FromCommandLine`의 bool + 오류 문자열, `FTimingRecorder::Record(timing, sim time, awake)`, static `FClockBuckets`, manifest를 `FRunManifest` 없이 러너 안에서 만드는 것 등이다. 목록과 이유는 [Progress.md](../Progress.md) M3 §3 #17이다. 정본은 소스 헤더다.
 
@@ -1881,7 +1886,7 @@ physx::PxFilterFlags PhysXSimFilterShader(physx::PxFilterObjectAttributes Attrib
                                           physx::PxPairFlags& PairFlags, const void* ConstantBlock, physx::PxU32 ConstantBlockSize);
 
 // ---- PhysXSimEventCallback.h
-class FPhysXSimEventCallback final : public physx::PxSimulationEventCallback { /* viz only; <= 16 points per pair [M]; onWake/onSleep counters */ };
+class FPhysXSimEventCallback final : public physx::PxSimulationEventCallback { /* viz runs or PT_INSTR_CONTACTS; <= 16 points per pair [M]; onWake/onSleep counters */ };
 
 // ---- PhysXSceneConfig.h   (from the variant ini; no substep clamp rule here - the harness FStepPlanner owns it)
 struct FPhysXSceneConfig {
@@ -1933,7 +1938,7 @@ class FPhysScene_Jolt final : public PhysicsTest::Abi::IPhysicsBackendScene {
   //   applied right before Update, docs/Abi.md 7.1.)
   // Sync: GetBodyInterfaceNoLock + GetActiveBodiesUnsafe (M3: no vector copy in T_pull). Prepare: OptimizeBroadPhase +
   //   temp block pre-fault.
-  // Contacts (viz only): lock-free listener, atomic slots in a pre-sized JPH::Array (M3; the draft said mutex).
+  // Contacts (listener in viz runs or with PT_INSTR_CONTACTS): lock-free listener, atomic slots in a pre-sized JPH::Array (M3; the draft said mutex).
 };
 }
 ```

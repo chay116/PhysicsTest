@@ -14,7 +14,7 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | Jolt | 5.6.0 (`e77f1755`) | M3: 벤치·뷰어에서 사용 가능 |
 | Chaos | UE 5.8.3, UBT Program DLL + C ABI | 나중에 직접 구현 |
 
-> **현재 상태 (2026-10-21):** M5(Bullet + PhysX 백엔드)까지 마쳤고 **체크포인트 A**를 끝냈습니다 ([docs/Checkpoints.md](docs/Checkpoints.md)). UE 이름·기본값의 데이터 모델(M1)과 C ABI v0.9 + Kit + Null 백엔드(M2) 위에 Jolt 5.6.0(M3), Bullet 3.25와 PhysX 5.11(UE4 방식 변형 3종 + SDK 기본값, M5)이 같은 ABI로 붙었습니다. 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)를 세 엔진이 같은 `desc_sha256`으로 돌리고, `PhysicsTestBench.exe`가 결과 파일을 씁니다. `PhysicsTestViewer.exe`(M4)는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서로 세 엔진을 보여 줍니다 (엔진 전환, PhysX SdkDefault ↔ UE4Compat은 "재시작 필요"). 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M6(물리 게이트 + ABI 핵심 v1.0 동결)입니다.
+> **현재 상태 (2026-10-21):** M6(물리 게이트 + 게이트 씬 + **ABI 핵심 v1.0 동결** + ChaosBackendGuide 초안)까지 마쳤습니다. Jolt, Bullet, PhysX 변형 4종이 UEParity·Normalized에서 물리 게이트 G1~G7, G9, G12를 ABI로 통과하고 (`PhysicsTest.Gates.*`, `PhysicsTestBench -Conformance` → `conformance.json`), 엔진별 편차는 `Config/Golden/tolerances.json`에 사유와 함께 있습니다. C ABI는 v1.0(major 1)으로 동결했고 조인트·디버그 스냅샷·네이티브 드로만 M9까지 잠정입니다 ([docs/Abi.md](docs/Abi.md)). Chaos 브리지 작성 안내는 [docs/ChaosBackendGuide.md](docs/ChaosBackendGuide.md)입니다. 그 전에 M5(Bullet + PhysX 백엔드)와 **체크포인트 A**를 끝냈습니다 ([docs/Checkpoints.md](docs/Checkpoints.md)). UE 이름·기본값의 데이터 모델(M1)과 C ABI + Kit + Null 백엔드(M2) 위에 Jolt 5.6.0(M3), Bullet 3.25와 PhysX 5.11(UE4 방식 변형 3종 + SDK 기본값, M5)이 같은 ABI로 붙었습니다. 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)를 세 엔진이 같은 `desc_sha256`으로 돌리고, `PhysicsTestBench.exe`가 결과 파일을 씁니다. `PhysicsTestViewer.exe`(M4)는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서로 세 엔진을 보여 줍니다 (엔진 전환, PhysX SdkDefault ↔ UE4Compat은 "재시작 필요"). 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M7(벤치 러너 + 측정 프로토콜)입니다. 게이트를 통과했지만 타이밍은 측정 프로토콜(M7) 전까지 여전히 비공식입니다.
 
 ![뷰어: M3.BoxPile 1k, Jolt UEParity, 섬 표시(잠든 섬은 Black)](docs/images/m4_viewer_boxpile1k_islands.png)
 
@@ -29,8 +29,9 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | [appendix/A_HeaderSketches.md](docs/appendix/A_HeaderSketches.md) | 핵심 헤더 선언 초안 (C ABI, 씬 타입, 백엔드 Kit) |
 | [Progress.md](docs/Progress.md) | 마일스톤별 진행 기록: 만든 것, 완료 기준 결과, 설계와 다르게 한 점, 후속 작업 |
 | [Checkpoints.md](docs/Checkpoints.md) | 체크포인트 A (M4 + M5): 엔진별 시각 확인, S00·정지 접촉·질량 readback, 비공식 BoxPile 타이밍, 발견한 규약 버그와 처리 |
-| [Abi.md](docs/Abi.md) | C ABI 규칙과 함수 표, Kit, 게이트 A0~A10 |
-| [Scenes.md](docs/Scenes.md) | 씬 카탈로그: 씬 ID별 정의(바디, 배치, 프레임, 윈도, 판정, 측정값) |
+| [Abi.md](docs/Abi.md) | C ABI v1.0 (핵심 동결판): 규칙과 함수 표, Kit, 게이트 A0~A10·G 게이트, 동결 때 정한 계약 |
+| [Scenes.md](docs/Scenes.md) | 씬 카탈로그: 씬 ID별 정의(바디, 배치, 프레임, 윈도, 판정, 측정값), M6 게이트 씬 9개 |
+| [ChaosBackendGuide.md](docs/ChaosBackendGuide.md) | (초안, M6) Chaos 브리지 작성 안내: 빌드, 초기화 순서, 스레드, 바디 생성 순서, 질량·머티리얼·마진, 동기 모드, 종료 규칙, Null 백엔드를 템플릿으로 |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 빌드 때 받아 오는 의존성 9개와 라이선스·고지 의무 |
 
 ## 빌드 환경
@@ -94,7 +95,10 @@ Tools\ctest.cmd --preset dev
 | 테스트 | 확인하는 것 |
 |---|---|
 | `PhysicsTest.Automation` | `PhysicsTestAutomation.exe`(doctest)의 모든 단위 테스트를 한 프로세스에서 실행 |
-| `PhysicsTest.Unit.<Area>` | 같은 exe를 `-tc=PhysicsTest.<Area>.*`로 영역별 실행: `Core`(UE 회전·합성 순서, SHA-256/FNV, FParse, `FRandomStream` 골든 값, UTF-8), `Config`(ini 문법, CVar 우선순위), `Types`(UE 필드·기본값, 32채널 충돌 필터, 조인트 프리셋), `BodyUtils`(질량 규칙), `StepPlanner`(tick mode 고정값), `Analytic`(`dt_engine`, S00 기준값), `Profile`(ini 계층, Origin, 변형 키 제한, `-ini:`/`-ExecCmds`), `PhysScene`(프레임 상태기계, 두 frame driver, 자유낙하 픽스처, 명령, 타이밍 버킷, 하네스 CVar 가드), `Abi`(ABI 게이트 A0~A7·A10을 static Null과 `PtBackend_Null.dll` 두 경로로, A0~A7을 SDK 백엔드(Jolt, Bullet, PhysX)로, Kit 상태 분리·가드, ABI 호출 비용 기록), `BackendCommon`(단위 계수표, 캡슐 축(UE4 `U2PSphylBasis` 포함), Bullet damping 변환과 UE 감쇠 순서, 결합 규칙과 packed 모드, 접촉 규약과 가동성 순위, compound 래핑 분류, FNV-1a, ODR), `Backend`(레지스트리, 마샬링, effective 설정 파서), `Scenario`(씬 레지스트리, 파라미터, `scene_sha256`, BoxPile 배치, `desc_sha256`이 엔진·엔진 키와 무관함), `SdkBackend`(레지스트리의 모든 SDK 엔진: S00 자유낙하, 네이티브 프리미티브, 정지 접촉 스냅샷, kinematic 원점 속도, 용량 힌트, Null과 같은 명령 결과, 질량 텐서, 체크포인트 A 표(엔진·변형마다 S00, 정지 접촉 normal, 질량 readback)), `BulletBackend`(M5: 마진 readback, effective 키, 래핑, 정지 접촉 임펄스, 잠든 섬 접촉, 감쇠 순서, 각속도 한계, kinematic, 중력 변경, 풀 넘침, 섬, 전역 결합 규칙), `PhysXBackend`(M5: 변형 4종의 씬, 한 프로세스의 UE4Compat 계열과 SdkDefault 거부, dispatcher 해시 동일성, UE4Compat readback, 필터 셰이더 진리표, 오류 bit, 옵션 검증, 잠든 섬 접촉, 변형 간 `desc_sha256`). 걸러진 테스트가 0개이면 실패로 칩니다 |
+| `PhysicsTest.Unit.<Area>` | 같은 exe를 `-tc=PhysicsTest.<Area>.*`로 영역별 실행: `Core`(UE 회전·합성 순서, SHA-256/FNV, FParse, `FRandomStream` 골든 값, UTF-8), `Config`(ini 문법, CVar 우선순위), `Types`(UE 필드·기본값, 32채널 충돌 필터, 조인트 프리셋), `BodyUtils`(질량 규칙), `StepPlanner`(tick mode 고정값), `Analytic`(`dt_engine`, S00 기준값), `Profile`(ini 계층, Origin, 변형 키 제한, `-ini:`/`-ExecCmds`), `PhysScene`(프레임 상태기계, 두 frame driver, 자유낙하 픽스처, 명령, 타이밍 버킷, 하네스 CVar 가드), `Abi`(ABI 게이트 A0~A7·A10을 static Null과 `PtBackend_Null.dll` 두 경로로 (v1.0: major 0 요청 거부, `NumPushedSteps`), A0~A7을 SDK 백엔드(Jolt, Bullet, PhysX)로, Kit 상태 분리·가드, ABI 호출 비용 기록), `BackendCommon`(단위 계수표, 캡슐 축(UE4 `U2PSphylBasis` 포함), Bullet damping 변환과 UE 감쇠 순서, 결합 규칙과 packed 모드, 접촉 규약과 가동성 순위, compound 래핑 분류, FNV-1a, ODR), `Backend`(레지스트리, 마샬링, effective 설정 파서), `Scenario`(씬 레지스트리, 파라미터, `scene_sha256`, BoxPile 배치, `desc_sha256`이 엔진·엔진 키와 무관함, M6 게이트 씬의 `Config/Golden/scene_hashes.json` 대조), `SdkBackend`(레지스트리의 모든 SDK 엔진: S00 자유낙하, 네이티브 프리미티브, 정지 접촉 스냅샷, kinematic 원점 속도, 용량 힌트, Null과 같은 명령 결과, 질량 텐서, 체크포인트 A 표(엔진·변형마다 S00, 정지 접촉 normal, 질량 readback), v1.0 계약(잠든 바디에 쓴 속도는 깨움, 접촉 점이 각 셰이프 표면 위·flag 배타, 깬 바디의 유지 접촉 버림)), `BulletBackend`(M5: 마진 readback, effective 키, 래핑, 정지 접촉 임펄스, 잠든 섬 접촉, 감쇠 순서, 각속도 한계, kinematic, 중력 변경, 풀 넘침, 섬, 전역 결합 규칙), `PhysXBackend`(M5: 변형 4종의 씬, 한 프로세스의 UE4Compat 계열과 SdkDefault 거부, dispatcher 해시 동일성, UE4Compat readback, 필터 셰이더 진리표, 오류 bit, 옵션 검증, 잠든 섬 접촉, 변형 간 `desc_sha256`). 걸러진 테스트가 0개이면 실패로 칩니다 |
+| `PhysicsTest.Gates.{G1,G1b,G2,G3,G4,G5,G6,G7,G9,G12}` | (M6, 세 프리셋) 물리 게이트를 Null과 레지스트리의 모든 SDK 엔진 × 변형(Jolt.Default, Bullet.Default, PhysX UE4Compat/-TGS/-Stab/SdkDefault) × UEParity·Normalized로 ABI를 통해 돈다. 허용치와 엔진별 등록 편차는 `Config/Golden/tolerances.json`. 씬 정의와 측정값은 [docs/Scenes.md](docs/Scenes.md) §2.4~§2.12 |
+| `PhysicsTest.Gates.ToleranceFileIsComplete` | (M6) 게이트가 읽는 모든 허용치 키가 `tolerances.json`에 있고, 03 M6 기본값과 등록 편차(예: PhysX G4 반발 속도 모델 1, 실행 뒤 등록 표시)가 그 값이며, 사유 없는 값·override·허용 Skip·규칙은 로드되지 않음, 가장 구체적인 override가 이김, Skip은 Null만 허용 |
+| `PhysicsTest.Gates.SelectionRules` | (M6 수정 라운드 0) `RunPhysicsGates`의 규칙: 등록되지 않은 Skip은 Fail, `-Gates=G12`만 골라도 앞의 게이트를 돌리고 G12 보고만 냄 |
 | `PhysicsTest.Unit.DebugDraw` | (M4, 세 프리셋) 디버그 드로 파이프라인: 단위 와이어 메시 선분 수(box 12, sphere 128, capsule 68, circle 8), Chaos 상태·bounds·섬 색, 9단계 그리기 순서(`PostTickDebugDraw`), 캡슐 HalfHeight = HalfLength + R와 박스 half extent, 접촉 원 6/3·normal 30·비활성 ×0.75, COM 축 30·화살표 10, `FIslandBuilder`, 큐 예산·영역, Null 호스트 스냅샷, 합성 스냅샷의 조인트, Jolt의 점별 Phi·잠든 섬 접촉·요소 인덱스 |
 | `PhysicsTest.Unit.Viewer` | (M4, dbg·dev) `PhysicsTestViewerTests.exe`: 카메라(비행, 가속·감쇠, E/Q, 시점, 휠, FOV, F), `FSceneView`(hFOV 90 major 축, reversed-Z), 세션(일시정지, 한 스텝 = FrameCount +1, Null ↔ Jolt 전환), 재시작 규칙과 재실행 명령줄, 콘솔 `open`/`restart`(M5), PhysX 변형 전환 규칙(UE4Compat 계열은 같은 프로세스, SdkDefault는 RestartRequired, M5), Console의 읽기 전용 하네스 CVar |
 | `PhysicsTest.Unit.ViewerRenderer` | (M4, dbg·dev) 오프스크린 D3D11 픽셀 색 (하드웨어 D3D11 장치가 없으면 건너뜀) |
@@ -103,6 +107,9 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Unit.CommandLineUtf8` | 한글 인자(`-PtUtf8Probe=한글 경로`)가 `wmain`을 거쳐 UTF-8로 `FCommandLine`에 들어감 |
 | `PhysicsTest.Bench.List` | `PhysicsTestBench.exe -List`가 성공하고 `M3.BoxPile`을 보여 줌 (시나리오 레지스트리가 `/WHOLEARCHIVE`로 들어옴) |
 | `PhysicsTest.Bench.M3Matrix` | Null, Jolt, Bullet, PhysX `UE4Compat`/`-TGS`/`-Stab`/`SdkDefault` × UEParity/Normalized × `M1.SingleBoxDrop` a/b, `M3.BoxPile` 1k/5k (30 프레임, 56 run, 1 run = 1 process): 결과 파일 세 개, 행 수, `status ok`, 비공식 표시, `shape.wrapping` = 0, 모든 엔진·변형의 `desc_sha256`이 Null과 같음 (M5) |
+| `PhysicsTest.Bench.Conformance` | (M6) `PhysicsTestBench -Conformance`를 Null, NullDll, Jolt, Bullet, PhysX 변형 4종 × UEParity·Normalized(16 fresh process)로 돌려 `conformance.json`(schema `physicstest.conformance/1`, ABI 1.0, tolerances SHA-256, 게이트 10개 통과)을 확인하고, ABI 게이트 한 개씩(`-Gates=A0`/`A7`/`A10` Null, `A3` NullDll)도 돈다. NO_REINIT 시험 대역(`PT_NULL_DLL_NO_REINIT=1`인 NullDll)으로 A0~A7·A10 각각과 물리 게이트를 프로세스 하나씩 돌고, 섞인 `-Gates=` 목록이 거부되는지 본다 (M6 수정 라운드 1). `-Describe`/`-List`의 stdout이 순수 JSON인지도 본다 (40 run·검사) |
+| `PhysicsTest.Bench.ConformanceG12Injected` | (M6 수정 라운드 1) 시험 전용 `-InjectEngineErrorBits=0x1`을 `-Conformance -Gates=G12`에 주면 G12가 Fail, 종료 코드 2, `conformance.json`에 `injected_engine_error_bits` |
+| `PhysicsTest.Bench.ExitSceneNeedsSleeping` | (M6) sleep을 끈 프로필(Normalized)에서 `S08.StartAsleep`은 종료 코드 2 |
 | `PhysicsTest.Bench.ExitCapacityBullet` | (M5) Bullet manifold 풀을 64로 줄인 BoxPile 1k: heap fallback이 용량 bit 0x1(`errors.capacity_bits` 0x3)이 되어 종료 코드 5 |
 | `PhysicsTest.Bench.Exit{BackendUnavailable,BadCommandLine,UnknownScenario,UnknownParam,BadSeed,BadEngineOption,PreflightMissingKey,HashEvery,EngineError,Capacity,EngineErrorOverCapacity}` | 벤치 종료 코드 6, 2, 2, 2, 2, 2, 2, 2, 3, 5, 3. BadEngineOption(변형에 없는 Jolt 키)과 PreflightMissingKey(`-RequireEffectiveKey=no.such.key`)는 `manifest.json`의 `status = preflight_failed`도 확인한다 (PreflightMissingKey는 `frames_run` 0). HashEvery: `HashEvery=1`은 M7 recorder 몫이라 거부. EngineError: 시험용 `-InjectEngineErrorBits=0x200`(Null). Capacity: temp allocator를 1 MiB로 줄인 Jolt BoxPile 1k (manifest의 용량 bit 묶음 확인). EngineErrorOverCapacity: 둘 다 있으면 엔진 오류(3)가 이기고 manifest에 두 묶음이 남음 |
 | `PhysicsTest.Smoke.{Jolt,Bullet,PhysX}` | SDK 스모크: SI, Z-up, g = 9.80, damping 0, sleep 끔. z(60) = 5.0183328 m ± 2e-5. Jolt는 설정 문자열(AVX2, Profile/Debug Renderer/FP Exceptions 없음)도 검사. `RunSmoke.cmake`가 `PT_SMOKE_JSON` 줄이 유효한 JSON인지도 확인 |
@@ -140,7 +147,7 @@ Tools\ctest.cmd --preset dev
 
 ### 백엔드 경계 (M2)
 
-모든 엔진은 순수 C ABI `Source/Runtime/PhysicsTestAbi/Public/PhysicsTestAbi/PtBackendAbi.h`(v0.9, major 0)를 거칩니다. 백엔드는 header-only Kit(`PtBackendKit.h`)로 썽크·스레드 가드·phase 상태기계·입력 검증을 얻고, 백엔드 타깃마다 `PT_BACKEND_NS`를 다르게 정의합니다. 규칙과 함수 표는 [docs/Abi.md](docs/Abi.md)에 있습니다.
+모든 엔진은 순수 C ABI `Source/Runtime/PhysicsTestAbi/Public/PhysicsTestAbi/PtBackendAbi.h`(**v1.0, major 1, M6에 핵심 동결**. 그 뒤로는 append-only)를 거칩니다. 백엔드는 header-only Kit(`PtBackendKit.h`)로 썽크·스레드 가드·phase 상태기계·입력 검증을 얻고, 백엔드 타깃마다 `PT_BACKEND_NS`를 다르게 정의합니다. 규칙과 함수 표는 [docs/Abi.md](docs/Abi.md)에 있습니다.
 
 - `Null`: SDK 없는 기준 백엔드(semi-implicit Euler, UE damping, 충돌 없음, `PT_CAP_NATIVE_FRAME_MODEL`). static으로 링크되고, 같은 소스가 `out/<preset>/bin/PtBackend_Null.dll`(export `PT_GetBackendApi` 하나)로도 빌드됩니다. 레지스트리 이름은 `Null`(static)과 `NullDll`(DLL)입니다.
 - 백엔드 목록은 configure 때 생성되는 `PT::BackendRegistry`(`out/<preset>/Generated/PTBackendRegistry.gen.cpp`)가 정적 진입점을 직접 참조합니다. `Jolt`(M3), `Bullet`·`PhysX`(M5)가 들어 있습니다.
@@ -160,7 +167,12 @@ PhysicsTestBench.exe -List
 PhysicsTestBench.exe -Backend=Jolt -Profile=Normalized -Scenario=M3.BoxPile -Param:N=5000 [-Frames=600] [-Threads=1]
                      [-BackendProfile=Default] [-Session=<이름>] [-Out=<run 디렉터리>]
 PhysicsTestBench.exe -Describe -Backend=Jolt -Scenario=M1.SingleBoxDrop -Param:Case=b
+PhysicsTestBench.exe -Conformance -Backend=PhysX -BackendProfile=UE4Compat -Profile=UEParity [-Gates=G1,G4] [-Out=<디렉터리>]
+PhysicsTestBench.exe -Conformance -Backend=Null -Gates=A0
+PhysicsTestBench.exe -SceneHashes=Config/Golden/scene_hashes.json
 ```
+
+- **적합성 (M6):** `-Conformance`는 물리 게이트(기본 G1~G7, G9, G12, `-Gates=`로 고름)나 ABI 게이트 하나(A0~A7, A10)를 그 프로세스의 백엔드로 돌려 `conformance.json`을 씁니다 (대상, exe SHA-256, ABI 버전, tolerances·프로필·변형 SHA-256, 게이트 씬 `scene_sha256`, 게이트별 결과와 노트). 실패한 게이트가 있으면 종료 코드 2입니다 (`conformance.json`은 남습니다). `PT_MODULE_NO_REINIT` 백엔드(Chaos)는 프로세스마다 ABI 게이트 하나 또는 물리 게이트를 돌고, 둘 이상의 ABI 게이트나 섞은 목록은 종료 코드 2로 거부됩니다. `-SceneHashes=`는 그 빌드 구성의 게이트 씬 해시를 `scene_hashes.json`에 씁니다. `-List`, `-Describe`, `-SceneHashes`의 로그는 stderr로 가고 stdout은 순수 JSON입니다.
 
 - **출력** (`Saved/Results/<session>/<ULID>/`, `-Out`으로 바꿀 수 있음): `timings.csv`(프레임마다 T_push/T_step/T_pull/T_frame와 QPC tick), `manifest.json`(빌드·백엔드·프로필·씬 해시·플랫폼·윈도별 통계·마지막 프레임 `h_native`), `effective_settings.jsonl`(Prepare 전), `effective_settings_after.jsonl`(마지막 프레임 뒤), `scene.json`.
 - **종료 코드:** 0 ok, 2 잘못된 명령줄·프로필·씬·파라미터, `HashEvery`/`CountersEvery` > 0(M7), 백엔드가 거부한 엔진 키 또는 필수 effective 키 누락, 3 엔진 오류, 5 용량 초과(백엔드가 effective 키 `errors.capacity_bits`로 알린 bit만 있을 때. 다른 오류 bit가 함께 있으면 3), 6 백엔드 없음.
@@ -245,10 +257,10 @@ cmake/            PTOptions, PTToolchain, PTFlagProfiles, PTModules, DumpBuildFl
 cmake/ThirdParty/ Jolt, PtBullet, PhysX, PhysXBootstrap, ImGui, SmallDeps, PtFetch (.cmake)
 Config/           BasePhysicsTest.ini, Profiles/UEParity.ini, Profiles/Normalized.ini (프로필 ini 계층, M1 초안),
                   Profiles/Backend/Jolt.Default.ini (M3), Bullet.Default.ini, PhysX.{UE4Compat,UE4Compat-TGS,
-                  UE4Compat-Stab,SdkDefault}.ini (백엔드 변형, M5)
+                  UE4Compat-Stab,SdkDefault}.ini (백엔드 변형, M5), Golden/tolerances.json, Golden/scene_hashes.json (M6)
 Source/Runtime/   Core (UE 관용구 최소 구현, ini, CVar), PhysicsTestAbi (C ABI, Kit), BackendCommon (단위·결합·접촉 규약,
                   셰이프 래핑 규칙, 빌드 자기보고), PhysicsCore (UE 데이터 모델, BodyUtils, FStepPlanner, 프로필 리졸버,
-                  FPhysScene), PhysicsTestConformance (ABI 게이트), PhysicsTestScenarios (씬과 레지스트리),
+                  FPhysScene), PhysicsTestConformance (ABI 게이트, 물리 게이트 M6), PhysicsTestScenarios (씬과 레지스트리, 게이트 씬 M6),
                   PhysicsTestBenchCore (클럭 버킷, 통계, 호스트 사실), PhysicsTestBenchmark (벤치 실행, 결과 파일),
                   PhysicsDebugDraw (Chaos Debug Draw 파이프라인, M4), D3D11DebugRenderer (뷰어 렌더러, M4)
 Source/Backends/  NullBackend (static + DLL), JoltBackend (M3), BulletBackend, PhysXBackend (M5)

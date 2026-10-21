@@ -1,7 +1,9 @@
 /* PtBackendAbi.h - pure C11. The ONLY header shared with the Chaos DLL (02_Architecture 7, A.1, docs/Abi.md).
    Units: cm, kg, s, rad, Z-up, double.
-   v0.9 (major 0) until the M6 freeze. CORE entries freeze as v1.0 at M6. Entries marked PROVISIONAL(M9) (joints,
-   debug snapshot, native draw) may still change until M9; every such change bumps PT_ABI_PROVISIONAL_REVISION.
+   v1.0 (major 1): the CORE is FROZEN since M6 (intended tag abi-v1.0, docs/Abi.md 2). v1.x is append-only: fields after
+   StructSize / Stride-guarded tails, entries at the end of PtBackendApi, new bits and enum values; anything else bumps the
+   major and every DLL backend (Chaos) is rebuilt. Entries marked PROVISIONAL(M9) (joints, debug snapshot, native draw) may
+   still change until M9; every such change bumps PT_ABI_PROVISIONAL_REVISION.
 
    Calling rules (enforced by PtBackendKit.h on the backend side, docs/Abi.md):
      - every entry returns PtResult; no C++ exception crosses the boundary (SEH is not swallowed)
@@ -30,11 +32,11 @@ extern "C" {
 #  define PT_STATIC_ASSERT(c, m) _Static_assert(c, m)
 #endif
 
-/* v0.9 (major 0) until the M6 freeze; the abi-v1.0 tag sets MAJOR 1 / MINOR 0. v1.x is append-only.
-   The host always calls PT_GetBackendApi(PT_ABI_VERSION_MAJOR) with the major it was built with,
-   so the M2.5 spike DLL (built against major 0) and the host agree. */
-#define PT_ABI_VERSION_MAJOR 0u
-#define PT_ABI_VERSION_MINOR 9u
+/* v1.0 since the M6 freeze (v0.9 = major 0 before it). The host always calls PT_GetBackendApi(PT_ABI_VERSION_MAJOR)
+   with the major it was built with: a module built against another major (an M2.5 spike DLL of major 0) returns NULL
+   and is refused; rebuild it against this header. */
+#define PT_ABI_VERSION_MAJOR 1u
+#define PT_ABI_VERSION_MINOR 0u
 #define PT_ABI_VERSION ((PT_ABI_VERSION_MAJOR << 16) | PT_ABI_VERSION_MINOR)
 #define PT_ABI_PROVISIONAL_REVISION 1u                 /* PROVISIONAL(M9) layout revision; frozen at M9 */
 #define PT_GET_BACKEND_API_SYMBOL "PT_GetBackendApi"   /* the only export of a DLL backend */
@@ -180,7 +182,8 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 #define PT_CAP_NATIVE_ISLANDS            PT_CAP(20)  /* PROVISIONAL(M9). Jolt does not declare it: GetIslandIndexInternal is an
                                                         internal, per-step API (MotionProperties.h:258 [V]); the viewer uses
                                                         the harness FIslandBuilder */
-#define PT_CAP_SLEEP_THRESHOLD_INFO      PT_CAP(21)
+#define PT_CAP_SLEEP_THRESHOLD_INFO      PT_CAP(21)  /* PROVISIONAL(M9): the debug snapshot carries per-body sleep thresholds and
+                                                        counters (PT_SNAP_SLEEP_INFO); no producer or consumer before M9 */
 #define PT_CAP_BOUNDS                    PT_CAP(22)  /* PROVISIONAL(M9) */
 #define PT_CAP_JOINT_SNAPSHOT            PT_CAP(23)  /* PROVISIONAL(M9) */
 #define PT_CAP_NATIVE_DEBUG_DRAW         PT_CAP(24)  /* PROVISIONAL(M9). Bullet: viz runs only - the drawer is attached only in viz
@@ -190,7 +193,7 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 /* The PROVISIONAL(M9) capabilities: a host reads them as absent when PtBackendInfo.ProvisionalRevision differs. */
 #define PT_CAP_PROVISIONAL_MASK (PT_CAP_JOINT_BALL | PT_CAP_JOINT_HINGE | PT_CAP_CONTACT_POINTS | PT_CAP_CONTACT_NORMAL_IMPULSE | \
                                  PT_CAP_CONTACT_FRICTION_IMPULSE | PT_CAP_CONTACT_ACTIVE_EXACT | PT_CAP_NATIVE_ISLANDS | \
-                                 PT_CAP_BOUNDS | PT_CAP_JOINT_SNAPSHOT | PT_CAP_NATIVE_DEBUG_DRAW)
+                                 PT_CAP_SLEEP_THRESHOLD_INFO | PT_CAP_BOUNDS | PT_CAP_JOINT_SNAPSHOT | PT_CAP_NATIVE_DEBUG_DRAW)
 
 /* ---- Module flags ---- */
 #define PT_MODULE_ONE_PER_PROCESS         0x01u
@@ -354,8 +357,14 @@ typedef struct PtConstraintCreateInfo {   /* PROVISIONAL(M9) */
    push (Harness). Commands to a released body, and a body index released twice, are rejected by the Kit. */
 #define PT_CMD_SET_GLOBAL_POSE          1u   /* Transform = actor pose (teleport) */
 #define PT_CMD_SET_KINEMATIC_TARGET     2u   /* Transform = target actor pose (see the frame rules above) */
-#define PT_CMD_SET_LINEAR_VELOCITY      3u   /* Vector, cm/s */
-#define PT_CMD_SET_ANGULAR_VELOCITY     4u   /* Vector, rad/s */
+#define PT_CMD_SET_LINEAR_VELOCITY      3u   /* Vector, cm/s. v1.0: wakes a sleeping dynamic body whatever PT_CMDF_AUTO_WAKE says
+                                                (UE 5.8.3 SetV / SetW, SingleParticlePhysicsProxy.h:322-340, :1217-1229 [V]),
+                                                the zero vector included. One exception is backend-defined: a vector that is
+                                                not zero but nearly zero (every component <= 1e-4) - UE leaves the body asleep
+                                                (SetVBase's !IsNearlyZero(), :331 [V]); Null and the SDK backends wake it. The
+                                                backend declares which in the generic effective key
+                                                command.nearly_zero_velocity_wakes (1 wakes, 0 stays asleep; G6 checks it) */
+#define PT_CMD_SET_ANGULAR_VELOCITY     4u   /* Vector, rad/s; wakes like SET_LINEAR_VELOCITY */
 #define PT_CMD_ADD_IMPULSE              5u   /* AddImpulse_AssumesLocked: kg*cm/s */
 #define PT_CMD_ADD_ANGULAR_IMPULSE      6u   /* AddAngularImpulseInRadians_AssumesLocked */
 #define PT_CMD_ADD_FORCE                7u   /* AddForce_AssumesLocked (PT_CMDF_ACCEL_CHANGE, PT_CMDF_ALLOW_SUBSTEPPING, PT_CMDF_NO_WAKE) */
@@ -363,7 +372,8 @@ typedef struct PtConstraintCreateInfo {   /* PROVISIONAL(M9) */
 #define PT_CMD_WAKE_UP                  9u
 #define PT_CMD_PUT_TO_SLEEP            10u
 #define PT_CMD_SET_BODY_STATE          11u   /* harness-only full state write (PT_CAP_STATE_WRITE): Transform = pose,
-                                                Vector = linear, Vector2 = angular velocity */
+                                                Vector = linear, Vector2 = angular velocity. v1.0: wakes a sleeping dynamic
+                                                body (a teleport plus velocities, as UE's SetX / SetV) */
 #define PT_CMD_ADD_VELOCITY            12u   /* AddVelocity_AssumesLocked: cm/s, mass-independent */
 #define PT_CMD_ADD_ANGULAR_VELOCITY    13u   /* AddAngularVelocityInRadians_AssumesLocked */
 #define PT_CMDF_ALLOW_SUBSTEPPING  (1u << 0)  /* forces / torques: informational only. UE5 ignores bAllowSubstepping
@@ -371,9 +381,12 @@ typedef struct PtConstraintCreateInfo {   /* PROVISIONAL(M9) */
                                                 NATIVE_FRAME_MODEL backend; the host uses it only for the UE4
                                                 FPhysSubstepTask rule of the Harness driver (UE4PhysSubstep) */
 #define PT_CMDF_ACCEL_CHANGE       (1u << 1)
-#define PT_CMDF_AUTO_WAKE          (1u << 2)  /* SET_LINEAR / ANGULAR_VELOCITY: wake a sleeping body. SET_GLOBAL_POSE:
-                                                informational for a NATIVE_FRAME_MODEL backend - UE5's teleport always
-                                                wakes a sleeping body (SetX, SingleParticlePhysicsProxy.h:240-251 [V]) */
+#define PT_CMDF_AUTO_WAKE          (1u << 2)  /* informational in v1.0 (UE's bAutoWake): every pose and velocity write wakes a
+                                                sleeping dynamic body - UE5's teleport (SetX, SingleParticlePhysicsProxy.h:
+                                                240-251 [V]) and velocity writes (SetV / SetW, :322-340, :362-380 [V]; the
+                                                nearly-zero velocity is backend-defined, see SET_LINEAR_VELOCITY); the
+                                                engine interface supports only bAutoWake = true (ensure,
+                                                ChaosEngineInterface.cpp:626-658 [V]) */
 #define PT_CMDF_NO_WAKE            (1u << 3)  /* ADD_FORCE / ADD_TORQUE: do not wake; a body that is asleep when the command
                                                 is applied ignores it (the host already sent UE's game-thread wake). Without
                                                 it the command is UE's AddForce / AddTorque and wakes a sleeping body */
@@ -397,7 +410,16 @@ typedef struct PtBodyState {
 /* ReadMassProperties: what the engine has. The principal frame (CenterOfMassLocal.Rotation) and the order of the
    principal moments are the engine's (Jolt sorts them largest first), so compare R diag(I) R^T, not the diagonals. */
 typedef struct PtMassProperties { double Mass; PtVec3 InertiaDiagonal; PtTransform CenterOfMassLocal; } PtMassProperties;  /* 88 B */
-typedef struct PtFrameResult { uint32_t NumStepsTaken; uint32_t EngineErrorBits; } PtFrameResult;
+/* EndFrame's result (v1.0: 16 B; there is no StructSize, so the reserved word is the only room v1.x has). EndFrame writes
+   all four fields; the host and the Kit pre-fill NumPushedSteps = PT_INDEX_NONE before the call.
+   NumStepsTaken   the engine steps actually advanced this frame (= FStepPlan::NumSteps; the host stops on a mismatch)
+   EngineErrorBits backend-defined engine error bits; the backend's capacity bits are named by the effective key
+                   errors.capacity_bits (docs/Abi.md 5.14). 0 = none
+   NumPushedSteps  a NATIVE_FRAME_MODEL backend: the steps pushed to the solver this frame (UE AdvanceAndDispatch_External's
+                   NumSteps = FStepPlan::NumPushedSteps; AsyncBlockMode or MinDeltaTime can make it differ from
+                   NumStepsTaken). PT_INDEX_NONE = not reported (the Kit pre-fills it; SDK backends run one step per frame)
+   Reserved        0 */
+typedef struct PtFrameResult { uint32_t NumStepsTaken; uint32_t EngineErrorBits; uint32_t NumPushedSteps; uint32_t Reserved; } PtFrameResult;
 typedef struct PtStepStats {
 	uint32_t StructSize;
 	int32_t NumActiveBodies, NumSleepingBodies, NumContactPairs, NumContactPoints, NumIslands;   /* -1 = n/a */
@@ -417,6 +439,17 @@ typedef struct PtMemoryStats { int64_t LiveBytes, PeakBytes, NumAllocs, NumFrees
 #define PT_SNAP_NATIVE_ISLANDS  (1u << 4)
 #define PT_SNAP_SLEEP_INFO      (1u << 5)
 #define PT_SNAP_NATIVE_DRAW     (1u << 6)
+/* v1.0 flag rule (docs/Abi.md 9.1 decision 2, checked by G3): at most one of ACTIVE / ACTIVE_APPROX / SPECULATIVE.
+   ACTIVE = the solver acted on the point in its last step - a normal impulse, or a push-out (Chaos bIsActive: NetPushOut or
+   NetImpulse not nearly zero, ChaosDebugDraw.cpp:1453 [V]) - on PT_CAP_CONTACT_ACTIVE_EXACT backends; ACTIVE_APPROX = Phi
+   <= 0 on a backend without exact solver results; SPECULATIVE = Phi > 0 and neither of the other two. A command that wakes
+   a body of a sleeping pair drops that pair's kept (SLEEPING) points until the next step.
+   ACTIVE and NormalImpulse (PT_CAP_CONTACT_NORMAL_IMPULSE) are tied one way only (M6 round 2): NormalImpulse > eps implies
+   ACTIVE, ACTIVE implies NormalImpulse >= -eps (G3, tolerances.json G3.normal_impulse_eps). ACTIVE may carry a zero normal
+   impulse (Chaos: friction only, or a push-out whose velocity the solve cancelled, PBDCollisionSolver.h:1178-1196 [V]).
+   Bullet limit: ACTIVE = getAppliedImpulse() > 0; the split-impulse push (penetration beyond
+   SplitImpulsePenetrationThreshold) is not written back to the manifold point, so a point corrected only by that push has
+   neither ACTIVE nor an impulse (docs/Abi.md 7.1). */
 #define PT_CONTACT_ACTIVE           (1u << 0)
 #define PT_CONTACT_ACTIVE_APPROX    (1u << 1)   /* Jolt: phi <= 0 */
 #define PT_CONTACT_SPECULATIVE      (1u << 2)
@@ -435,10 +468,16 @@ typedef struct PtParticleSnapshot {
 } PtParticleSnapshot;   /* 224 B */
 
 typedef struct PtContactPoint {
-	PtVec3 PointOn0, PointOn1;       /* PointOn1 is on the plane owner */
+	PtVec3 PointOn0, PointOn1;       /* PointOn0 on Body0's surface, PointOn1 on Body1's (the plane owner), at the pose the
+	                                    step's narrow phase used (the start-of-step pose for Jolt, Bullet and PhysX; Chaos'
+	                                    predicted pose P, Q after Integrate); (PointOn0 - PointOn1) . Normal = Phi (v1.0,
+	                                    docs/Abi.md 7.1, 9.1 decision 3) */
 	PtVec3 Normal;                   /* lies on Body1, points toward Body0 (ContactPoint.h:49-53 [V]) */
 	double Phi;                      /* < 0 = penetrating */
-	double NormalImpulse;            /* NaN if n/a */
+	double NormalImpulse;            /* kg cm/s along Normal, on Body0, from the solver's last step, position corrections
+	                                    included as impulses (Chaos: (NetImpulse + NetPushOut / Dt) . n, >= 0 by the solver's
+	                                    clamp); NaN if n/a (no PT_CAP_CONTACT_NORMAL_IMPULSE). Bullet: getAppliedImpulse(),
+	                                    without the split-impulse push (see the flag rule) */
 	PtVec3 FrictionImpulse;          /* impulse on Body0; NaN if n/a */
 	uint32_t Body0, Body1;           /* Body0 = the more mobile body; ties -> lower index */
 	uint16_t Shape0, Shape1;
@@ -490,6 +529,7 @@ PT_STATIC_ASSERT(sizeof(PtBodyCommand) == 120, "abi");
 PT_STATIC_ASSERT(sizeof(PtBodyState) == 112, "abi");
 PT_STATIC_ASSERT(sizeof(PtMassProperties) == 88, "abi");
 PT_STATIC_ASSERT(sizeof(PtStepStats) == 96, "abi");
+PT_STATIC_ASSERT(sizeof(PtFrameResult) == 16, "abi");
 PT_STATIC_ASSERT(sizeof(PtContactPoint) == 128, "abi");
 PT_STATIC_ASSERT(sizeof(PtParticleSnapshot) == 224, "abi");
 PT_STATIC_ASSERT(sizeof(PtJointSnapshot) == 168, "abi");
@@ -531,6 +571,14 @@ typedef struct PtBackendApi {
 	PtResult (PT_CALL *GetLastErrorMessage)(PtTextBuffer* Out);
 	/* v1.x: append new entries here only */
 } PtBackendApi;
+/* The v1.0 table (25 entries, 216 B) is the frozen minimum: a host accepts any table with StructSize >= PT_ABI_V1_0_API_SIZE
+   and the host's major, so a v1.0 module (the Chaos bridge) still loads after a v1.x host appends entries. An entry
+   beyond the module's StructSize is absent (NULL): a host reads an appended entry only through PT_API_HAS(Api, Entry), and
+   only the 25 v1.0 entries must be non-NULL (docs/Abi.md 2). */
+#define PT_ABI_V1_0_API_SIZE ((uint32_t)(offsetof(PtBackendApi, GetLastErrorMessage) + sizeof(void*)))
+#define PT_API_HAS(Api, Entry) ((Api)->StructSize >= offsetof(PtBackendApi, Entry) + sizeof((Api)->Entry) && (Api)->Entry != NULL)
+PT_STATIC_ASSERT(PT_ABI_V1_0_API_SIZE == 216, "abi: the v1.0 table size is frozen");
+PT_STATIC_ASSERT(sizeof(PtBackendApi) >= PT_ABI_V1_0_API_SIZE, "abi: v1.x only appends entries");
 typedef const PtBackendApi* (PT_CALL *PtGetBackendApiFn)(uint32_t RequestedAbiMajor);   /* NULL for an unsupported major */
 /* static backends: PT_GetBackendApi_Null / _Jolt / _Bullet / _PhysX;  DLL backends: PT_GetBackendApi */
 #ifdef __cplusplus

@@ -19,6 +19,19 @@ namespace PhysicsTest
 
 	[[nodiscard]] const char* ToString(EGateResult Result);
 
+	// A registered value (tolerances.json "registered": "post-run") that a gate's verdict used, with its sign-off ("pending"
+	// until the lead accepts it). conformance.json lists them so that M8 / M10 tooling can flag a pass that rests on an
+	// unsigned deviation without parsing notes (M6 round 2).
+	struct FGatePostRunRegistration
+	{
+		std::string Key;       // "G5.hold_speed_cms"
+		std::string Engine;    // the override's engine / variant / profile ("" = any)
+		std::string Variant;
+		std::string Profile;
+		double Value = 0.0;
+		std::string SignOff;   // "pending" or who accepted it and when
+	};
+
 	struct FGateReport
 	{
 		std::string Gate;                 // "A0".."A10" (no A8 before M14), "G0".."G12"
@@ -27,6 +40,7 @@ namespace PhysicsTest
 		int32 NumChecks = 0;
 		std::vector<std::string> Failures;
 		std::vector<std::string> Notes;   // informative values (not pass / fail)
+		std::vector<FGatePostRunRegistration> PostRunRegistrations;   // physics gates: the post-run registrations used (once each)
 
 		// Records one check; a failed one turns the report into Fail.
 		bool Check(bool bOk, const std::string& What);

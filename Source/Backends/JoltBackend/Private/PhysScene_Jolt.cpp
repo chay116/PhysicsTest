@@ -1053,22 +1053,24 @@ namespace PhysicsTest::JoltBackend
 					Body.SetAngularVelocityClamped(ToJoltVector(Cmd.Vector));
 				}
 				MarkDirty(Cmd.Body);
-				if ((Cmd.Flags & PT_CMDF_AUTO_WAKE) != 0)
-				{
-					Wake();
-				}
+				// ABI v1.0 contract (docs/Abi.md 5.10): a velocity write wakes a sleeping body whatever PT_CMDF_AUTO_WAKE says, as
+				// UE 5.8.3's game-thread SetV / SetW do (SingleParticlePhysicsProxy.h:322-340, :362-380, :1217-1244 [V]).
+				Wake();
 			}
 			break;
 		case PT_CMD_SET_BODY_STATE:
+			// ABI v1.0: a state write is a teleport plus velocities and wakes a sleeping dynamic body (UE's SetX / SetV); a static
+			// body is only moved.
 			BodyInterface.SetPositionAndRotation(Record.Id, JPH::RVec3(ToJoltLength(Cmd.Transform.Translation)), ToJoltQuat(Cmd.Transform.Rotation),
 				JPH::EActivation::DontActivate);
 			if (bDynamic)
 			{
 				Body.SetLinearVelocityClamped(ToJoltLength(Cmd.Vector));
 				Body.SetAngularVelocityClamped(ToJoltVector(Cmd.Vector2));
+				Wake();
 			}
 			MarkDirty(Cmd.Body);
-			NoteKeptContactCommand(Cmd.Body, false, true);   // DontActivate: a sleeping body stays asleep with stale kept points
+			NoteKeptContactCommand(Cmd.Body, false, true);   // the pose changed: the body's kept points are stale
 			break;
 		case PT_CMD_ADD_IMPULSE:
 		case PT_CMD_ADD_VELOCITY:
@@ -1545,17 +1547,25 @@ namespace PhysicsTest::JoltBackend
 		snprintf(Text, sizeof(Text), "%.9g m", static_cast<double>(Settings.mSpeculativeContactDistance));
 		Out.AppendEffective("contact.speculative_distance", Text, "m", GScale.ToCm(static_cast<double>(Settings.mSpeculativeContactDistance)), "cm", "READBACK");
 		// The combine functions the PhysicsSystem holds (PhysicsSystem::GetCombineFriction / GetCombineRestitution): READBACK
-		// (M5 round 0; they were COMPILE_TIME).
+		// (M5 round 0; they were COMPILE_TIME). canonical = engine objects not holding the host's rule (docs/Abi.md 5.14 rule
+		// keys): 0 when the PhysicsSystem holds the UE combine callback, 1 otherwise; G9 compares it with 0.
 		const bool bUEFriction = System->GetCombineFriction() == &CombineFrictionUE;
 		const bool bUERestitution = System->GetCombineRestitution() == &CombineRestitutionUE;
 		Out.AppendEffective("material.friction_combine",
 			bUEFriction ? "UE combine mode per pair (larger mode wins), PtCombine dynamic value (PhysicsSystem::GetCombineFriction)" : "other (not the UE combine function)",
-			"", NaN, "", "READBACK");
+			"", bUEFriction ? 0.0 : 1.0, "count", "READBACK");
 		Out.AppendEffective("material.restitution_combine",
 			bUERestitution ? "UE combine mode per pair (larger mode wins), PtCombine (PhysicsSystem::GetCombineRestitution)" : "other (not the UE combine function)", "",
-			NaN, "", "READBACK");
+			bUERestitution ? 0.0 : 1.0, "count", "READBACK");
 		Out.AppendEffective("material.static_friction_rule", "dynamic_only", "", NaN, "", "COMPILE_TIME");
-		Out.AppendEffective("body.damping_formula", "v *= max(0, 1 - c*dt) per step (Jolt MotionProperties)", "", NaN, "", "COMPILE_TIME");
+		// canonical = the formula id of docs/Abi.md 5.14: 1 = UE order (Jolt integrates the forces, then multiplies by max(0, 1 - c dt),
+		// MotionProperties::ApplyForceTorqueAndDragInternal [V]); G1b checks it.
+		Out.AppendEffective("body.damping_formula", "UE order: v = (v + a dt) * max(0, 1 - c dt) per step (Jolt MotionProperties)", "formula_id", 1.0, "formula_id",
+			"COMPILE_TIME");
+		// docs/Abi.md 9.1 decision 1: every velocity / state write activates a sleeping body, a nearly zero one too (canonical 1);
+		// G6 checks the declared behaviour.
+		Out.AppendEffective("command.nearly_zero_velocity_wakes", "1: a nearly zero velocity write wakes a sleeping body (BodyInterface::ActivateBody on every write)",
+			"bool", 1.0, "bool", "COMPILE_TIME");
 
 		// Per-body values read back from the engine (dynamic bodies).
 		FRange Linear;

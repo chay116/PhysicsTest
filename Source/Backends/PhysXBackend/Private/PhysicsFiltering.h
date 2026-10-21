@@ -11,7 +11,7 @@
 // (EPDF_KinematicKinematicPairs; the scene keeps such pairs, PxPairFilteringMode::eKEEP, so the shader decides); a
 // kinematic-static pair and a pair that does not block mutually (each body's block mask has the other's channel) follow
 // FPhysXFilterShaderRules below; every other pair is eCONTACT_DEFAULT, plus eDETECT_CCD_CONTACT when a shape has EPDF_CCD
-// and the touch / contact-point notifications when a shape has EPDF_ContactNotify (viz runs only, 02 9.4).
+// and the touch / contact-point notifications when a shape has EPDF_ContactNotify (only when the listener is installed: viz runs or PT_INSTR_CONTACTS, 02 9.4).
 //
 // The design text (02 8.2) does not say how UE4 filters those two kinds of pair, so both are [M] rules kept switchable
 // through variant keys (the user checks them in UE 4.27, 03 2) and passed to the shader as PxSceneDesc::filterShaderData
