@@ -161,24 +161,29 @@ D:\PhysicsTest\
                            Containers/StringConv (UTF-16 <-> UTF-8, wmain argv, M1),
                            Misc/PtThirdPartyIncludesStart.h / PtThirdPartyIncludesEnd.h (harness side)
       PhysicsTestAbi/Public/PhysicsTestAbi/  PtBackendAbi.h (C)  PtBackendKit.h  PtAbiCodec.h (M14)
-      BackendCommon/Public/                  PtUnitScale.h  PtContactConvention.h  PtCombine.h  PtDamping.h
-                                             PtShapeWrapping.h  PtBuildReport.h  PtThirdPartyIncludes.h  (header-only)
+      PhysicsTestAbi/Private/CompatCheck/    PtAbiUeCompatCheck.cpp (Kit with UE flags)  PtAbiC11Check.c (ABI header as C11)  (M2; own CMakeLists)
+      BackendCommon/Public/                  PtTypes.h  PtUnitScale.h  PtContactConvention.h  PtCombine.h  PtDamping.h  (M2)
+                                             PtShapeWrapping.h (M3)  PtBuildReport.h  PtThirdPartyIncludes.h  (header-only)
       PhysicsCore/
         Public/PhysScene.h
         Public/PhysicsEngine/    ShapeElem SphereElem BoxElem SphylElem ConvexElem AggregateGeom BodySetup
                                  BodyInstance ConstraintInstance ConstraintUtils PhysicsSettings BodyUtils
         Public/PhysicalMaterials/PhysicalMaterial.h
         Public/Physics/          PhysicsInterfaceTypes PhysicsInterface PhysicsBackend StepPlanner PhysSceneStats
-                                 PhysicsProfile PhysicsDebugSnapshot AnalyticReference (dt_engine, M1)
+                                 PhysicsProfile PhysicsConsoleVariables (M1) PhysicsDebugSnapshot AnalyticReference (dt_engine, M1)
+                                 EffectiveSettings (DumpEffectiveSettings parser + required keys, M2)
         Private/Physics/Matrix33 (3x3 helpers: Jacobi, quat <-> matrix, M1)
       PhysicsDebugDraw/    DebugDrawQueue DebugDrawSettings PhysicsDebugDraw DebugDrawRenderer IslandBuilder (no D3D)
       D3D11DebugRenderer/  D3D11RHI D3D11DebugDrawRenderer SceneView; Private/WireMeshes Shaders.hlsl.inl Capture
       PhysicsTestScenarios/ Private/Scenarios/{Gates,Overhead,Behavior,Perf,Extended}
       PhysicsTestBenchCore/    ClockBuckets (M3)  HostEnvironment ProcessSpawner (M7)  ThreadCensus (M10)
-      PhysicsTestConformance/  Abi/A0..A10  Gates/G0..G12  FConformanceSuite
+      PhysicsTestConformance/  Public/ConformanceGate.h  Public/Abi/AbiGates.h (A0-A7, A10; M2)  Public/Fixtures/FreeFallFixture.h (M2)
+                               Private/Abi/AbiGates.cpp  AbiFrameModelGate.cpp  Gates/G0..G12 (M6)  FConformanceSuite (M6)
       PhysicsTestBenchmark/    BenchmarkRunner RunManifest Recorders Preflight
     Backends/
-      NullBackend/   NullBackend.cpp (+ NullBackendDll.cpp -> PtBackend_Null.dll, DLL path test)
+      CMakeLists.txt (backends + the generated PT::BackendRegistry, M2)
+      NullBackend/   Private/ NullBackend.h NullBackend.cpp (static entry) NullBackendDll.cpp (-> PtBackend_Null.dll, DLL path)
+                     Public/NullBackend/NullBackendEntry.h (M2)
       JoltBackend/   Private/ JoltIncludes.h PhysScene_Jolt.* JoltLayers.* JoltCombine.* JoltContactListener.*
       BulletBackend/ Private/ BulletIncludes.h PhysScene_Bullet.* BulletCombine.* BulletKinematics.*
       PhysXBackend/  Private/ PhysXIncludes.h PhysXSupport.* PhysicsInitialization.cpp PhysXCPUDispatcher.*
@@ -188,7 +193,9 @@ D:\PhysicsTest\
                                Panels/{Engines,Inspector,Stats,Console}  (+ Profiler, OutputLog: M12)
     Programs/  PhysicsTestBench/  PhysicsTestViewer/  PhysicsTestAutomation/  PtBackendServer/ (M14, conditional)
     Tests/     SdkSmoke/ (PtSmoke{Jolt,Bullet,PhysX}.exe, M0)  Probes/ (CTest probes: includes, flag leak, BuildFlags,
-               refs clean, longest path, pin guard, negative-scale fatal, M0)
+               refs clean, longest path, pin guard, negative-scale fatal, M0; harness CVars, M1; check modules, Kit
+               namespaces, backend isolation, Kit needs PT_BACKEND_NS, M2)
+               AbiTwin/ (second static test backend, PT_BACKEND_NS=AbiTwin: Kit state isolation and guards, M2)
   Unreal/ChaosBridgeHost/          UBT only, implemented by the user
     ChaosBridgeHost.uproject       (name differs from the target, UEBuildTarget.cs:1926-1946 [V])
     .gitignore                     Binaries/ Intermediate/ Saved/ DerivedDataCache/ *.generated.h *.gen.cpp *.dll *.pdb
@@ -202,7 +209,7 @@ D:\PhysicsTest\
           ptbench/requirements.lock  wheelhouse/ (offline only, ignored)
   .venv/  (ignored, repository root; Tools/ptbench analysis packages)
   docs/   01_Feasibility.md  02_Architecture.md  03_WorkPlan.md  04_DecisionLog.md  appendix/A_HeaderSketches.md
-          (planned) Abi.md  TimingContract.md  Profiles.md  Scenes.md  ResultsSchema.md  ChaosBackendGuide.md  ChaosSpike.md  Checkpoints.md
+          Abi.md (M2 draft)  (planned) TimingContract.md  Profiles.md  Scenes.md  ResultsSchema.md  ChaosBackendGuide.md  ChaosSpike.md  Checkpoints.md
   out/<preset>/   (ignored, short root)
   Saved/          (ignored) Logs/ Results/<session>/<run_id>/ Conformance/ Screenshots/
 ```
@@ -291,7 +298,8 @@ PT::Editor             STATIC     -> PT::D3D11DebugRenderer, PT::Benchmark (read
 PhysicsTestBench.exe       -> PT::Benchmark, PT::BackendRegistry, WHOLE_ARCHIVE(PT::Scenarios)   (no renderer)
 PhysicsTestViewer.exe      -> PT::Editor,    PT::BackendRegistry, WHOLE_ARCHIVE(PT::Scenarios)
 PhysicsTestAutomation.exe  -> doctest, PT::Conformance, PT::PhysicsDebugDraw, PT::BackendRegistry, WHOLE_ARCHIVE(...)
-PtAbiUeCompatCheck         OBJECT  ABI header as C11; Kit + trivial backend with /GR- /EHs-c- _HAS_EXCEPTIONS=0 /W4 /WX
+PtAbiUeCompatCheck         OBJECT  Kit + trivial backend with /GR- /EHs-c- _HAS_EXCEPTIONS=0 PT_ABI_NO_EXCEPTIONS /W4 /WX
+PtAbiC11Check              OBJECT  ABI header as C11 /W4 /WX (M2: a separate C target)
 PhysicsTestChaos_UBT_{Development,Test}   custom target (PT_WITH_CHAOS=ON, not in ALL) -> Tools/Chaos/build_chaos.cmd
 ```
 
@@ -308,6 +316,14 @@ PhysicsTestChaos_UBT_{Development,Test}   custom target (PT_WITH_CHAOS=ON, not i
 - 빌드 후 `D:\PhysicsRefs`의 `git status --porcelain`이 비어 있다. 소스 트리에 .dxil, .spv, PxConfig.h가 없다.
 - 컴파일 프로브: Core를 먼저 include한 TU가 하네스 측 third-party 헤더 쌍(§8.1)을 거쳐 doctest, ImGui, ImPlot, nlohmann/json을 include해도 컴파일된다. doctest는 `check()`라는 멤버 함수를 선언하기 때문이다.
 - `PT_BACKEND_NS`가 정의되지 않은 백엔드 TU는 `#error`로 실패한다.
+
+**M2 구현 메모 [V]**
+- 지금 있는 타깃: `PT::Abi`(INTERFACE), `PtAbiC11Check`·`PtAbiUeCompatCheck`(OBJECT, ALL에 포함), `PT::BackendCommon`(→ PT::Abi), `PT::PhysicsCore`(→ PT::Core, PT::Abi; PRIVATE PT::Json), `PT::Backend::Null`(STATIC) + `PtBackend_Null`(SHARED, 같은 소스), `PT::BackendRegistry`(생성, → PT::PhysicsCore + 각 백엔드), `PT::Conformance`(→ PT::PhysicsCore), 시험용 `PtBackendAbiTwin`(STATIC, `PT_BACKEND_NS=AbiTwin`).
+- `PT::Conformance → PT::Scenarios, PT::BenchCore`는 두 타깃이 생기는 M3부터다. M2의 Conformance는 PhysicsCore만 본다.
+- `FPhysicsBackendRegistry`의 클래스와 로더는 PhysicsCore에 있고, 정적 목록(`GetBackendRegistryEntries`)만 생성된 `PT::BackendRegistry`가 정의한다. FPhysScene을 만드는 프로그램은 PT::BackendRegistry를 링크한다. 프로필만 쓰는 프로그램(`PtProbeHarnessCVars`)은 링커가 PhysScene 오브젝트를 끌어오지 않으므로 그대로 링크된다.
+- 하네스 C TU(`PtAbiC11Check.c`)는 `BuildFlags.json`에서 `/std:c11`을 기대한다 (`DumpBuildFlags.cmake`의 `harness_c`).
+- `PtAbiUeCompatCheck`가 있는 디렉터리는 `CMAKE_CXX_FLAGS`에서 CMake 기본 `/EHsc`를 뺀다. `/EHs-c-`를 뒤에 붙이기만 하면 D9025 명령줄 경고가 난다 (MSVC 14.44로 재현 [V]). 이 설정은 디렉터리 범위라서 두 검사 타깃만 있는 `PhysicsTestAbi/Private/CompatCheck/`(자체 CMakeLists)에 둔다. 같은 모듈에 나중에 들어올 C++ 타깃(M14 `PtAbiCodec`)이 `/EHsc` 없이 컴파일되지 않게 하기 위해서다 (M2 수정 라운드 1).
+- CTest 프로브 4개를 더했다: `PhysicsTest.Probe.CheckModules`(A9), `KitNamespaces`(링커 맵), `BackendIsolation`(백엔드 TU의 include 경로에 Core·PhysicsCore 없음, `PT_BACKEND_NS` 정의), `KitNeedsBackendNs`(위의 `#error`. M2 수정 라운드부터 `compile_commands.json`의 그 TU 컴파일 줄을 스크립트가 직접 실행한다. 빌드 트리를 다시 부르지 않는다).
 
 ### 4.6 빌드 자기보고 (G0) [MVP M0 생성, 교차검증 확장 M7]
 
@@ -418,7 +434,22 @@ UE 소스를 읽는 사람이 바로 눈치챌 항목을 모두 적는다. "일�
 | 28 | ini 섹션 이름 | `FConfigFile`이 `TMap<FString, FConfigSection>`이라 대소문자를 무시한다 (ConfigCacheIni.h:502, :574 [V]) | 대소문자 무시. 처음 쓴 철자를 유지하고, 정규 키는 정규 철자를 쓴다 | 일치 (M1 수정 라운드에서 고침) |
 | 29 | CVar 우선순위 충돌 | 더 낮은 우선순위의 Set은 로그만 남기고 무시한다 | `IConsoleVariable::Set`은 false를 돌려주고 (M1 §3 #15), `FProfileResolver::ApplyConsoleVariables`는 거부된 CVar마다 이름·현재 값·현재 SetBy를 오류로 돌려준다 | 의도적 차이 (적용되지 않은 값이 적용된 것처럼 기록되지 않게) |
 | 30 | 숫자 텍스트의 inf/nan | `FCString::Atof`와 ImportText가 `inf`/`nan`을 받는다 | `FParse` float/double, float CVar, ini `GetFloat`/`GetDouble`, 프로필 값은 유한수만 받는다 | 의도적 차이 (프로필 오타가 엔진 상태에 inf/nan으로 들어가지 않게) |
-| 31 | 프레임 델리게이트 | UE5: `SetUpForFrame` 다음 `FChaosScene::StartFrame` → `FPhysScene_Chaos::OnStartFrame(MDeltaTime)`이 `OnPhysScenePreTick`과 `OnPhysSceneStep`을 clamp된 프레임 dt로 한 번씩 broadcast한다 (ChaosScene.cpp:331-374, PhysScene_Chaos.cpp:2272-2316 [V]). `OnPhysScenePostTick`은 dt 없이 EndFrame에서 (ChaosScene.cpp:576 [V]) | PreTick은 `StartFrame` 안(phase SetUp, 스텝 전)에서 `FStepPlan::FrameDeltaTime`(= MDeltaTime)으로 한 번. Harness driver의 `OnPhysSceneStep`은 엔진 스텝마다 스텝 dt로 (UE4 PhysX substep 방식). PostTick은 같은 프레임 dt를 넘긴다 | PreTick은 일치 (M1 수정 라운드에서 고침. 전에는 SetUpForFrame 전에 원래 dt로 불렀다). Step은 의도적 차이 (Harness driver, §9.1) |
+| 31 | 프레임 델리게이트 | UE5: `SetUpForFrame` 다음 `FChaosScene::StartFrame` → `FPhysScene_Chaos::OnStartFrame(MDeltaTime)`이 `OnPhysScenePreTick`과 `OnPhysSceneStep`을 clamp된 프레임 dt로 한 번씩 broadcast한다 (ChaosScene.cpp:331-374, PhysScene_Chaos.cpp:2272-2316 [V]). `OnPhysScenePostTick`은 dt 없이 EndFrame에서 (ChaosScene.cpp:576 [V]) | PreTick은 `StartFrame` 안(phase SetUp, 스텝 전)에서 `FStepPlan::FrameDeltaTime`(= MDeltaTime)으로 한 번. `OnPhysSceneStep`도 두 driver 모두 PreTick 바로 뒤에 프레임 dt로 한 번 (스텝이 없는 프레임 포함). Harness driver의 `UE4PhysSubstep` 규칙(PhysX UE4Compat)만 서브스텝마다 서브스텝 dt로 부른다 (UE4 PhysX substep 방식 [M]). PostTick은 같은 프레임 dt를 넘긴다 | 일치 (PreTick은 M1 수정 라운드, Step은 M2 수정 라운드 1에서 고침. 전에는 Harness driver가 UE5 규칙에서도 스텝마다 불러, 거기서 더한 힘이 1+2+…+N 스텝에 누적됐다) |
+| 32 | `-ExecCmds` 안의 `name=value` | UE 콘솔은 공백에서만 나눈다 (`GetTextSection`). `p.X=0`은 콘솔 객체 이름으로 찾지 못해 조용히 무시된다 | `name value`와 `name=value`를 둘 다 받는다 (`IConsoleManager::ProcessUserConsoleInput`, 리졸버의 `-ExecCmds`). README 예시는 UE 형식으로 쓴다 | 의도적 차이 (M2에서 기록. 하네스 줄을 UE에 그대로 옮기면 `name=value` 항목은 효과가 없다) |
+| 33 | Native driver의 `OnPhysSceneStep` | UE5 `OnStartFrame`이 PreTick 다음에 Step을 프레임 dt(`MDeltaTime`)로 한 번 broadcast한다 (PhysScene_Chaos.cpp:2272-2316 [V]) | 두 driver 모두 같다: 프레임당 한 번, `FStepPlan::FrameDeltaTime`. `UE4PhysSubstep` 규칙만 #31대로 서브스텝마다 | 일치 (M2) |
+| 34 | `FBodyInstance::SetLinearVelocity(V, bAddToCurrent)` | `bAddToCurrent`이면 `GetLinearVelocity_AssumesLocked`(GT 파티클 속도, 같은 프레임에 앞서 쓴 값 포함)에 더한 값을 설정한다 (BodyInstance.cpp:3640-3643 [V]) | UE처럼 `FPhysicsInterface::GetLinearVelocity_AssumesLocked`에 더한다. 이 읽기는 명령 큐를 flush하고 전체 상태를 당기므로 같은 프레임에 앞서 쓴 속도와 스텝이 없는 프레임에 쓴 속도를 본다. 각속도도 같다 | 일치 (M2 수정 라운드 1에서 고침. 전에는 마지막으로 당겨 온 `FBodyInstanceState`에 더해 앞서 쓴 값을 보지 못했다) |
+| 35 | `-ini:` 형식 오류 | 잘못된 쌍을 조용히 건너뛴다 (ConfigCacheIni.cpp:2475-2478 [V]) | 로드 오류로 거부한다 (M1 `PhysicsTest.Profile.CommandLineIniOverride`) | 의도적 차이 (M1에서 테스트로 고정, M2에서 기록) |
+| 36 | `-ini:`로 준 CVar의 우선순위 | UE는 `-ini:` 덮어쓰기를 ini 데이터로 적용한다 | `ECVF_SetByConsoleVariablesIni`. `-ExecCmds`만 `ECVF_SetByConsole` (`FProfileResolver::GetConsoleVariableSetBy`) | 일치 (M2에서 고침. M1은 Origin이 CommandLine이면 모두 Console로 적용했다) |
+| 37 | 하네스 물리 CVar와 씬 | CVar는 프로세스 전역이고 씬은 그것을 읽기만 한다 | 같은 전역 CVar를 쓰되, `FPhysScene`이 생성 시 자기 설정의 값(없으면 기본값)으로 맞추고 더 높은 우선순위의 낡은 값은 경고와 함께 덮는다. `SpawnBody`·`FlushDeferredActors`에서 바뀌었으면 Fatal. 그래서 동시에 살아 있는 씬은 이 CVar 값이 같아야 한다 (M12 나란히 비교 전에 씬 로컬로 옮긴다, Progress M2 §5) | 하네스 추가 (M2. 설정에 기록·해시된 값과 실제 질량·sleep 임계가 어긋나지 않게) |
+| 38 | 프레임 안의 힘 (`bAllowSubstepping`) | UE5는 `bAllowSubstepping`을 쓰지 않는다 (ChaosEngineInterface.cpp:932-950, :1024-1037). push한 프레임의 모든 스텝이 첫 스텝의 가속도를 받고 (`CopySubstepData`, ChaosMarshallingManager.cpp:103-111, :325-342), push가 없는 프레임의 힘은 다음 push에서 1/ExternalSteps로 평균된다 (PhysicsSolverBase.cpp:623-646, PBDRigidsSolver.cpp:1582) [V] | Native 백엔드(Null)와 Harness driver의 UE5 규칙이 같다. 두 driver 모두 힘을 스텝을 push하는 프레임까지 호스트가 들고 있다가 그 push에서 보낸다 (Native는 한 번, Harness는 스텝마다). `PT_CMDF_ALLOW_SUBSTEPPING`은 정보용이다. Harness driver의 `UE4PhysSubstep` 규칙(PhysX UE4Compat)만 UE4처럼 `bAllowSubstepping` 힘을 낸 서브스텝부터 모든 서브스텝, 나머지를 낸 서브스텝 하나에 준다 [M]. Harness driver는 평균 가중치를 가속도가 아니라 힘에 곱한다 | 일치 (M2 수정 라운드에서 고침. 전에는 Native에서도 UE4 규칙을 썼다). 가중치 위치는 의도적 차이 (AsyncFixed에서 마지막 비트) |
+| 39 | kinematic 목표의 중간 스텝 | solver substep이면 k번째 스텝이 현재 자세에서 1/(N−k)만큼 `FVec3::Lerp` + float `FRotation3f::Slerp`, 아니면 첫 스텝에 목표 (`PseudoFraction`, PhysicsSolverBase.cpp:250, PBDRigidsEvolutionGBF.cpp:1203-1220 [V]) | Null과 Harness driver(UE5 규칙)가 같은 규칙. 회전 Slerp는 double이고, Shoemake 식을 하네스가 직접 쓴 것이다 (동작 기준은 UE `FQuat::Slerp`, UnrealMath.cpp:1226-1255 [V]: 짧은 호, \|cos\| ≥ 1 − 1e-4에서 선형 가중치). Harness driver의 UE4 규칙은 `bAllowSubstepping` 목표만 프레임 시작 자세에서 (k+1)/N로 Lerp/Slerp하고, 나머지는 첫 서브스텝에 닿는다 [M]. Harness driver는 같은 프레임의 텔레포트 자세를 보간 시작점으로 쓴다 (#43) | 일치 (M2 수정 라운드에서 고침. 전에는 절대 alpha (k+1)/N의 NLerp). float과 double Slerp의 차이는 의도적 차이 (중간 스텝 회전만 다르고 마지막 자세는 같다) |
+| 40 | `AddForce`/`AddTorque`와 sleep | GT 프록시의 `AddForce`/`AddTorque`가 Sleeping 바디를 언제나 Dynamic으로 바꾼다 (0 벡터 포함, SingleParticlePhysicsProxy.h:706-720, :757-771 [V]) | 호스트가 그 깨우기를 힘을 낸 자리에 `PT_CMD_WAKE_UP`으로 큐에 넣고, 힘은 push 때 `PT_CMDF_NO_WAKE`로 보낸다 (두 driver 같음). 그 사이에 재운 바디는 깨지 않고 힘도 받지 않는다. 플래그 없는 `PT_CMD_ADD_FORCE`는 UE의 `AddForce`대로 Null이 언제나 깨운다 | 일치 (M2 수정 라운드에서 0 벡터, 수정 라운드 1에서 호출 순서를 고침. 전에는 push 끝의 힘이 그 앞의 PutToSleep 뒤에 다시 깨웠고, 스텝이 없는 프레임에서는 깨우지 않고 힘을 버렸다) |
+| 41 | 해제한 바디에 걸린 명령 | 프록시와 함께 버려진다 | `FPhysScene::ReleaseBody`가 그 바디의 힘·kinematic 목표를, `FPhysicsBackendScene::ReleaseActor`가 큐의 명령을 버린다 | 일치 (M2 수정 라운드에서 고침. 전에는 다음 push가 Fatal로 끝났다) |
+| 42 | 씬 수준 동사와 진입점 | `FPhysScene_Chaos::AddForce_AssumesLocked`/`AddTorque_AssumesLocked(FBodyInstance*, ..., bAllowSubstepping, bAccelChange)`, `SetKinematicTarget_AssumesLocked(FBodyInstance*, TM, bAllowSubstepping)` (PhysScene_Chaos.h:232-238 [V])이 `FPhysicsInterface`로 넘긴다 (PhysScene_Chaos.cpp:1670-1713 [V]). `FBodyInstance::SetBodyTransform`은 kinematic + `ETeleportType::None`이면 씬 동사를 부르고, 텔레포트면 `FPhysicsInterface::SetKinematicTarget_AssumesLocked` 뒤 `SetGlobalPose_AssumesLocked` (BodyInstance.cpp:2804-2827 [V]) | 같은 이름의 씬 동사. 방향만 반대다: `FPhysicsInterface`의 힘·토크·kinematic 목표가 소유 씬으로 가서 씬의 프레임 규칙을 탄다. `SetBodyTransform`은 UE5와 같은 호출을 한다. 인터페이스 경로의 kinematic 목표는 `bAllowSubstepping` false (UE4에서 서브스테퍼를 거치지 않던 경로 [M], UE4 규칙에서만 읽는다) | 일치 (M2 수정 라운드 1. 전에는 `EnqueueForce`/`EnqueueKinematicTarget`이었고 `SetBodyTransform`·인터페이스의 목표가 씬 규칙을 건너뛰어 Harness substepping에서 첫 서브스텝에 목표에 닿았다) |
+| 43 | kinematic 바디의 텔레포트 | `SetGlobalPose_AssumesLocked`가 kinematic이면 자세를 목표로도 두고 V·W를 0으로 한다 (ChaosEngineInterface.cpp:2550-2557 [V]). `SetX`는 잠든 바디를 bAutoWake와 무관하게 깨운다 (SingleParticlePhysicsProxy.h:240-251 [V]) | Null `PT_CMD_SET_GLOBAL_POSE`가 같다 (kinematic: 목표 = 자세, V·W = 0. dynamic: 언제나 깨움, `PT_CMDF_AUTO_WAKE`는 정보용). 호스트는 같은 프레임의 대기 목표를 텔레포트 자세로 바꾸고, Harness driver는 그 뒤의 목표를 그 자세에서 보간한다 (`FPhysScene::TeleportKinematic_AssumesLocked`) | 일치 (M2 수정 라운드 1) |
+| 44 | PutToSleep 뒤의 힘 | GT `SetObjectState(Sleeping)`이 dynamics dirty 표시를 지워 그 앞의 힘을 push하지 않는다. 뒤에 힘이나 임펄스가 오면 다시 dirty가 되어 앞의 힘도 함께 간다 (ParticleHandle.h:3755-3766 [V]) | 호스트가 같은 규칙을 씬의 힘 목록에 적용한다 (`MarkDynamicsClean_AssumesLocked`/`MarkDynamicsDirty_AssumesLocked`). sleep을 끈 씬은 PUT_TO_SLEEP을 무시하므로 지우지 않는다. 임펄스 쪽(PutToSleep 앞의 임펄스가 버려지는 것)은 Null이 재현하지 않는다 | 힘은 일치, 임펄스는 의도적 차이 (M2 수정 라운드 1, Progress M2 §7) |
+| 45 | 스텝이 없는 프레임의 명령 | GT 쓰기는 호출하는 순간 GT 파티클에 들어가고, 다음 push에서 PT로 간다 | 두 driver 모두 매 프레임 push한다. Harness driver는 스텝이 없는 프레임(dt ≤ MinPhysicsDeltaTime, push가 없는 AsyncFixed 프레임)에도 큐를 flush한다 (힘·kinematic 목표는 규칙대로 씬이 들고 있다) | 일치 (M2 수정 라운드 1. 전에는 Harness driver가 그 프레임의 큐를 다음 스텝까지 들고 있어 읽기와 bAddToCurrent가 보지 못했다) |
+| 46 | 토크의 월드 관성 시점 | GT `AddTorque`가 호출 시점의 GT 회전으로 각가속도로 바꾸고, push의 모든 스텝이 그 각가속도를 쓴다 (`CopySubstepData`) | Native(Null)는 push 때 한 번 바꾼다. Harness driver는 스텝마다 토크를 보내므로 SDK 엔진이 스텝마다 그 스텝의 회전으로 바꾼다 | 의도적 차이: 같은 프레임에 토크 뒤 같은 바디를 텔레포트하면 Native가 UE와 다르다. Substepping에서 빠르게 도는 바디는 두 driver가 각속도 1e-2 rad/s 수준으로 갈린다 (A10 (d), Progress M2 §7) |
 
 ### 5.3 질량 규칙 (`BodyUtils::ComputeMassProperties`, BodyUtils.cpp [V])
 
@@ -532,7 +563,7 @@ Tick(DeltaSeconds) ...   (§9)
 - **모듈 상태기계:** `Loaded -> Ready -> Terminated`. NO_REINIT 플래그가 있으면 재초기화를 거부한다.
 - **수명:**
   - 한 번 로드하면 FreeLibrary하지 않는다.
-  - Init과 Term은 각각 1회.
+  - Init 뒤에 Term. `PT_MODULE_NO_REINIT`이 없으면 Term 뒤에 다시 Init할 수 있다 (A0가 Null을 다시 초기화한다). 있으면 두 번째 Init은 `PT_E_BAD_STATE`다.
   - UE_RUNTIME 모듈은 프로세스당 최대 1개.
 
 ### 7.2 함수 테이블 (`PtBackendApi`)
@@ -564,7 +595,7 @@ Tick(DeltaSeconds) ...   (§9)
 | 21 | ComputeNativeStateHash | Idle | 비타이밍 | FNV-1a, 하네스 순서 | X/R double | 핵심 |
 | 22 | SetOption | Ready/Idle | - | key/value (scene 0 = 모듈) | IConsoleVariable::Set | 핵심 |
 | 23 | DumpEffectiveSettings | Ready/Idle | 비타이밍 | JSON lines {key, native, native_unit, canonical, unit, source} | CVars + SolverOptions + PtChaosDefaults | 핵심 |
-| 24 | GetMemoryStats | 항상 | 비타이밍 | | 프로세스 수준만 (FMalloc) | 핵심 |
+| 24 | GetMemoryStats | Ready (씬은 Idle) | 비타이밍 | 모듈 수준(0)도 Ready에서만 | 프로세스 수준만 (FMalloc) | 핵심 |
 | 25 | GetLastErrorMessage | 항상 | - | | | 핵심 |
 
 ### 7.3 Kit (`PtBackendKit.h`, header-only)
@@ -581,7 +612,8 @@ Tick(DeltaSeconds) ...   (§9)
   - `FTextWriter`, stride 뷰
 
 **ODR과 링크 규칙**
-- Kit와 BackendCommon의 모든 정의는 `namespace PhysicsTest::Abi { inline namespace PT_BACKEND_NS { ... } }` 안에 둔다. `PT_BACKEND_NS`는 백엔드 타깃마다 PRIVATE 정의로 준다 (Null, Jolt, Bullet, PhysX; UBT에서는 Chaos).
+- Kit와 BackendCommon의 모든 정의는 `namespace PhysicsTest::Abi { inline namespace PT_BACKEND_NS { ... } }` 안에 둔다. `PT_BACKEND_NS`는 백엔드 타깃마다 PRIVATE 정의로 준다 (Null, Jolt, Bullet, PhysX; UBT 브리지는 `ChaosBridge`).
+  - 백엔드가 쓰는 다른 namespace 이름은 쓰지 않는다. `Chaos`로 하면 `PhysicsTest::Abi::Chaos`가 생겨, 브리지 TU에서 `using namespace PhysicsTest::Abi;` 뒤의 모든 `Chaos::` 참조가 UE `::Chaos`와 모호해진다 (M2 수정 라운드).
   - 이유: 헤더 전용 비템플릿 inline 함수가 /arch가 다른 TU(Jolt는 AVX2, 나머지는 SSE2)에 함께 컴파일되면 링커가 COMDAT 하나만 남긴다. 그러면 Bullet 백엔드가 Jolt TU에서 AVX2로 컴파일된 코드를 실행할 수 있고, `test`와 `test-bullet`의 결과가 달라진다.
 - 백엔드가 하네스 Core 타입을 쓰지 않도록 BackendCommon이 고정 폭 typedef(`int32`, `uint8` 등)를 제공한다.
 - 기본 virtual 구현은 쓰지 않는 매개변수에 이름을 붙이지 않는다 (예: `CreateConstraints(TStridedView<PtConstraintCreateInfo> /*Infos*/)`). /W4 /WX에서 C4100이 오류가 되기 때문이다 (MSVC 14.44로 재현 [V]).
@@ -644,7 +676,8 @@ Tick(DeltaSeconds) ...   (§9)
 
 - **Null 백엔드:**
   - SDK 없이 semi-implicit Euler와 UE damping만으로 동작한다. static lib과 `PtBackend_Null.dll` 두 형태로 빌드한다.
-  - `PT_CAP_NATIVE_FRAME_MODEL`을 선언한다. `SetUpForFrame`이 UE 인자 전체를 받고, UE5 `FChaosScene` / `PhysicsSolverBase` 규칙(Sync clamp, Substepping, AsyncFixed 누산기)으로 스텝을 직접 계획한 뒤 `NumStepsTaken`을 돌려준다.
+  - `PT_CAP_NATIVE_FRAME_MODEL`을 선언한다. `SetUpForFrame`이 UE 인자 전체를 받고, UE5 `FChaosScene` / `PhysicsSolverBase` 규칙(Sync clamp, Substepping, AsyncFixed 누산기)으로 스텝을 직접 계획한 뒤 `NumStepsTaken`을 돌려준다. 프레임 안의 명령도 UE5 규칙이다: 힘은 push 프레임의 모든 스텝(push가 없는 프레임은 넘겨서 평균), 임펄스는 첫 스텝, kinematic 목표는 `PseudoFraction` (§5.2 #38~#40, [Abi.md](Abi.md) §5.10).
+  - DLL은 C++ 라이브러리 DLL(`msvcp140*`)을 import하지 않는다. A9의 "CRT"는 SDK 백엔드에 한해 `msvcp140*`를 포함하고, Null은 `check_modules.py --strict-crt`로 이를 막는다.
     - Null은 하네스 lib를 링크할 수 없으므로(R4) 이 계획 코드는 하네스 `FStepPlanner`와 따로 작성한다. 그래서 A10은 독립된 두 구현을 서로 대조하는 검사가 된다.
   - 쓰임:
     - Chaos 작성자의 템플릿
@@ -657,6 +690,24 @@ Tick(DeltaSeconds) ...   (§9)
   - 서버 `RunBackendServer`는 메인 스레드에서 호출을 실행한다.
   - 타이밍은 서버 안에서 같은 측정 루프로 잰다. IPC는 타이밍 구간에 넣지 않는다.
   - SP2 또는 SP3가 실패하거나 사용자가 요청할 때만 만든다.
+
+### 7.8 M2 구현 메모 [V]
+
+규칙의 정본은 [Abi.md](Abi.md)다. 설계(§7.1~7.7) 위에 M2에서 정한 것:
+- **텍스트 버퍼:** `PtTextBuffer::Length`는 NUL을 포함한 필요 바이트 수다. Kit은 `DumpEffectiveSettings`를 한 번 측정한 뒤 들어갈 때만 다시 써서 `PT_E_CAPACITY`이면 아무것도 쓰지 않는다 (구현은 결정적이어야 한다). `GetLastErrorMessage`와 한 번만 하는 `PrepareForSimulation`은 잘라서 쓰고 `PT_W_TRUNCATED`다.
+- **마지막 오류:** 실패한 호출은 모두 메시지를 남긴다 (백엔드가 안 남기면 Kit이 남긴다). `PT_E_WRONG_THREAD`와 `GetLastErrorMessage` 자신은 바꾸지 않는다.
+- **스레드:** 소유 스레드는 `InitGamePhys`를 부른 스레드이고 `TermGamePhys`가 지운다. 그 전후에는 어느 스레드든 부를 수 있지만 동작하는 것은 `GetInfo`, `InitGamePhys`, `GetLastErrorMessage`뿐이고 나머지(모듈 수준 `SetOption(0)`, `DumpEffectiveSettings(0)`, `GetMemoryStats(0)` 포함)는 `PT_E_BAD_STATE`다. 소유 스레드 id는 relaxed atomic 32-bit 접근으로 읽고 쓴다.
+- **TermGamePhys:** 살아 있는 씬을 phase와 무관하게 모두 파괴한 뒤 종료한다.
+- **`NumStepsTaken`:** 엔진이 실제로 진행한 스텝 수 = `FStepPlan::NumSteps` (밀어 넣은 스텝 수 `NumPushedSteps`가 아니다). §9.2.
+- **Harness driver와 AsyncDt:** Harness driver로 도는 씬은 항상 `AsyncFixedTimeStepSize = -1`로 만든다. async 누산기는 하네스 계획이 돌린다. `AsyncDt > 0`은 `NATIVE_FRAME_MODEL` 백엔드에만 허용된다 (그 밖은 `PT_E_UNSUPPORTED`).
+- **`PT_READ_ACTIVE_ONLY`:** 이전 읽기 뒤 상태가 바뀌었을 수 있는 살아 있는 바디 전부(깨어 있는 dynamic, 움직인 kinematic, ObjectState가 바뀐 바디). 잠든 바디가 빠지면 호스트 상태가 낡는다. 부분 읽기라서 `OutIndices`가 필요하다 (Capacity > 0이면 NULL 거부). `PT_READ_ALL`은 만든 바디 전부를 인덱스 순서로 빽빽하게 돌려주고, 해제한 바디는 ObjectState UNINITIALIZED와 0 상태로 낸다 (Kit이 개수를 확인한다, M2 수정 라운드 1).
+- **해제한 바디:** Kit이 해제 집합(바디당 1 bit, malloc)을 들고 `ReleaseActors`의 중복·이미 해제한 인덱스, 해제한 바디에 대한 명령과 `ReadMassProperties`를 백엔드와 무관하게 거부한다 (배치는 전부 아니면 전무). 백엔드는 `IsReleased()`로 볼 수 있다 (M2 수정 라운드 1).
+- **MXCSR:** Kit 썽크가 제어 bit(6~15)를 보존하고 바뀌면 되돌린다(첫 번만 경고, 횟수는 모듈 수준 effective 키 `kit.mxcsr_restores`). A6는 그 경고나 횟수 증가를 실패로 본다. x87 제어 워드는 A6가 확인만 한다.
+- **입력 구조체 StructSize:** 이 헤더의 sizeof보다 작으면 거부, 크면 받는다. 배열 stride는 sizeof 이상이고 정렬되어야 한다.
+- **레지스트리 이름:** `Null`(static), `NullDll`(exe 옆 `PtBackend_Null.dll`). Chaos는 `-ChaosDll=<파일>` 또는 환경 변수 `PT_CHAOS_DLL`(§7.4의 `PT_CHAOS_DLL_DIR` 대신 파일 경로, 파일이 있을 때만 목록에 나온다). DLL을 로드한 직후 호스트의 unhandled-exception filter와 error mode를 되돌리고, 바뀌었으면 경고한다.
+- **UE4 substep 규칙:** `ESubstepClampRule::UE4PhysSubstep`은 하네스 플래너에만 있다. `FrameDriver=Auto`이면 이 규칙의 Substepping은 Harness driver로 돌고, Native를 강제하면 Fatal이다. 프레임 안의 힘과 kinematic 목표도 이 규칙일 때만 UE4 방식이다 (§9.1, `FStepPlan::ClampRule`).
+- **힘과 kinematic 목표의 진입점:** `FBodyInstance::AddForce`는 UE5처럼 `FPhysicsInterface::AddForce_AssumesLocked`를 부르고, 이것이 소유 씬의 `FPhysScene::AddForce_AssumesLocked`로 간다. kinematic 목표도 `SetBodyTransform`·`FPhysicsInterface::SetKinematicTarget_AssumesLocked`가 `FPhysScene::SetKinematicTarget_AssumesLocked`로 간다. 모든 진입점이 같은 프레임 규칙을 탄다 (§5.2 #42).
+- **ABI 호출 비용 (Null, 바디 0, 프레임당 4호출, QPC 배치 평균):** dev·test 10.0 ns/호출, dbg 약 50 ns (static과 DLL 같음). 게이트가 아니다 (TSC 기반 100 ns 게이트는 M10).
 
 ## 8. 백엔드별 내부 구조
 
@@ -829,13 +880,29 @@ Tick(float DeltaSeconds)                               ~ UWorld::Tick physics pa
     OnPhysScenePreTick(FrameDt)   phase SetUp; FrameDt = UE5 MDeltaTime (FChaosScene::StartFrame -> OnStartFrame)
     bIsSimulating = true
     if Driver == Native (backend has NATIVE_FRAME_MODEL: Chaos, Null):
-      [T_push] flush commands once
+      OnPhysSceneStep(FrameDt) once                           (UE5 OnStartFrame; not per substep)
+      [T_push] flush commands once, every frame: the queue in issue order (incl. each force's WAKE_UP), the kinematic
+               targets, and at a frame that pushes steps the held forces with PT_CMDF_NO_WAKE (the backend applies UE5's
+               frame rules: forces on every step of a pushing frame, averaged over the frames since the last push,
+               impulses on the first step, kinematic targets by PseudoFraction; bAllowSubstepping is informational)
       [T_step] Backend SetUpForFrame(original UE args) -> StartFrame -> WaitPhysScenes -> EndFrame
-               check(Result.NumStepsTaken == Plan.N)          (OnPhysSceneStep is not called per substep)
+               Result.NumStepsTaken == Plan.NumSteps, else Fatal
+      SimTime += NumSteps * Plan.InternalStepDeltaTime       (the double dt the engine steps with)
     else (Harness driver, SDK backends):
+      UE5ChaosScene: OnPhysSceneStep(FrameDt) once            (as Native)
+      if N == 0: [T_push] flush the queue only                (the frame's writes reach the backend in that frame)
       for k in 0..N-1:
-        [T_push] kinematic target Lerp/NLerp alpha=(k+1)/N, re-apply forces with bAllowSubstepping, OnPhysSceneStep
+        UE4PhysSubstep: OnPhysSceneStep(StepDt)               (untimed, before the step's push)
+        [T_push] the queue (issued since the last flush). Then by Plan.ClampRule, forces with PT_CMDF_NO_WAKE:
+                 UE5ChaosScene  every force on every step x ForceWeight (1 / frames since the last push; frames that push
+                                nothing keep the forces); kinematic target Lerp/Slerp by 1/(N-k) from the last sent pose
+                                (a teleport this frame: from its pose) if Plan.bSolverSubstepped, else the target on step 0
+                 UE4PhysSubstep bAllowSubstepping forces on every substep from the one they were issued in, the others on
+                                that one; kinematic target with bAllowSubstepping Lerp/Slerp alpha=(k+1)/N from the frame's
+                                start pose, the others on k = 0 [M]
         [T_step] Backend SetUpForFrame(&G, StepDt, 0, 0, 0, 1, false) -> StartFrame -> WaitPhysScenes -> EndFrame
+                 (NumStepsTaken must be 1; the scene was created with AsyncDt -1)
+        SimTime += dt_engine(StepDt)
   WaitPhysScenes()  no-op (kept for API parity)
   EndFrame()    bIsSimulating = false
     [T_pull] ReadBodyStates(ACTIVE_ONLY), once per frame -> FBodyInstance::State
@@ -844,9 +911,10 @@ Tick(float DeltaSeconds)                               ~ UWorld::Tick physics pa
     OnPhysScenePostTick(FrameDt)
 ```
 
-- **델리게이트 순서 (M1 수정 라운드에서 고침, §5.2 #31):** UE5는 `SetUpForFrame` 다음 `StartFrame` 안에서 PreTick과 Step을 clamp된 프레임 dt(`MDeltaTime`)로 한 번씩 broadcast한다 (ChaosScene.cpp:331-374, PhysScene_Chaos.cpp:2272-2316 [V]). 하네스 PreTick은 이와 같다. Harness driver의 `OnPhysSceneStep`은 엔진 스텝마다 스텝 dt로 부른다 (UE4 PhysX substep 방식). PostTick은 UE5에서 dt 없이 EndFrame에서 broadcast되고 (ChaosScene.cpp:576 [V]), 하네스는 같은 FrameDt를 넘긴다.
+- **델리게이트 순서 (M1 수정 라운드에서 고침, §5.2 #31):** UE5는 `SetUpForFrame` 다음 `StartFrame` 안에서 PreTick과 Step을 clamp된 프레임 dt(`MDeltaTime`)로 한 번씩 broadcast한다 (ChaosScene.cpp:331-374, PhysScene_Chaos.cpp:2272-2316 [V]). 하네스 PreTick과 Step은 두 driver 모두 이와 같다 (M2 수정 라운드 1). Harness driver의 `UE4PhysSubstep` 규칙만 `OnPhysSceneStep`을 서브스텝마다 서브스텝 dt로 부른다 (UE4 PhysX substep 방식). PostTick은 UE5에서 dt 없이 EndFrame에서 broadcast되고 (ChaosScene.cpp:576 [V]), 하네스는 같은 FrameDt를 넘긴다.
+- **명령의 시점 (M2 수정 라운드 1, §5.2 #40·#44·#45):** 두 driver 모두 매 프레임 push한다. 스텝이 없는 프레임의 쓰기도 그 프레임에 백엔드에 닿으므로, 읽기와 `bAddToCurrent`가 UE의 GT 파티클처럼 본다. `AddForce`/`AddTorque`의 GT 깨우기는 호출한 자리의 `WAKE_UP`이고, 힘은 push 때 `PT_CMDF_NO_WAKE`로 간다. 힘은 스텝을 push하는 프레임까지 씬이 들고 있고, 그 사이 `PutToSleep`이 오면 UE처럼 버린다 (뒤에 힘·임펄스가 오면 되살린다).
 
-- **FixedStep과 Sync에서는** 두 driver의 호출이 같다.
+- **FixedStep과 Sync에서는** 두 driver가 백엔드에 같은 명령을 같은 순서로 보내고 호출도 같다. 그래서 스텝이 없는 프레임(dt 0, 1e-9)을 포함해 결과가 비트 단위로 같다 (A10 (b): 고정 스크립트 3가지 dt 목록과 무작위 명령 스크립트 6 seed).
   - Chaos에서 MaxDt≤0은 "clamp 없음"이다 (ChaosScene.cpp:341-345). 솔버 루프도 MaxDeltaTime>0을 검사한다 (PBDRigidsSolver.cpp:569) [V].
 - **다중 스텝 모드에서는:**
   - Chaos가 UE처럼 EndFrame을 프레임당 1회만 수행한다. 서브스텝마다 EndFrame을 부르면 GT 작업이 과다 계상되기 때문이다.
@@ -890,13 +958,14 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 
 **M1 구현 메모 [V]**
 - 계획은 UE의 형(type)으로 계산한다. `FChaosScene::SetUpForFrame`의 clamp는 float, `AdvanceAndDispatch_External`의 스텝 수·누산기는 FReal(double)이다 (PhysicsSolverBase.h:1013-1017). 각 스텝은 솔버 루프(PBDRigidsSolver.cpp:560-575)를 그대로 지나므로 `MinDeltaTime` 이하인 스텝은 시뮬레이션되지 않고 그 시간은 이월되지 않는다. UE4 규칙의 `MinDeltaTime` 처리는 같은 방식으로 적용했다 [R].
-- `FStepPlan`은 엔진 스텝 수(`NumSteps`)와 함께 UE가 밀어 넣은 스텝 수(`NumExternalSteps`), Native driver가 받는 UE 인자(`FSetUpForFrameParams`), AsyncFixed 표시(`bAsyncInterpolated`)를 갖는다. A10(M6)에서 `NumStepsTaken`을 어느 쪽과 대조할지는 M2/M6에서 정한다.
+- `FStepPlan`은 엔진 스텝 수(`NumSteps`)와 함께 UE가 밀어 넣은 스텝 수(`NumPushedSteps`: UE `AdvanceAndDispatch_External`의 지역 변수 `NumSteps`. `FPhysicsSolverBase::ExternalSteps`는 dt > 0인 호출 수를 세는 다른 값이다, PhysicsSolverBase.cpp:623-626 [V]), Native driver가 받는 UE 인자(`FSetUpForFrameParams`), AsyncFixed 표시(`bAsyncInterpolated`)를 갖는다. M1의 이름 `NumExternalSteps`는 UE의 `ExternalSteps`와 뜻이 달라 M2에서 바꿨다.
+- **M2:** A10은 `NumStepsTaken`을 `NumSteps`와 대조한다 (엔진이 실제로 진행한 스텝 수). `FStepPlan::InternalStepDeltaTime`(double)을 더했다. Chaos가 실제로 스텝하는 FReal dt다: UE5 substepping은 D/N을 double로, AsyncFixed는 AsyncDt, FixedStep·Sync는 `(double)MDeltaTime`(= `(double)StepDeltaTime`). `StepDeltaTime`은 그 float 값이고 Harness driver가 ABI로 보낸다. 둘은 UE5 substepping에서만 다르다 (dt 0.05: 0.016666666915 대 0.016666667536, 상대 3.7e-8). Native driver 결과의 해석 기준값은 `InternalStepDeltaTime`, Harness driver는 `dt_engine = (double)StepDeltaTime`으로 계산한다. FixedStep·Sync에서는 같으므로 A10의 비트 동일 비교가 성립한다.
 - dt 0.2에서 float `6 × (1/60)`은 정확히 반올림 경계(0.1000000052154064)라서 짝수 쪽 0.100000009가 되고, ceil 입력이 6.0000002라 7 > 6이므로 6 × 1/60으로 떨어진다. 반대로 반올림되어도 6 × 1/60이다. 고정값은 두 경우 모두에서 같다.
 
 ### 9.3 타이밍 버킷과 헤드라인
 
 **버킷 정의 [MVP M2]**
-- `T_push`: ApplyBodyCommands. 명령이 없으면 호출하지 않고 0으로 기록한다.
+- `T_push`: ApplyBodyCommands. 명령이 없으면 호출하지 않고 0으로 기록한다. 스텝이 없는 프레임의 flush(Harness driver)도 여기에 든다. 힘 하나는 명령 둘이다 (호출 자리의 `WAKE_UP` + push 때의 힘).
 - `T_step`: 4개 호출. 하위 버킷 setup/start/wait/end로 다시 나눈다.
 - `T_pull`: ReadBodyStates(ACTIVE_ONLY), 프레임당 1회.
 - `T_frame = ΣT_push + ΣT_step + T_pull`.
@@ -930,7 +999,7 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 
 **공통 규칙**
 - 바디와 머티리얼은 한 배치로, 하네스 순서대로 생성한다.
-- 용량은 힌트로 넉넉하게 잡는다. 넘치면 run을 실패로 처리한다 (G12).
+- 용량은 힌트로 넉넉하게 잡는다. 넘치면 run을 실패로 처리한다 (G12). 힌트는 시나리오가 선언한 개수로 `FPhysSceneInitParams::MaxBodiesHint`/`MaxBodyPairsHint`/`MaxContactConstraintsHint`를 채우고 `PtSceneDesc`로 넘어간다 (M2 수정 라운드 1에서 배관. Jolt `PhysicsSystem::Init`이 M3에서 처음 쓴다).
 
 ### 9.5 워밍업과 윈도
 
@@ -1016,7 +1085,8 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
   - 하네스 물리 CVar는 `PhysicsCVars::GetHarnessConsoleVariables()`의 고정 표다 (`p.ComNudgeAffectsInertia`, `p.SensitiveSleepThresholdMultiplier`, `Physics/PhysicsConsoleVariables.cpp` 한 TU). 리졸버는 이 표만 하네스 CVar로 본다: 값 검증·정규화, 변형 금지, `physics_sha256` 포함, 내장 기본값 층. 프로그램이 따로 등록한 CVar(뷰어 CVar, 테스트의 `pt.Test.*`)는 리졸버에게는 엔진 CVar다. `ApplyConsoleVariables`만 그 프로세스에 등록된 CVar이면 설정한다. 그래서 같은 프로필은 어느 프로그램에서나 같은 값·같은 해시가 된다 (M1 수정 라운드. 전에는 프로세스에 등록된 모든 CVar로 시드해 링크 구성에 따라 해시가 달라졌다. CTest `PhysicsTest.Probe.HarnessCVars`가 BodyUtils를 링크하지 않는 프로그램과 `PhysicsTestAutomation`의 해시를 대조한다).
   - `ApplyConsoleVariables`는 Set이 거부되면(못 읽는 값, 읽기 전용, 이미 더 높은 우선순위로 설정됨) 거부된 CVar마다 현재 값과 SetBy를 담아 false를 돌려준다. 섹션 이름은 UE처럼 대소문자를 무시한다. 숫자 값은 유한수만 받는다 (`inf`/`nan`은 로드 오류).
   - `physics_sha256`: 적용된 물리 키 중 프로필이 고정한 것만 넣는다. EngineDefault 키, 엔진 키, 실행 옵션(스레드 수, run mode, 해시 주기), 모르는 UE 키는 뺀다.
-  - 커맨드라인은 UE 문법이다: `-ini:PhysicsTest:[Section]:Key=Value,...`(UE 철자인 `-ini:Engine:`도 받는다, ConfigCacheIni.cpp:2413-2500)와 `-ExecCmds="cvar value, ..."`. CVar 적용 우선순위는 ini가 `ECVF_SetByConsoleVariablesIni`, `-ExecCmds`가 `ECVF_SetByConsole`이다.
+  - 커맨드라인은 UE 문법이다: `-ini:PhysicsTest:[Section]:Key=Value,...`(UE 철자인 `-ini:Engine:`도 받는다, ConfigCacheIni.cpp:2413-2500)와 `-ExecCmds="cvar value, ..."`. CVar 적용 우선순위는 ini가 `ECVF_SetByConsoleVariablesIni`, `-ExecCmds`가 `ECVF_SetByConsole`이다. **M2:** `-ini:`로 준 CVar도 ini 우선순위다 (M1 구현은 Origin이 CommandLine이면 모두 Console로 적용했다. `FProfileResolver::GetConsoleVariableSetBy`가 OriginName으로 고른다). `-ExecCmds` 안의 `name=value`는 하네스만 받는 형식이다 (§5.2 #32).
+  - **M2:** 하네스 물리 CVar는 프로세스 전역이지만 `FPhysScene`이 생성될 때 자기 설정의 값(없으면 기본값)으로 맞추고, `SpawnBody`·`FlushDeferredActors`에서 그 뒤로 바뀌지 않았는지 확인한다 (§5.2 #37). 동시에 살아 있는 씬들은 이 값이 같아야 한다 (뷰어 2단계 M12의 나란히 보기는 한 프로필이므로 같다).
   - Normalized의 "최대 각속도 해제"는 0이 아니라 `bOverrideMaxAngularVelocity=True`, `MaxAngularVelocity=1e7`(deg/s, 약 1.75e5 rad/s)이다. Chaos는 `MaxAngularSpeedSq`로 무조건 clamp하므로 0이면 회전이 멈춘다 (PBDRigidsEvolutionGBF.cpp:950-954 [V]). `UE_BIG_NUMBER`(3.4e+38)도 쓰지 않는다: rad/s로 바꾼 5.9e36을 엔진이 float로 제곱하면 +inf가 되어 (Chaos `MMaxAngularSpeedSq`는 `FRealSingle`, ParticleDirtyFlags.h:579, :646. Jolt `Square(mMaxAngularVelocity)`, MotionProperties.inl:39. PhysX `PxReal maxAngularVelocitySq`, PxvDynamics.h:74 [V]) readback, effective 설정 대조, 차이 계산에 inf가 들어간다. 1e7 deg/s는 제곱해도 float로 유한하고 도달할 수 없는 속도다 (M1 수정 라운드에서 고침).
   - 위 표의 행을 키로 옮기면서 `FPhysicsTestSettings`에 `bAllowSleeping`(sleep 축)과 `RestitutionThresholdVelocity`(cm/s, 0 이하이면 엔진별 UEParity 매핑)를 더했다. "Average 강제, SF := F"를 머티리얼마다 강제하는 `ForcedOverrides`는 M9이고, M1 초안은 프로젝트 combine 모드만 Average로 둔다.
 
@@ -1332,13 +1402,13 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 | A1 | 버전 핸드셰이크: Major+1이면 NULL, StructSize 검사, 호스트가 자기 `PT_ABI_VERSION_MAJOR`를 요청 | MVP M2 |
 | A2 | 다른 스레드에서 호출 시 WRONG_THREAD, 상태 변화 없음 | MVP M2 |
 | A3 | phase 상태기계 | MVP M2 |
-| A4 | 입력 검증: 표로 정의한 부정 사례 약 30개 (범위 밖 index, NaN, 비단위 쿼터니언, 질량 0, AsyncDt 0, 알 수 없는 키 등). 크래시 0, 전부 거부. 무작위 1만 건 fuzz는 M15 | MVP M2 |
+| A4 | 입력 검증: 표로 정의한 부정 사례 약 30개 이상 (범위 밖 index, NaN, 비단위 쿼터니언, 질량 0, AsyncDt 0, 알 수 없는 키 등. M2 구현은 모듈 4 + 씬 66 = 70개. 해제한 바디·이중 해제·`OutIndices` 없는 ACTIVE_ONLY 포함). 크래시 0, 전부 거부, 건드리지 않은 쌍둥이 씬과 다음 프레임까지 비트 동일. 무작위 1만 건 fuzz는 M15 | MVP M2 |
 | A5 | capacity / stride 2회 호출 프로토콜 | MVP M2 |
 | A6 | 호출마다 MXCSR와 x87 상태 보존 (UE PreInit 이후 중요) | MVP M2 |
 | A7 | 필수 effective 키 존재: 일반 집합 + 백엔드가 선언한 집합 | MVP M2 |
 | A8 | 전체 G 스위트를 loopback으로 돌려 직접 호출과 비트 동일 | 확장 M14 |
-| A9 | DLL 위생: export가 PT_GetBackendApi 하나, 의존성은 CRT와 시스템뿐 (`check_modules.py`). `PtAbiUeCompatCheck` 빌드 성공 | MVP M2 |
-| A10 | 프레임 모델: Null(`NATIVE_FRAME_MODEL`)에서 Sync / Substepping(UE5) / AsyncFixed의 `NumStepsTaken`이 FStepPlanner 고정값과 같다. FixedStep과 Sync에서 Native driver와 강제 Harness driver의 최종 상태가 비트 동일하다 | MVP M6 |
+| A9 | DLL 위생: export가 PT_GetBackendApi 하나, 의존성은 CRT와 시스템뿐 (`check_modules.py`; Null은 `--strict-crt`로 msvcp140도 금지). `PtAbiUeCompatCheck` 빌드 성공 | MVP M2 |
+| A10 | 프레임 모델: Null(`NATIVE_FRAME_MODEL`)에서 Sync / Substepping(UE5) / AsyncFixed의 `NumStepsTaken`이 FStepPlanner 고정값과 같다. FixedStep과 Sync에서 Native driver와 강제 Harness driver의 최종 상태가 비트 동일하다 (스텝이 없는 프레임과 무작위 명령 스크립트 포함). Substepping·AsyncFixed는 같은 프레임 규칙을 허용 오차 안에서 따른다 ([Abi.md](Abi.md) §8) | MVP M6 |
 
 ### 14.3 물리·측정 게이트
 
@@ -1403,7 +1473,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - 의존 모듈: Core, CoreUObject, ApplicationCore, Projects, GeometryCore, PhysicsCore, Chaos, ChaosCore, 그리고 `SetupModulePhysicsSupport`.
 - `PrivateIncludePathModuleNames.Add("Launch")`: `PtChaosModule.cpp`가 include하는 `RequiredProgramMainCPPInclude.h`는 `LaunchEngineLoop.h`와 `Runtime/Launch/Private/LaunchEngineLoop.cpp`를 include한다 (RequiredProgramMainCPPInclude.h:6,11 [V]). HeadlessChaos도 Launch 경로를 추가한다 (HeadlessChaos.Build.cs:20 [V]). 빠지면 SP1이 첫 컴파일에서 실패한다.
 - include 경로: `<repo>/Source/Runtime/PhysicsTestAbi/Public` (ModuleDirectory에서 4단계 위).
-- 정의: `PT_ABI_NO_EXCEPTIONS=1`, `PT_BACKEND_NS=Chaos`, `PT_KIT_CURRENT_THREAD_ID()` → FPlatformTLS.
+- 정의: `PT_ABI_NO_EXCEPTIONS=1`, `PT_BACKEND_NS=ChaosBridge`(UE `::Chaos`와 겹치지 않는 이름, §7.3), `PT_KIT_CURRENT_THREAD_ID()` → FPlatformTLS.
 
 **출력 위치:** `Binaries/Win64/PhysicsTestChaos.dll`, `PhysicsTestChaos-Win64-Test.dll`. 상대 엔진 경로가 박히므로 그 자리에서 로드한다.
 

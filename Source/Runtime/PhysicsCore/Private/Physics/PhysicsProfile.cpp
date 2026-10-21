@@ -1431,6 +1431,19 @@ namespace PhysicsTest
 		}
 	}
 
+	EConsoleVariableFlags FProfileResolver::GetConsoleVariableSetBy(const FResolvedConfigValue& Value)
+	{
+		if (Value.OriginName.starts_with("-ExecCmds"))
+		{
+			return ECVF_SetByConsole;
+		}
+		if (Value.Origin == EConfigOrigin::UEDefault && Value.OriginName == "built-in")
+		{
+			return ECVF_SetByConstructor;
+		}
+		return ECVF_SetByConsoleVariablesIni;
+	}
+
 	bool FProfileResolver::ApplyConsoleVariables(const FResolvedPhysicsConfig& Config, std::vector<std::pair<std::string, std::string>>& OutEngineVariables,
 		std::string& OutError)
 	{
@@ -1450,8 +1463,11 @@ namespace PhysicsTest
 				OutEngineVariables.emplace_back(Name, Value);
 				continue;
 			}
+			// -ExecCmds with console priority, every ini layer (-ini: included) and built-in defaults as ini data (M2: -ini:
+			// values used to be applied with console priority, unlike UE).
 			const FResolvedConfigValue* Resolved = Config.Find("ConsoleVariables." + Name);
-			const EConsoleVariableFlags SetBy = Resolved != nullptr && Resolved->Origin == EConfigOrigin::CommandLine ? ECVF_SetByConsole : ECVF_SetByConsoleVariablesIni;
+			const EConsoleVariableFlags SetBy = Resolved != nullptr && GetConsoleVariableSetBy(*Resolved) == ECVF_SetByConsole ? ECVF_SetByConsole
+				: ECVF_SetByConsoleVariablesIni;
 			if (Variable->Set(Value.c_str(), SetBy))
 			{
 				continue;

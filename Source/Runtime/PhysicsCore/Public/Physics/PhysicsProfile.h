@@ -35,6 +35,7 @@
 // Scalar keys accept plain Key=Value only; the array operators (+ . - !) are for the metadata arrays.
 #pragma once
 
+#include "HAL/IConsoleManager.h"
 #include "Misc/ConfigCacheIni.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "PhysicsEngine/BodyInstance.h"
@@ -170,6 +171,10 @@ namespace PhysicsTest
 		// OutError names each one with its current value and SetBy.
 		static bool ApplyConsoleVariables(const FResolvedPhysicsConfig& Config, std::vector<std::pair<std::string, std::string>>& OutEngineVariables,
 			std::string& OutError);
+		// The priority a resolved console-variable value is applied with: ECVF_SetByConsole for -ExecCmds (UE runs them as
+		// console commands), ECVF_SetByConstructor for a built-in default (the variable's own default), and
+		// ECVF_SetByConsoleVariablesIni for every ini layer, -ini: included (UE applies -ini: overrides as ini data).
+		[[nodiscard]] static EConsoleVariableFlags GetConsoleVariableSetBy(const FResolvedConfigValue& Value);
 
 		// "<Prefix>.<Key>" for a section/key pair ("" when the section has no canonical prefix).
 		[[nodiscard]] static std::string MakeCanonicalKey(std::string_view Section, std::string_view Key);

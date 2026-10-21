@@ -1,12 +1,17 @@
 # PT::PhysicsCore - the harness data model (02_Architecture 5-6, 9.2, 10; A.6-A.10): UE-named types with UE defaults,
-# BodyUtils (harness mass properties, D5), FStepPlanner (all tick modes), the profile resolver and the FPhysScene
-# skeleton (M1, stub backend). M2 adds the host side of the C ABI (FPhysicsBackendScene, FPhysicsInterface).
+# BodyUtils (harness mass properties, D5), FStepPlanner (all tick modes), the profile resolver (M1) and, from M2, the host
+# side of the C ABI (A.8): FPhysicsBackendModule / FPhysicsBackendRegistry / FPhysicsBackendScene, FPhysicsInterface,
+# the effective-settings parser and FPhysScene driving a backend. The static backend list itself is the generated
+# PT::BackendRegistry (Source/Backends), which programs creating an FPhysScene link.
 # Backends never link this module (R4): they see PT::Abi, PT::BackendCommon and their own SDK only.
 pt_add_module(PtPhysicsCore STATIC ALIAS PT::PhysicsCore
 	SOURCES
 		Public/PhysScene.h
 		Public/Physics/AnalyticReference.h
+		Public/Physics/EffectiveSettings.h
+		Public/Physics/PhysicsBackend.h
 		Public/Physics/PhysicsConsoleVariables.h
+		Public/Physics/PhysicsInterface.h
 		Public/Physics/PhysicsInterfaceTypes.h
 		Public/Physics/PhysicsProfile.h
 		Public/Physics/PhysSceneStats.h
@@ -26,9 +31,12 @@ pt_add_module(PtPhysicsCore STATIC ALIAS PT::PhysicsCore
 		Public/PhysicsEngine/SphylElem.h
 		Private/PhysScene.cpp
 		Private/Physics/AnalyticReference.cpp
+		Private/Physics/EffectiveSettings.cpp
 		Private/Physics/Matrix33.cpp
 		Private/Physics/Matrix33.h
+		Private/Physics/PhysicsBackend.cpp
 		Private/Physics/PhysicsConsoleVariables.cpp
+		Private/Physics/PhysicsInterface.cpp
 		Private/Physics/PhysicsProfile.cpp
 		Private/Physics/StepPlanner.cpp
 		Private/PhysicalMaterials/PhysicalMaterial.cpp
@@ -37,4 +45,5 @@ pt_add_module(PtPhysicsCore STATIC ALIAS PT::PhysicsCore
 		Private/PhysicsEngine/BodyUtils.cpp
 		Private/PhysicsEngine/ConstraintInstance.cpp
 		Private/PhysicsEngine/PhysicsSettings.cpp
-	PUBLIC_DEPS PT::Core)
+	PUBLIC_DEPS PT::Core PT::Abi
+	PRIVATE_DEPS PT::Json)

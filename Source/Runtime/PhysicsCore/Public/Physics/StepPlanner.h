@@ -43,15 +43,34 @@ namespace PhysicsTest
 
 	struct FStepPlan
 	{
-		int32 NumSteps = 0;               // engine steps this frame (UE: AdvanceOneTimeStep calls)
-		int32 NumExternalSteps = 0;       // UE: steps pushed by AdvanceAndDispatch_External (a pushed step whose dt is
-		                                  // not above MinDeltaTime simulates nothing)
+		int32 NumSteps = 0;               // engine steps this frame (UE: FPBDRigidsSolver AdvanceOneTimeStep calls). A
+		                                  // NATIVE_FRAME_MODEL backend's PtFrameResult::NumStepsTaken must equal this (A10)
+		int32 NumPushedSteps = 0;         // the local NumSteps of UE's AdvanceAndDispatch_External: steps pushed to the
+		                                  // solver this frame (a pushed step whose dt is not above MinDeltaTime simulates
+		                                  // nothing). NOT FPhysicsSolverBase::ExternalSteps, which counts
+		                                  // AdvanceAndDispatch_External calls with dt > 0 to average forces
+		                                  // (PhysicsSolverBase.cpp:623-626 [V])
 		float FrameDeltaTime = 0.0f;      // the frame dt after SetUpForFrame's clamp (UE5: FChaosScene::MDeltaTime, the dt
 		                                  // OnPhysScenePreTick receives, ChaosScene.cpp:331-374 [V]; UE4 rule: UseDelta [M])
-		float StepDeltaTime = 0.0f;       // dt of every engine step as the engines receive it (the ABI carries a float)
+		float StepDeltaTime = 0.0f;       // dt of every engine step as the Harness driver sends it: the C ABI's
+		                                  // SetUpForFrame takes a float (= (float)InternalStepDeltaTime)
+		double InternalStepDeltaTime = 0.0;   // the FReal dt UE's solver actually advances each step with
+		                                  // (PhysicsSolverBase.cpp:581-621, PBDRigidsSolver.cpp:560-575 [V]): D / N in
+		                                  // double for UE5 substepping, AsyncDt for AsyncFixed, (double)MDeltaTime for
+		                                  // FixedStep / Sync (equal to (double)StepDeltaTime there), float math for the UE4
+		                                  // rule. A NATIVE_FRAME_MODEL backend (Chaos, Null) steps with this value; analytic
+		                                  // references for Native-driver runs must use it, Harness-driver runs use
+		                                  // dt_engine = (double)StepDeltaTime. They differ only in UE5 substepping (dt 0.05:
+		                                  // 0.016666666915 vs 0.016666667536, relative 3.7e-8)
 		float ConsumedTime = 0.0f;        // NumSteps * StepDeltaTime
 		float LostTime = 0.0f;            // frame time removed by the clamps or dropped below MinDeltaTime (not carried)
 		bool bAsyncInterpolated = false;  // AsyncFixed: Chaos GT state is interpolated one step late
+		bool bSolverSubstepped = false;   // UE5: the solver substeps (MaxSubSteps > 1, SetSolverSubstep_External,
+		                                  // PhysicsSolverBase.cpp:584-585 [V]); kinematic targets are then interpolated
+		                                  // over the steps (PhysicsSolverBase.cpp:250 [V]). UE4 rule: true
+		ESubstepClampRule ClampRule = ESubstepClampRule::UE5ChaosScene;   // the rule this plan followed (UE4PhysSubstep
+		                                  // only for substepping without async); FPhysScene's per-step force and
+		                                  // kinematic rules follow it in the Harness driver (02 9.1)
 		FSetUpForFrameParams Params;      // the UE arguments this plan was derived from
 	};
 

@@ -89,7 +89,7 @@ Tools\ctest.cmd --preset dev
 | 테스트 | 확인하는 것 |
 |---|---|
 | `PhysicsTest.Automation` | `PhysicsTestAutomation.exe`(doctest)의 모든 단위 테스트를 한 프로세스에서 실행 |
-| `PhysicsTest.Unit.<Area>` | 같은 exe를 `-tc=PhysicsTest.<Area>.*`로 영역별 실행: `Core`(UE 회전·합성 순서, SHA-256/FNV, FParse, `FRandomStream` 골든 값, UTF-8), `Config`(ini 문법, CVar 우선순위), `Types`(UE 필드·기본값, 32채널 충돌 필터, 조인트 프리셋), `BodyUtils`(질량 규칙), `StepPlanner`(tick mode 고정값), `Analytic`(`dt_engine`, S00 기준값), `Profile`(ini 계층, Origin, 변형 키 제한, `-ini:`/`-ExecCmds`), `PhysScene`(골격과 프레임 상태기계). 걸러진 테스트가 0개이면 실패로 칩니다 |
+| `PhysicsTest.Unit.<Area>` | 같은 exe를 `-tc=PhysicsTest.<Area>.*`로 영역별 실행: `Core`(UE 회전·합성 순서, SHA-256/FNV, FParse, `FRandomStream` 골든 값, UTF-8), `Config`(ini 문법, CVar 우선순위), `Types`(UE 필드·기본값, 32채널 충돌 필터, 조인트 프리셋), `BodyUtils`(질량 규칙), `StepPlanner`(tick mode 고정값), `Analytic`(`dt_engine`, S00 기준값), `Profile`(ini 계층, Origin, 변형 키 제한, `-ini:`/`-ExecCmds`), `PhysScene`(프레임 상태기계, 두 frame driver, 자유낙하 픽스처, 명령, 타이밍 버킷, 하네스 CVar 가드), `Abi`(ABI 게이트 A0~A7·A10을 static Null과 `PtBackend_Null.dll` 두 경로로, Kit 상태 분리·가드, ABI 호출 비용 기록), `BackendCommon`(단위 계수, 캡슐 축, Bullet damping 변환, 결합 규칙, 접촉 규약, FNV-1a), `Backend`(레지스트리, 마샬링, effective 설정 파서). 걸러진 테스트가 0개이면 실패로 칩니다 |
 | `PhysicsTest.Unit.CommandLineUtf8` | 한글 인자(`-PtUtf8Probe=한글 경로`)가 `wmain`을 거쳐 UTF-8로 `FCommandLine`에 들어감 |
 | `PhysicsTest.Smoke.{Jolt,Bullet,PhysX}` | SDK 스모크: SI, Z-up, g = 9.80, damping 0, sleep 끔. z(60) = 5.0183328 m ± 2e-5. Jolt는 설정 문자열(AVX2, Profile/Debug Renderer/FP Exceptions 없음)도 검사. `RunSmoke.cmake`가 `PT_SMOKE_JSON` 줄이 유효한 JSON인지도 확인 |
 | `PhysicsTest.Probe.ThirdPartyIncludes` | Core를 먼저 include한 TU가 래퍼 쌍을 거쳐 doctest·ImGui·ImPlot·nlohmann/json을 include하고 컴파일됨 |
@@ -100,16 +100,30 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Probe.RefsClean` | `D:\PhysicsRefs` 세 저장소의 `git status --porcelain`(`--ignored` 포함)이 비어 있고 PxConfig.h/.dxil/.spv가 없음. 프로브 자신도 `--no-optional-locks`로 읽기만 함 |
 | `PhysicsTest.Probe.LongestObjectPath` | 가장 긴 컴파일러 오브젝트 경로 < 240자 |
 | `PhysicsTest.Probe.PinGuard` | 잘못된 SDK 태그, 미러(대소문자 바꾼 경로 포함)·빌드 트리 밖 소스 디렉터리, 다른 HEAD(임시 저장소)에서 configure가 FATAL |
+| `PhysicsTest.Probe.CheckModules` | 게이트 A9: `PtBackend_Null.dll`의 export가 `PT_GetBackendApi` 하나이고 import가 VC 런타임, UCRT, KERNEL32뿐 (`Tools/check_modules.py --strict-crt`: C++ 라이브러리 DLL `msvcp140*` 금지. MSVC `dumpbin`, `.venv` Python `-I`) |
+| `PhysicsTest.Probe.KitNamespaces` | `PhysicsTestAutomation.map`에서 Kit 심볼이 백엔드별 inline namespace(`Null`, `AbiTwin`, `AutomationTest`)로 나뉘고 `PhysicsTest::Abi` 바로 아래에는 없음 |
+| `PhysicsTest.Probe.BackendIsolation` | 백엔드 TU의 include 경로에 하네스 Core·PhysicsCore가 없고 `PT_BACKEND_NS`가 정의됨 |
+| `PhysicsTest.Probe.KitNeedsBackendNs` | `PT_BACKEND_NS` 없이 Kit를 include한 TU가 `#error`로 컴파일되지 않음 (`compile_commands.json`의 그 TU 컴파일 줄을 스크립트가 직접 실행한다. 빌드 트리를 다시 부르지 않는다) |
 
 ### 물리 프로필 (M1)
 
-설정은 UE처럼 ini 계층으로 정합니다: 코드 기본값 → `Config/BasePhysicsTest.ini`(UE 기본값, 모든 UE 키는 `[/Script/Engine.PhysicsSettings]`) → `Config/Profiles/<UEParity|Normalized>.ini` → 백엔드 변형 ini(M5) → 씬 고정값(M3) → 커맨드라인. 값마다 출처(Origin: 파일과 줄)가 남습니다. 변형 ini는 자기 엔진 키와 프로필이 `EngineDefaultKeys`로 연 키만 바꿀 수 있고, 그 밖의 키를 건드리면 로드 오류입니다. 하네스 물리 CVar는 `p.ComNudgeAffectsInertia`와 `p.SensitiveSleepThresholdMultiplier` 두 개이고 (`Physics/PhysicsConsoleVariables.h`), 그 밖의 CVar 이름은 엔진(Chaos 등)으로 넘어갑니다. 섹션 이름은 UE처럼 대소문자를 무시하고, 숫자 값은 유한수만 받습니다. 커맨드라인 문법은 UE와 같습니다.
+설정은 UE처럼 ini 계층으로 정합니다: 코드 기본값 → `Config/BasePhysicsTest.ini`(UE 기본값, 모든 UE 키는 `[/Script/Engine.PhysicsSettings]`) → `Config/Profiles/<UEParity|Normalized>.ini` → 백엔드 변형 ini(M5) → 씬 고정값(M3) → 커맨드라인. 값마다 출처(Origin: 파일과 줄)가 남습니다. 변형 ini는 자기 엔진 키와 프로필이 `EngineDefaultKeys`로 연 키만 바꿀 수 있고, 그 밖의 키를 건드리면 로드 오류입니다. 하네스 물리 CVar는 `p.ComNudgeAffectsInertia`와 `p.SensitiveSleepThresholdMultiplier` 두 개이고 (`Physics/PhysicsConsoleVariables.h`), 그 밖의 CVar 이름은 엔진(Chaos 등)으로 넘어갑니다. 섹션 이름은 UE처럼 대소문자를 무시하고, 숫자 값은 유한수만 받습니다. 커맨드라인 문법은 UE와 같습니다. 예외 하나: `-ExecCmds` 안의 `name=value`도 받습니다. UE 콘솔은 공백으로만 나누므로(`name value`) 같은 줄을 UE에 넣으면 `name=value` 항목은 조용히 무시됩니다. UE로 옮길 줄은 아래처럼 공백 형식으로 씁니다 (의도한 차이, docs/02 §5.2 #32).
 
 ```
 -ini:PhysicsTest:[/Script/Engine.PhysicsSettings]:DefaultGravityZ=-490,[/Script/PhysicsTest.PhysicsTestSettings]:TickMode=Sync
 -ini:Engine:[/Script/Engine.PhysicsSettings]:MaxSubsteps=4
--ExecCmds="p.ComNudgeAffectsInertia 0, p.Chaos.Solver.Sleep.Enabled=0"
+-ExecCmds="p.ComNudgeAffectsInertia 0, p.Chaos.Solver.Sleep.Enabled 0"
 ```
+
+하네스 물리 CVar는 프로세스 전역이지만 `FPhysScene`은 생성될 때 자기 설정의 값(설정이 없으면 기본값)으로 맞추고, 바디를 만들 때 바뀌지 않았는지 확인합니다 (M2). 같은 시간에 살아 있는 씬들은 이 값이 같아야 합니다.
+
+### 백엔드 경계 (M2)
+
+모든 엔진은 순수 C ABI `Source/Runtime/PhysicsTestAbi/Public/PhysicsTestAbi/PtBackendAbi.h`(v0.9, major 0)를 거칩니다. 백엔드는 header-only Kit(`PtBackendKit.h`)로 썽크·스레드 가드·phase 상태기계·입력 검증을 얻고, 백엔드 타깃마다 `PT_BACKEND_NS`를 다르게 정의합니다. 규칙과 함수 표는 [docs/Abi.md](docs/Abi.md)에 있습니다.
+
+- `Null`: SDK 없는 기준 백엔드(semi-implicit Euler, UE damping, 충돌 없음, `PT_CAP_NATIVE_FRAME_MODEL`). static으로 링크되고, 같은 소스가 `out/<preset>/bin/PtBackend_Null.dll`(export `PT_GetBackendApi` 하나)로도 빌드됩니다. 레지스트리 이름은 `Null`(static)과 `NullDll`(DLL)입니다.
+- 백엔드 목록은 configure 때 생성되는 `PT::BackendRegistry`(`out/<preset>/Generated/PTBackendRegistry.gen.cpp`)가 정적 진입점을 직접 참조합니다. Jolt는 M3, Bullet·PhysX는 M5에 더해집니다.
+- `FPhysScene::Tick`은 `NATIVE_FRAME_MODEL` 백엔드에 UE의 `SetUpForFrame` 인자를 프레임당 한 번 넘기고(Native driver, `NumStepsTaken`이 하네스 계획과 같아야 함), 그 밖의 백엔드에는 계획한 스텝마다 한 번씩 넘깁니다(Harness driver).
 
 `[/Script/PhysicsCore.PhysicsSettingsCore]` 섹션은 쓰지 않습니다 (UE 게임처럼 모든 물리 키가 Engine 섹션에 있습니다, docs/04 DL44). 하네스 프로그램은 `wmain`으로 들어오므로 한글 경로 같은 비 ASCII 인자도 UTF-8로 그대로 전달됩니다.
 

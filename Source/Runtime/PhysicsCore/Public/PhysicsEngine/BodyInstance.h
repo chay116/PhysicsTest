@@ -125,7 +125,29 @@ namespace PhysicsTest
 		// (rotation + translation, no scale: UE's GetUnrealWorldTransform is the rigid actor pose), computes the mass
 		// properties (harness BodyUtils, D5) and defers the actor to the scene (FPhysScene::DeferAddActor) when given.
 		void InitBody(const FBodySetup* Setup, const FTransform& Transform, FPhysScene* InRBScene);
+		// Releases the backend actor (FPhysScene::ReleaseBody, phase Idle) and clears the handle. The body stays in the
+		// scene's storage and GetBodies() with ObjectState Uninitialized.
 		void TermBody();
+
+		// ---- commands (UE FBodyInstance names; M2). They go through FPhysicsInterface into the scene proxy's command
+		// buffer and reach the backend at the next T_push. A body without a backend actor ignores them.
+		// UE5 (BodyInstance.cpp:2804-2827 [V]): a kinematic body with ETeleportType::None gets a kinematic target from the
+		// owning scene (FPhysScene::SetKinematicTarget_AssumesLocked, bAllowSubstepping true); otherwise a kinematic body
+		// gets FPhysicsInterface::SetKinematicTarget_AssumesLocked and then the teleport, any other body the teleport.
+		void SetBodyTransform(const FTransform& NewTransform, ETeleportType Teleport);
+		// bAddToCurrent adds FPhysicsInterface::Get*Velocity_AssumesLocked, as UE does (BodyInstance.cpp:3630-3646 [V]): the
+		// game-thread velocity including the writes issued since the last pull (the read flushes the command buffer).
+		void SetLinearVelocity(const FVector& NewVel, bool bAddToCurrent);
+		void SetAngularVelocityInRadians(const FVector& NewAngVel, bool bAddToCurrent);
+		// UE5: FPhysicsInterface::AddForce_AssumesLocked / AddTorque_AssumesLocked, which the harness hands to the owning
+		// FPhysScene (FPhysScene::AddForce_AssumesLocked; its frame rule decides the steps a force acts on, PhysScene.h).
+		void AddForce(const FVector& Force, bool bAllowSubstepping = true, bool bAccelChange = false);
+		void AddTorqueInRadians(const FVector& Torque, bool bAllowSubstepping = true, bool bAccelChange = false);
+		// UE: bVelChange picks AddVelocity_AssumesLocked, else AddImpulse_AssumesLocked (BodyInstance.cpp:3875-3888 [V]).
+		void AddImpulse(const FVector& Impulse, bool bVelChange);
+		void AddAngularImpulseInRadians(const FVector& Impulse, bool bVelChange);
+		void WakeInstance();
+		void PutInstanceToSleep();
 		// Recomputes MassProperties with BodyUtils (static bodies too; engines ignore it for them).
 		void UpdateMassProperties();
 
@@ -154,5 +176,9 @@ namespace PhysicsTest
 
 	private:
 		FPhysScene* Scene = nullptr;
+		// Set by FPhysScene::SpawnBody: only scene-owned bodies (deque storage) may be deferred, released or used by
+		// constraints (a stack FBodyInstance would leave a dangling pointer in the batch).
+		const FPhysScene* SpawnedBy = nullptr;
+		friend class FPhysScene;
 	};
 }

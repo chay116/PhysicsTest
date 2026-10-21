@@ -10,6 +10,14 @@
 #   PhysicsTest.Probe.HarnessCVars        a profile-only program (no BodyUtils / BodyInstance / PhysScene objects) has
 #                                         the harness physics CVars and hashes profiles like PhysicsTestAutomation
 #                                         (M1 fix round)
+#   PhysicsTest.Probe.CheckModules        A9: PtBackend_Null.dll exports only PT_GetBackendApi and imports only the VC
+#                                         runtime, the UCRT and KERNEL32 (Tools/check_modules.py --strict-crt: no
+#                                         msvcp140, the Chaos template uses no C++ library DLL)                   (M2)
+#   PhysicsTest.Probe.KitNamespaces       the Automation linker map splits Kit symbols by backend inline namespace (M2)
+#   PhysicsTest.Probe.BackendIsolation    backend TUs have no harness Core / PhysicsCore include path, define
+#                                         PT_BACKEND_NS (M2)
+#   PhysicsTest.Probe.KitNeedsBackendNs   a TU including the Kit without PT_BACKEND_NS stops with #error: compiled
+#                                         directly with its compile_commands.json line (no nested build)          (M2)
 
 pt_add_program(PtProbeThirdPartyIncludes
 	SOURCES ThirdPartyIncludesProbe.cpp
@@ -58,7 +66,45 @@ pt_add_script_test(PhysicsTest.Probe.PinGuard
 		"-DPT_SDK_MIRROR=${PT_SDK_MIRROR}" "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
 	LABELS "configure")
 
-foreach(_test ThirdPartyIncludes NegativeScaleFatal HarnessCVars FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard)
+# ---- M2: backend boundary probes ----------------------------------------------------------------------------------
+# A9 DLL hygiene. Python from the repository .venv when present (python -I), else the system interpreter; dumpbin from
+# the MSVC toolset that links this build.
+if(EXISTS "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+	set(PT_PYTHON "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+else()
+	find_package(Python3 COMPONENTS Interpreter QUIET)
+	set(PT_PYTHON "${Python3_EXECUTABLE}")
+endif()
+get_filename_component(_pt_msvc_bin "${CMAKE_LINKER}" DIRECTORY)
+if(PT_PYTHON AND EXISTS "${_pt_msvc_bin}/dumpbin.exe")
+	add_test(NAME PhysicsTest.Probe.CheckModules
+		COMMAND "${PT_PYTHON}" -I "${CMAKE_SOURCE_DIR}/Tools/check_modules.py" "$<TARGET_FILE:PtBackend_Null>" --strict-crt --dumpbin "${_pt_msvc_bin}/dumpbin.exe")
+	set_tests_properties(PhysicsTest.Probe.CheckModules PROPERTIES PASS_REGULAR_EXPRESSION "PASS PtBackend_Null.dll" FAIL_REGULAR_EXPRESSION "FAIL ")
+else()
+	message(WARNING "PhysicsTest.Probe.CheckModules disabled: python (${PT_PYTHON}) or dumpbin (${_pt_msvc_bin}) not found")
+endif()
+
+pt_add_script_test(PhysicsTest.Probe.KitNamespaces
+	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckKitNamespaces.cmake"
+	ARGS "-DPT_MAP=$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map" "-DPT_ALLOWED=Null$<SEMICOLON>AbiTwin$<SEMICOLON>AutomationTest"
+		"-DPT_REQUIRED=Null$<SEMICOLON>AbiTwin")
+pt_add_script_test(PhysicsTest.Probe.BackendIsolation
+	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckBackendIsolation.cmake"
+	ARGS "-DPT_COMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json" "-DPT_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+
+# Must not compile (EXCLUDE_FROM_ALL: never built). The target only puts the TU, with a backend's flags but without
+# PT_BACKEND_NS, into compile_commands.json; the probe script runs that compiler line itself (output in _probe/, no
+# nested build of this tree) and expects the Kit's #error.
+add_library(PtProbeKitWithoutBackendNs OBJECT EXCLUDE_FROM_ALL KitWithoutBackendNsProbe.cpp)
+target_link_libraries(PtProbeKitWithoutBackendNs PRIVATE PT::Abi)
+pt_target_defaults(PtProbeKitWithoutBackendNs)
+set_property(TARGET PtProbeKitWithoutBackendNs PROPERTY FOLDER "PhysicsTest/Tests")
+pt_add_script_test(PhysicsTest.Probe.KitNeedsBackendNs
+	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckKitNeedsBackendNs.cmake"
+	ARGS "-DPT_COMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json" "-DPT_PROBE_DIR=${CMAKE_BINARY_DIR}/_probe/KitNeedsBackendNs")
+
+foreach(_test ThirdPartyIncludes NegativeScaleFatal HarnessCVars FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard CheckModules KitNamespaces
+		BackendIsolation KitNeedsBackendNs)
 	if(TEST PhysicsTest.Probe.${_test})
 		get_test_property(PhysicsTest.Probe.${_test} LABELS _labels)
 		if(_labels)

@@ -55,6 +55,12 @@ namespace PhysicsTest
 		[[nodiscard]] FVector GetAxisY() const { return RotateVector(FVector(0.0, 1.0, 0.0)); }
 		[[nodiscard]] FVector GetAxisZ() const { return RotateVector(FVector(0.0, 0.0, 1.0)); }
 
+		// Spherical interpolation on the shorter arc (Shoemake), with linear weights when the two rotations are within
+		// |cos| >= 1 - 1e-4; Slerp normalises the result. Behaves as UE's TQuat::Slerp_NotNormalized / Slerp
+		// (UnrealMath.cpp:1226-1255, Quat.h:655-660 [V]); the code is the harness's own (Math.cpp).
+		[[nodiscard]] static FQuat Slerp_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, double Alpha);
+		[[nodiscard]] static FQuat Slerp(const FQuat& Quat1, const FQuat& Quat2, const double Alpha) { return Slerp_NotNormalized(Quat1, Quat2, Alpha).GetNormalized(); }
+
 		[[nodiscard]] FRotator Rotator() const;
 		// (Roll, Pitch, Yaw) in degrees.
 		[[nodiscard]] FVector Euler() const;

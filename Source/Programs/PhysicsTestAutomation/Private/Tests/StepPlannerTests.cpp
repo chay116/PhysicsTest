@@ -10,6 +10,7 @@
 #include "Misc/PtThirdPartyIncludesEnd.h"
 
 #include <bit>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -63,8 +64,16 @@ TEST_CASE("PhysicsTest.StepPlanner.UE5SubstepCeil")
 	CHECK(CeilInput == doctest::Approx(2.99999989).epsilon(1e-9));
 	const FStepPlan P = Plan(EPhysicsTickMode::Substepping, RuntimeFloat(0.05f));
 	CHECK(P.NumSteps == 3);
-	CHECK(P.NumExternalSteps == 3);
+	CHECK(P.NumPushedSteps == 3);
 	CHECK(P.StepDeltaTime == Sixtieth);
+	// What Chaos actually steps with is the FReal D / N (PhysicsSolverBase.cpp:609-612): 0.016666666915, not the
+	// float 0.016666667536 the Harness driver sends through the ABI (relative difference 3.7e-8).
+	volatile double Three = 3.0;   // a runtime divisor: /fp:fast may turn a division by a constant into a multiplication
+	const double InternalDt = static_cast<double>(RuntimeFloat(0.05f)) / Three;
+	CHECK(P.InternalStepDeltaTime == InternalDt);
+	CHECK(P.StepDeltaTime == static_cast<float>(InternalDt));
+	CHECK(P.InternalStepDeltaTime != static_cast<double>(P.StepDeltaTime));
+	CHECK(std::abs(P.InternalStepDeltaTime / static_cast<double>(P.StepDeltaTime) - 1.0) == doctest::Approx(3.7e-8).epsilon(0.05));
 	CHECK(P.FrameDeltaTime == RuntimeFloat(0.05f));   // min(dt, MaxSubsteps * MaxSubstepDeltaTime) = dt
 	CHECK(P.LostTime < 1e-7f);
 	CHECK(P.Params.bSubstepping);
@@ -153,7 +162,7 @@ TEST_CASE("PhysicsTest.StepPlanner.MinDeltaTimeRemainderIsDropped")
 		const FStepPlan P = FStepPlanner::PlanFrame(RuntimeFloat(0.005f), Settings, TestSettings, Accumulator);
 		CAPTURE(Frame);
 		CHECK(P.NumSteps == 0);
-		CHECK(P.NumExternalSteps == 1);
+		CHECK(P.NumPushedSteps == 1);
 		CHECK(P.LostTime == doctest::Approx(0.005).epsilon(1e-6));
 		CHECK(Accumulator == 0.0);
 	}
@@ -164,7 +173,7 @@ TEST_CASE("PhysicsTest.StepPlanner.MinDeltaTimeRemainderIsDropped")
 	Settings.MinPhysicsDeltaTime = RuntimeFloat(0.02f);
 	TestSettings.TickMode = EPhysicsTickMode::Substepping;
 	const FStepPlan Substeps = FStepPlanner::PlanFrame(RuntimeFloat(0.05f), Settings, TestSettings, Accumulator);
-	CHECK(Substeps.NumExternalSteps == 3);
+	CHECK(Substeps.NumPushedSteps == 3);
 	CHECK(Substeps.NumSteps == 0);
 	CHECK(Substeps.LostTime == doctest::Approx(0.05).epsilon(1e-6));
 

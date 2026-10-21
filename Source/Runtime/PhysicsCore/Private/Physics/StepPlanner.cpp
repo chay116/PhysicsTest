@@ -11,35 +11,37 @@ namespace PhysicsTest
 	namespace
 	{
 		// One pushed step through the solver's advance loop (PBDRigidsSolver.cpp:560-575 [V]). Returns the number of
-		// engine steps (0 or 1 in every configuration UE builds: StepsRemaining is 1 when the solver substeps, and
+		// engine steps (0 or 1 in every configuration UE builds: the step budget is 1 when the solver substeps, and
 		// MaxSubSteps is 1 otherwise) and their dt; OutRemaining is the dropped remainder.
 		int32 AdvancePushedStep(const double InternalDt, const float SolverMaxDt, const float SolverMinDt, const int32 SolverMaxSubSteps,
 			const bool bSolverSubstepped, double& OutStepDt, double& OutRemaining)
 		{
-			int32 StepsRemaining = bSolverSubstepped ? 1 : SolverMaxSubSteps;
-			double TimeRemaining = InternalDt;
-			const double MinDeltaTime = SolverMinDt;
-			const double MaxDeltaTime = SolverMaxDt;
+			// The solver runs at most SolverStepBudget steps of at most StepCap each while more than StepFloor of the
+			// interval is left; whatever is left after that is dropped.
+			int32 SolverStepBudget = bSolverSubstepped ? 1 : SolverMaxSubSteps;
+			double IntervalLeft = InternalDt;
+			const double StepFloor = SolverMinDt;
+			const double StepCap = SolverMaxDt;
 			int32 Steps = 0;
 			OutStepDt = 0.0;
-			while (StepsRemaining > 0 && TimeRemaining > MinDeltaTime)
+			for (; SolverStepBudget > 0 && IntervalLeft > StepFloor; --SolverStepBudget)
 			{
-				--StepsRemaining;
-				const double DeltaTime = MaxDeltaTime > 0.0 ? FMath::Min(TimeRemaining, MaxDeltaTime) : TimeRemaining;
-				TimeRemaining -= DeltaTime;
+				const double SolverDt = StepCap > 0.0 ? FMath::Min(IntervalLeft, StepCap) : IntervalLeft;
+				IntervalLeft -= SolverDt;
 				if (Steps == 0)
 				{
-					OutStepDt = DeltaTime;
+					OutStepDt = SolverDt;
 				}
 				++Steps;
 			}
-			OutRemaining = TimeRemaining;
+			OutRemaining = IntervalLeft;
 			return Steps;
 		}
 
 		void Finish(FStepPlan& Plan, const int32 StepsPerPushed, const double StepDt, const double LostSeconds)
 		{
-			Plan.NumSteps = Plan.NumExternalSteps * StepsPerPushed;
+			Plan.NumSteps = Plan.NumPushedSteps * StepsPerPushed;
+			Plan.InternalStepDeltaTime = Plan.NumSteps > 0 ? StepDt : 0.0;
 			Plan.StepDeltaTime = Plan.NumSteps > 0 ? static_cast<float>(StepDt) : 0.0f;
 			Plan.ConsumedTime = static_cast<float>(static_cast<double>(Plan.NumSteps) * static_cast<double>(Plan.StepDeltaTime));
 			Plan.LostTime = static_cast<float>(LostSeconds > 0.0 ? LostSeconds : 0.0);
@@ -71,6 +73,8 @@ namespace PhysicsTest
 
 			// PhysicsSolverBase.cpp:581-621 [V] (FReal = double).
 			const bool bSolverSubstepped = SolverMaxSubSteps > 1;
+			Plan.bSolverSubstepped = bSolverSubstepped;
+			Plan.ClampRule = ESubstepClampRule::UE5ChaosScene;
 			const double InDt = MDeltaTime;
 			double InternalDt = InDt;
 			int32 NumSteps = 1;
@@ -112,18 +116,18 @@ namespace PhysicsTest
 				}
 				// MaxSubstepDeltaTime <= 0 while substepping divides by zero in UE; the harness takes one step of dt.
 			}
-			Plan.NumExternalSteps = NumSteps > 0 ? NumSteps : 0;
+			Plan.NumPushedSteps = NumSteps > 0 ? NumSteps : 0;
 			if (AsyncDeltaTime < 0.0)
 			{
-				Lost += InDt - InternalDt * static_cast<double>(Plan.NumExternalSteps);
+				Lost += InDt - InternalDt * static_cast<double>(Plan.NumPushedSteps);
 			}
 
 			double StepDt = 0.0;
 			double Remaining = 0.0;
-			const int32 StepsPerPushed = Plan.NumExternalSteps > 0
+			const int32 StepsPerPushed = Plan.NumPushedSteps > 0
 				? AdvancePushedStep(InternalDt, SolverMaxDt, SolverMinDt, SolverMaxSubSteps, bSolverSubstepped, StepDt, Remaining)
 				: 0;
-			Lost += Remaining * static_cast<double>(Plan.NumExternalSteps);
+			Lost += Remaining * static_cast<double>(Plan.NumPushedSteps);
 			Finish(Plan, StepsPerPushed, StepDt, Lost);
 			return Plan;
 		}
@@ -134,6 +138,8 @@ namespace PhysicsTest
 		{
 			FStepPlan Plan;
 			Plan.Params = Params;
+			Plan.ClampRule = ESubstepClampRule::UE4PhysSubstep;
+			Plan.bSolverSubstepped = true;
 			const float UseDelta = Params.MaxPhysicsDeltaTime > 0.0f ? FMath::Min(Params.DeltaSeconds, Params.MaxPhysicsDeltaTime) : Params.DeltaSeconds;
 			Plan.FrameDeltaTime = UseDelta;   // UE4 FPhysScene_PhysX broadcast UseDelta = min(dt, MaxPhysicsDeltaTime) [M]
 			const float FrameRate = Params.MaxSubstepDeltaTime;
@@ -145,7 +151,7 @@ namespace PhysicsTest
 			const float SubTime = DeltaSeconds / static_cast<float>(NumSubsteps);
 
 			const float MinDt = FMath::Max(Params.MinPhysicsDeltaTime, UE_SMALL_NUMBER);
-			Plan.NumExternalSteps = static_cast<int32>(NumSubsteps);
+			Plan.NumPushedSteps = static_cast<int32>(NumSubsteps);
 			const bool bStep = static_cast<double>(SubTime) > static_cast<double>(MinDt);
 			double Lost = static_cast<double>(Params.DeltaSeconds) - static_cast<double>(DeltaSeconds);
 			if (!bStep)

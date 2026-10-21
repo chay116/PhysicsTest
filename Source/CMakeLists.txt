@@ -1,7 +1,11 @@
-# Source/ - harness modules (Runtime), programs and tests. Layout: docs/02_Architecture.md section 3.
+# Source/ - harness modules (Runtime), backends, programs and tests. Layout: docs/02_Architecture.md section 3.
 add_subdirectory(Runtime/Core)
+add_subdirectory(Runtime/PhysicsTestAbi)
 add_subdirectory(Runtime/BackendCommon)
 add_subdirectory(Runtime/PhysicsCore)
+add_subdirectory(Backends)                      # backends + the generated PT::BackendRegistry (needs PT::PhysicsCore)
+add_subdirectory(Runtime/PhysicsTestConformance)
+add_subdirectory(Tests/AbiTwin)                 # test-only second static backend (before the programs that link it)
 add_subdirectory(Programs/PhysicsTestAutomation)
 add_subdirectory(Tests/SdkSmoke)
 add_subdirectory(Tests/Probes)

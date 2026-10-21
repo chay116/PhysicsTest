@@ -245,6 +245,30 @@ namespace PhysicsTest
 		return Result;
 	}
 
+	FQuat FQuat::Slerp_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, const double Alpha)
+	{
+		// Shoemake's slerp on the shorter arc: with c = <Quat1, Quat2> and Quat2' = sign(c) Quat2,
+		//   q(t) = (sin((1 - t) theta) Quat1 + sin(t theta) Quat2') / sin(theta),  theta = acos |c|;
+		// the weights tend to (1 - t, t) as theta -> 0 and are used as such for |c| >= 1 - 1e-4. The behavioural reference
+		// is UE's TQuat::Slerp_NotNormalized (UnrealMath.cpp:1226-1255 [V]: shortest arc, the same linear band); the Null
+		// backend's Slerp uses this same formulation, so the two frame drivers interpolate kinematic targets alike.
+		const double Dot4 = Quat1 | Quat2;
+		const double CosTheta = Dot4 < 0.0 ? -Dot4 : Dot4;
+		const double ToSign = Dot4 < 0.0 ? -1.0 : 1.0;
+		double WeightFrom = 1.0 - Alpha;
+		double WeightTo = Alpha;
+		if (CosTheta < 1.0 - 1.0e-4)
+		{
+			const double Theta = FMath::Acos(CosTheta);
+			const double SinTheta = FMath::Sin(Theta);
+			WeightFrom = FMath::Sin(WeightFrom * Theta) / SinTheta;
+			WeightTo = FMath::Sin(WeightTo * Theta) / SinTheta;
+		}
+		WeightTo *= ToSign;
+		return FQuat(WeightFrom * Quat1.X + WeightTo * Quat2.X, WeightFrom * Quat1.Y + WeightTo * Quat2.Y, WeightFrom * Quat1.Z + WeightTo * Quat2.Z,
+			WeightFrom * Quat1.W + WeightTo * Quat2.W);
+	}
+
 	bool FQuat::Equals(const FQuat& Q, const double Tolerance) const
 	{
 		const bool bSame = FMath::Abs(X - Q.X) <= Tolerance && FMath::Abs(Y - Q.Y) <= Tolerance

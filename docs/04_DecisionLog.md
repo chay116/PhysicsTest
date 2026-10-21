@@ -213,6 +213,17 @@
 - DL17의 질량 규칙 순서는 UE 5.8.3 BodyUtils.cpp를 그대로 따른다. 4·5단계는 double로 계산하고(UE는 float), 대각화는 Jacobi다 ([02_Architecture.md](02_Architecture.md) §5.2 #22).
 - DL18의 최소 리졸버는 [02_Architecture.md](02_Architecture.md) §10의 M1 구현 메모대로 만들었다. Normalized의 최대 각속도 해제는 0이 아니라 큰 값이다. Chaos는 `MaxAngularSpeedSq`로 무조건 clamp하므로 0이면 회전이 멈춘다 (PBDRigidsEvolutionGBF.cpp:950-954).
 
+**M2 구현 메모 (DL08, DL19, DL28, DL29, DL40) [V]:**
+- DL29: ABI는 v0.9(major 0) 그대로다. 호스트는 자기 major로 `PT_GetBackendApi`를 부르고, major 1은 NULL이다 (A1). 규칙의 정본은 [Abi.md](Abi.md)다.
+- DL08: Native driver의 계약 `NumStepsTaken == Plan.N`에서 N은 엔진이 실제로 진행한 스텝 수 `FStepPlan::NumSteps`다 (밀어 넣은 스텝 수 `NumPushedSteps`가 아니다. 둘은 MinDeltaTime에서 갈라진다). Native driver는 UE5처럼 `OnPhysSceneStep`을 프레임당 한 번 프레임 dt로 부른다. Harness driver로 도는 씬은 `AsyncDt = -1`로 만들고 async 누산기는 하네스가 돌린다. UE5 substepping에서 Chaos가 실제로 스텝하는 double dt(D/N)를 `FStepPlan::InternalStepDeltaTime`으로 따로 둔다. FixedStep·Sync에서는 float 값과 같아서 두 driver가 비트 단위로 같다 (A10, Null로 확인).
+- DL28: A0~A7, A9, A10을 Null의 static과 DLL 두 경로로 통과시켰다. A4는 표 기반 음성 사례 70개(모듈 4 + 씬 66, "약 30개 이상". 수정 라운드 1에서 해제한 바디 사례 5개를 더했다)이고 1만 건 fuzz는 그대로 M15다. A9는 `Tools/check_modules.py`(dumpbin)와 `PtAbiUeCompatCheck` 빌드다.
+- DL40: `AsyncFixedTimeStepSize = 0`은 Kit이 `PT_E_INVALID_ARG`로 거부한다 (A4). 0이 아닌 양수는 `NATIVE_FRAME_MODEL` 백엔드만 받는다 (그 밖은 `PT_E_UNSUPPORTED`).
+- DL19: A7은 일반 키 24개 + `GetInfo`의 백엔드 키를 확인한다. Null은 일반 집합만 선언하고, 개념이 없는 키는 `native="n/a"`, COMPILE_TIME으로 낸다.
+- DL08 (M2 수정 라운드): 프레임 안의 명령 규칙은 UE5 Chaos를 따른다. 힘은 push한 프레임의 모든 스텝에 작용하고(`CopySubstepData`), push가 없는 프레임의 힘은 다음 push에서 1/ExternalSteps로 평균되며, `bAllowSubstepping`은 무시한다. kinematic 목표는 `PseudoFraction`(solver substep이면 1/(N−k), 아니면 첫 스텝)이다. Native 백엔드(Null)와 Harness driver의 UE5 규칙이 같고, Harness driver의 `UE4PhysSubstep` 규칙(PhysX UE4Compat)만 UE4 `FPhysSubstepTask` 방식이다. 이 규칙은 M6에 핵심 ABI와 함께 동결된다 ([Abi.md](Abi.md) §5.10).
+- DL29 (M2 수정 라운드): UBT 브리지의 `PT_BACKEND_NS`는 `ChaosBridge`다. `Chaos`이면 `PhysicsTest::Abi::Chaos`가 UE `::Chaos`와 모호해진다.
+- DL08 (M2 수정 라운드 1): 두 driver가 같은 명령 흐름을 보낸다. 매 프레임 push하므로 스텝이 없는 프레임의 쓰기도 그 프레임에 백엔드에 닿고, `AddForce`/`AddTorque`의 GT 깨우기는 호출한 자리의 `WAKE_UP`, 힘은 스텝을 push하는 프레임까지 씬이 들었다가 `PT_CMDF_NO_WAKE`로 보낸다 (PutToSleep이 그 앞의 힘을 버리는 UE 규칙 포함). `OnPhysSceneStep`은 두 driver 모두 프레임당 한 번이다 (UE4 규칙만 서브스텝마다). kinematic 목표는 모든 진입점(`SetBodyTransform`, `FPhysicsInterface`)이 씬 동사 `SetKinematicTarget_AssumesLocked`로 간다. 그래서 FixedStep·Sync의 비트 동일이 스텝이 없는 프레임과 무작위 명령에서도 성립한다 (A10 (b)). 남는 차이는 다중 스텝 프레임의 토크 월드 관성 시점이다 ([Abi.md](Abi.md) §5.10).
+- DL29 (M2 수정 라운드 1): Kit이 해제 집합을 들고 해제 관련 검사를 모든 백엔드에 같게 한다. `PT_READ_ALL`은 해제한 바디까지 빽빽하고(UNINITIALIZED), `PT_READ_ACTIVE_ONLY`는 `OutIndices`가 필요하다. 명령 flag `PT_CMDF_NO_WAKE`(bit 3)를 더했다. 모두 v0.9 안의 변경이다 (major 0 유지).
+
 ### 4.2 마일스톤별 요약
 
 | 마일스톤 | 차단하는 질문 | 확인을 권장하는 질문 |

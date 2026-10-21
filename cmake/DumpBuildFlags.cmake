@@ -94,6 +94,7 @@ set(_exp_arch_deps_imgui     "")
 set(_exp_arch_other          "")
 set(_exp_std_sdk_physx       "c++14")
 set(_exp_std_harness         "c++20")
+set(_exp_std_harness_c       "c11")     # harness C TUs: the ABI header compiled as C11 (PtAbiC11Check, M2)
 # One iterator debug level for every TU (LNK2038 / ODR otherwise): the MSVC STL default for the CRT (2 with _DEBUG).
 if(PT_BUILD_TYPE STREQUAL "Debug")
 	set(_exp_idl 2)
@@ -305,8 +306,15 @@ macro(_pt_process_tu)
 			list(APPEND _violations "${_file_rel}: static CRT -${_c}")
 		endif()
 	endforeach()
-	if(DEFINED _exp_std_${_group} AND NOT _std STREQUAL _exp_std_${_group})
-		list(APPEND _violations "${_file_rel}: /std '${_std}' (expected '${_exp_std_${_group}}')")
+	set(_exp_std "")
+	if(DEFINED _exp_std_${_group})
+		set(_exp_std "${_exp_std_${_group}}")
+	endif()
+	if(_group STREQUAL "harness" AND _file_n MATCHES "\\.c$")
+		set(_exp_std "${_exp_std_harness_c}")
+	endif()
+	if(NOT _exp_std STREQUAL "" AND NOT _std STREQUAL _exp_std)
+		list(APPEND _violations "${_file_rel}: /std '${_std}' (expected '${_exp_std}')")
 	endif()
 	if(_lto)
 		list(APPEND _violations "${_file_rel}: /GL (LTO is off for every engine)")
@@ -511,7 +519,7 @@ set(_json_text
   \"physx_config\": ${_physx_json},
   \"jolt_public_defines\": ${_jolt_json},
   \"bullet_header_defines\": ${_bullet_defines_json},
-  \"expect\": {\"crt\": \"${_exp_crt}\", \"fp\": \"${_exp_fp}\", \"idl\": ${_exp_idl}, \"arch\": {\"sdk.jolt\": \"${_exp_arch_sdk_jolt}\", \"jolt_consumers\": \"${_exp_arch_jolt_consumer}\", \"sdk.physx\": \"${_exp_arch_sdk_physx}\", \"sdk.bullet\": \"${_exp_arch_sdk_bullet}\", \"harness\": \"\"}, \"std\": {\"sdk.physx\": \"${_exp_std_sdk_physx}\", \"harness\": \"${_exp_std_harness}\"}},
+  \"expect\": {\"crt\": \"${_exp_crt}\", \"fp\": \"${_exp_fp}\", \"idl\": ${_exp_idl}, \"arch\": {\"sdk.jolt\": \"${_exp_arch_sdk_jolt}\", \"jolt_consumers\": \"${_exp_arch_jolt_consumer}\", \"sdk.physx\": \"${_exp_arch_sdk_physx}\", \"sdk.bullet\": \"${_exp_arch_sdk_bullet}\", \"harness\": \"\"}, \"std\": {\"sdk.physx\": \"${_exp_std_sdk_physx}\", \"harness\": \"${_exp_std_harness}\", \"harness_c\": \"${_exp_std_harness_c}\"}},
   \"summary\": {
 ${_summary}
   },
