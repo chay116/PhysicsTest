@@ -143,6 +143,7 @@ D:\PhysicsTest\
   cmake/
     PTOptions.cmake   PTToolchain.cmake   PTFlagProfiles.cmake   PTModules.cmake
     PTBuildInfo.h.in  PTBackendRegistry.cpp.in  DumpBuildFlags.cmake  GitInfo.cmake (build-step git SHA -> PTGitInfo.h, M7)
+    PTPython.cmake (PT_PYTHON = .venv, jsonschema / ptbench probes, skipped Python tests without them, M8)
     ThirdParty/  Jolt.cmake  PtBullet.cmake  PhysX.cmake  PhysXBootstrap.cmake (VS only)  ImGui.cmake  SmallDeps.cmake
                  PtFetch.cmake (pinned FetchContent helpers + SHA guard, M0)
     Chaos/       PtChaosUbt.cmake
@@ -151,7 +152,7 @@ D:\PhysicsTest\
     Profiles/UEParity.ini  Profiles/Normalized.ini   (M1 drafts, complete M9)
     Profiles/Backend/  PhysX.UE4Compat  PhysX.SdkDefault  PhysX.UE4Compat-TGS  PhysX.UE4Compat-Stab
                        Jolt.Default (M3)  Jolt.SharpBoxes  Bullet.Default  Bullet.StaticAabbOff  Chaos.Game  Chaos.Evolution  (.ini)
-    Matrices/  smoke headline sensitivity-avx2 scaling overhead behavior determinism (.json)
+    Matrices/  smoke determinism (M8)  headline sensitivity-avx2 scaling overhead behavior (later) (.json, schema physicstest.matrix/1)
     Golden/    tolerances.json  scene_hashes.json  native_hashes.json
     Schemas/   manifest.schema.json  exit.schema.json (M7)  session / matrix (M8)  stamp (M10) (.schema.json)
   Source/
@@ -211,6 +212,7 @@ D:\PhysicsTest\
                namespaces, backend isolation, Kit needs PT_BACKEND_NS, M2; harness SDK isolation, bench without renderer, M3;
                automation without renderer, M4)
                AbiTwin/ (second static test backend, PT_BACKEND_NS=AbiTwin: Kit state isolation and guards, M2)
+               PtBench/ (CTest PhysicsTest.Py.*: Tools/ptbench unit, analytic vs C++, integration with the bench exe, M8)
   Unreal/ChaosBridgeHost/          UBT only, implemented by the user
     ChaosBridgeHost.uproject       (name differs from the target, UEBuildTarget.cs:1926-1946 [V])
     .gitignore                     Binaries/ Intermediate/ Saved/ DerivedDataCache/ *.generated.h *.gen.cpp *.dll *.pdb
@@ -221,11 +223,14 @@ D:\PhysicsTest\
   Tools/  cmake.cmd ctest.cmd vcenv.cmd (vcvars64)  check_physx_isolation.cmd + CompareBuildFlags.cmake (M0)
           check_modules.py  validate_manifest.py (M7)  Chaos/build_chaos.cmd
           ptbench/ (runner, envcheck, analysis/{load,validate,perf,behavior,determinism,report}, analytic)
-          ptbench/requirements.lock  wheelhouse/ (offline only, ignored)
+          ptbench/ M8: pyproject.toml (package dir = this folder, editable install into .venv)  __main__ (python -I -m ptbench)
+                   common matrix runner envcheck analytic  analysis/{load,validate,perf,report,determinism}  tests/{test_unit,test_integration}
+          ptbench/requirements.lock  requirements-build.txt (M8)  wheelhouse/ (offline only, ignored)
   .venv/  (ignored, repository root; Tools/ptbench analysis packages)
   docs/   01_Feasibility.md  02_Architecture.md  03_WorkPlan.md  04_DecisionLog.md  appendix/A_HeaderSketches.md
           Abi.md (M2 draft)  Scenes.md (M3)  ChaosBackendGuide.md (M6)  TimingContract.md  ResultsSchema.md (M7)  Progress.md
           (planned) Profiles.md  ChaosSpike.md  Checkpoints.md
+          reports/m8_smoke/ (M8: one UNOFFICIAL smoke report copied from Saved/, Balanced power plan)
   out/<preset>/   (ignored, short root)
   Saved/          (ignored) Logs/ Results/<session>/<run_id>/ Conformance/ Screenshots/
 ```
@@ -518,7 +523,7 @@ UE가 하는 순서를 그대로 따른다.
 - 100 cm 정육면체: 177.83 kg, 296,380 kg·cm²
 - 50 cm 정육면체: 37.384 kg
 - 10 cm 정육면체: 1 kg
-- 단위가 아닌 InertiaTensorScale과 0이 아닌 COMNudge를 함께 준 경우: 6~8단계 순서를 고정하는 테스트. 기대값은 `analytic.py`가 문서화된 공식으로 독립 계산한다.
+- 단위가 아닌 InertiaTensorScale과 0이 아닌 COMNudge를 함께 준 경우: 6~8단계 순서를 고정하는 테스트. 기대값은 테스트가 문서화된 공식으로 독립 계산한다 (C++ 단위 테스트, M1. M8의 `Tools/ptbench/analytic.py`는 dt_engine 기준값만 다룬다).
 
 ## 6. 단일 씬 모델 [MVP M1~M2]
 
@@ -1089,7 +1094,7 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
   - 읽기 오버헤드를 측정해 기록한다 (< 30 ns 예상).
 
 **루프 제약:** 타이밍 루프 안에서는 할당, I/O, 로그를 하지 않는다. `test` 빌드의 카운팅 훅으로 검증한다 [확장 M7].
-- **M7 구현 [V]:** 벤치 exe가 전역 `operator new`/`delete`(모든 형)를 바꿔 원자 카운터에 센다 (`PhysicsTestBench/Private/AllocationHook.cpp`). manifest `alloc.tick_new_calls`는 `Tick`(타이밍 버킷) 안에서 일어난 `operator new` 호출 수다. 하네스, Kit, 정적 어댑터, SDK의 `operator new`가 모두 이 훅을 지난다. SDK가 자기 할당자로 하는 할당(Jolt `JPH::Allocate`, Bullet `btAlignedAlloc`, PhysX `PxAllocatorCallback`은 `malloc` 계열)은 이 훅에 보이지 않으므로, 백엔드가 셀 수 있으면 `PtMemoryStats.NumAllocs`의 루프 전후 차이를 `alloc.backend_allocs_in_loop`로 따로 적는다 (PhysX·Null. Jolt·Bullet은 null). `tick_new_calls` > 0이면 헤드라인 자격이 없다. `backend_allocs_in_loop`는 엔진 거동이라 자격에 넣지 않고 기록만 한다. 클럭 읽기 오버헤드는 시작할 때 QPC를 20000번 읽어 `clock.read_overhead_ns`로 기록한다 ([TimingContract.md](TimingContract.md) §2.1).
+- **M7 구현 [V]:** 벤치 exe가 전역 `operator new`/`delete`(모든 형)를 바꿔 원자 카운터에 센다 (`PhysicsTestBench/Private/AllocationHook.cpp`). manifest `alloc.tick_new_calls`는 `Tick`(타이밍 버킷) 안에서 일어난 `operator new` 호출 수다. 하네스, Kit, 정적 어댑터, SDK의 `operator new`가 모두 이 훅을 지난다. SDK가 자기 할당자로 하는 할당(Jolt `JPH::Allocate`, Bullet `btAlignedAlloc`, PhysX `PxAllocatorCallback`은 `malloc` 계열)은 이 훅에 보이지 않으므로, 백엔드가 셀 수 있으면 `PtMemoryStats.NumAllocs`의 루프 전후 차이를 `alloc.backend_allocs_in_loop`로 따로 적는다 (첫 판은 PhysX·Null만, M7 수정 라운드 0부터 Jolt는 `JPH::Allocate` 계열 함수 포인터의 세는 래퍼, Bullet은 `btAlignedAllocSetCustom`으로 세 SDK 모두. M8에서 고친 문장). `tick_new_calls` > 0이면 헤드라인 자격이 없다. `backend_allocs_in_loop`는 엔진 거동이라 자격에 넣지 않고 기록만 한다. 클럭 읽기 오버헤드는 시작할 때 QPC를 20000번 읽어 `clock.read_overhead_ns`로 기록한다 ([TimingContract.md](TimingContract.md) §2.1).
 
 ### 9.4 엔진별 타이밍 구간 [MVP M3·M5, Chaos 행은 확장 M13]
 
@@ -1367,6 +1372,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **[확장 M7] 전체판:** 나머지 인자, 호스트 제어, recorder, preflight, 종료 코드.
 - `-HashEvery=0`은 "마지막 프레임 뒤에만"이라는 뜻이며 bench 모드의 기본이다 (§9.1).
 - **M7에서 더한 인자 [V]:** `-Affinity`, `-RunMode=Bench|Viz`, `-Instrument=`(counters, phases, alloc, contacts, native_debug_draw), `-HashEvery`, `-StatesEvery`, `-CountersEvery`, `-CaptureEvery`, `-Repeat`, `-Order`, `-BlockSeed`, `-PreRoll=`(초, 기본 0.5), `-HostCheck=enforce|record`, `-ContaminationPct=`(기본 5), `-Gate=G8|G11`(여러 프로세스 게이트, `-Runs=`), 시험 전용 `-InjectPreflightFault=`, `-InjectSceneInstrumentFlags=`, `-InjectFatal`, `-BusyHelper=<초>`. 인자 표와 기본값은 [TimingContract.md](TimingContract.md)와 [ResultsSchema.md](ResultsSchema.md)에 있다. M3의 `-Repeat`은 run 수가 아니라 manifest `order.repeat_index`다 (fresh process 반복은 러너 M8과 `-Gate=G8`의 몫).
+- **M8에서 더한 인자 [V]:** `-AnalyticReferences`(C++ 해석 기준값과 입력을 JSON으로 stdout에 낸다, `analytic.py --check-cpp`), 시험 전용 `-InjectTickAllocation=<f>`(frame f의 `Tick` 안에서 `operator new` 한 번: 할당 훅의 양성 대조), `-InjectSilentExit=<f>`(frame f 뒤 `TerminateProcess(0)`, 출력·`exit.json` 없음: "도중에 죽은 run"). 두 시험 스위치는 `run.test_injections`와 헤드라인 사유 "test-only injection"에 남는다 (TimingContract §6 #10). M3부터 있던 `-Session=`(manifest `session`)은 M8 러너가 세션 id를 넘기는 데 쓴다.
 
 ### 12.2 실행 순서 (1 run = 1 process)
 
@@ -1451,6 +1457,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **`hashes.csv`** [확장 M7]: `frame, h_native, h_quantized`. h_quantized는 위치 1e-4 cm, quat는 w≥0으로 정규화 후 1e-6. 엔진 간이나 빌드 간에는 절대 비교하지 않는다. M7은 `h_state`(`states.ptst` 바디 레코드 앞 105 B의 FNV-1a 64, 비트 단위 상태 해시) 열을 더했다. G11은 이 값을 프레임마다 비교한다.
 - **`contacts.ptcn`** [확장 M7]: `PTCN` 헤더(32 B) + 프레임별 {u32 frame, u32 count} + `PtContactPoint[count]`.
 - **그 외:** `effective_settings.jsonl` [MVP M3], `scene.json` (정규 JSON, %.17g), `build_flags.json`, `backend.log`, `exit.json` [확장 M7].
+  - **M7·M8 실제 [V]:** `build_flags.json`은 run 디렉터리에 쓰지 않는다. 빌드 사실은 manifest의 `build.flags_json_sha256`·`flags_json_tu_count`와 `backend.tu_self_report`(G0 입력)에 들어간다. `backend.log`도 따로 없다: 백엔드 로그는 벤치의 stdout·stderr로 나가고, M8 러너가 run 디렉터리의 `child.log`에 받는다 (`-Gate=`의 자식도 같다). 그 밖에 `effective_settings_after.jsonl`, `hashes.csv`, `teardown.json`(M7)이 있다 ([ResultsSchema.md](ResultsSchema.md) §1, Progress.md M8 §3).
 - M3 최소 벤치는 마지막 프레임의 `h_native`를 manifest의 determinism 필드에만 남긴다.
 
 **M3 최소 벤치 구현 메모 [V]** (`PT::Benchmark`, `PhysicsTestBench.exe`)
@@ -1498,6 +1505,16 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 
 헤드라인 매트릭스의 기계 시간은 약 1~1.5시간이다.
 
+**M8 구현 메모 [V]** ([Progress.md](Progress.md) M8, [TimingContract.md](TimingContract.md) §5.2, [ResultsSchema.md](ResultsSchema.md) §11)
+- **패키지:** `Tools/ptbench`가 곧 패키지 디렉터리다 (`pyproject.toml`의 `package-dir`). 저장소 `.venv`에 `pip install --no-build-isolation --no-deps -e Tools/ptbench`로 설치하고 `python -I -m ptbench <command>`로 돌린다. 명령: `envcheck`, `run`, `load`, `validate`, `perf`, `report`, `determinism`, `analytic`.
+- **환경 게이트:** 전원 계획은 `powercfg /getactivescheme`의 GUID로 판정한다 (이름은 지역화된다: 이 PC는 "균형 조정"). 유휴는 `GetSystemTimes`로 2 s 창의 시스템 전체 바쁨 < 3%를 본다: 한 창이라도 통과할 때까지 최소 5창, `--idle-wait`(기본 120 s) 동안 (이 사용 중인 데스크톱은 2.5~4.9%를 오가 5창 고정으로는 무인 시작이 자주 거부됐다, M8 수정 라운드 0). 다른 PhysicsTest 프로세스는 Toolhelp32 스냅숏으로 찾는다. 실패한 검사의 우회 플래그(`--allow-balanced`, `--allow-busy`, `--allow-concurrent`)와 시험용 `--skip-idle`(유휴를 재지 않음, 우회로 기록)은 `session.json` `bypasses`와 리포트 머리에 남는다. 거부되면 종료 코드 3이고 아무 run도 돌지 않는다.
+- **블록 셔플:** 반복 r의 seed = splitmix64(`block_seed` + r)의 출력, 순서 = 그 seed의 splitmix64 Fisher-Yates. Python의 `random.shuffle`은 알고리즘이 계약이 아니어서 쓰지 않았다. 벤치에 `-Repeat`, `-Order`, `-BlockSeed`를 넘겨 manifest `order`에 남긴다.
+- **판정:** `exit.json`만 믿는다. 없으면 `no_exit_json`(또는 `timeout`) 실패이고, 원시 종료 코드는 `process_exit_code`로 기록만 한다. 시험 전용 `-InjectSilentExit=<f>`(원시 코드 0, 출력 없음)로 확인했다. run마다 `exit.json`·`manifest.json`을 스키마로 검증한다 (M7 후속 "러너가 run마다 검증").
+- **종료 코드 4 (리드 결정, M8):** 오염 문턱(코어당 5% × 코어 수)은 그대로 두고, 4로 끝난 run을 쿨다운 뒤 fresh process로 최대 2번 다시 돈다. 모든 시도가 4이면 그 반복과 셀이 `contaminated`다. 시도마다 `index.csv` 한 줄이 남는다.
+- **추가 스위치 (M8 수정 라운드 1):** 매트릭스의 `bench_args`, 타깃의 `bench_args`, `--bench-arg`에서 한 셀에 같은 스위치 키(대소문자 무시, `=` 앞, `-ini:`는 `[Section]:Key`까지)가 두 번 나오면 러너가 거부한다 (`MatrixError`, 종료 코드 2, run 없음). 벤치는 `FParse::Value`로 스위치의 **첫** 출현만 읽으므로(UE Parse.cpp:265의 `FCString::Strifind`와 같은 규칙) 뒤의 중복은 말없이 무시되기 때문이다. 러너가 셀마다 넘기는 스위치(`-Out`, `-Backend`, `-BackendProfile`, `-Profile`, `-Scenario`, `-Param:<k>`, `-Threads`, `-Frames`, `-Repeat`, `-Order`, `-BlockSeed`, `-Session`)와 다른 모드를 여는 스위치(`-Gate`, `-List`, `-Describe`, `-Conformance`, `-AnalyticReferences`, `-SceneHashes`, `-BusyHelper`)도 거부한다. 키가 모두 다르므로 명령줄의 순서는 아무것도 정하지 않는다.
+- **자식 프로세스 (M8 수정 라운드 1):** 벤치는 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job object에 들어간다 (M7 `FProcessSpawner`의 `-Gate=` 자식과 같다). 러너가 어떻게 끝나든(Ctrl+C, CTest 타임아웃, 충돌) 벤치도 끝난다. 대기는 try/finally라 예외에도 자식을 죽이고, KeyboardInterrupt 밖의 예외도 `session.json`을 `aborted`(사유 포함)로 남긴 뒤 다시 던진다. `exit.json`을 쓴 뒤 30 s(`teardown_grace_s`) 안에 끝나지 않는 run(TermGamePhys나 정적 teardown의 멈춤, DL52)은 그때 죽이고 `teardown_killed` true와 메모를 남긴다. 판정은 그 `exit.json`이다 (러너는 1 s마다 `exit.json`이 생겼는지만 본다).
+- **smoke 매트릭스 (03 M8 완료 기준):** 4 엔진 변형 × {P0, BoxPile 1k, 5k} × T = 1 × R = 5 = 60 run이 이 PC(Balanced, 사용 중)에서 무인으로 약 4분에 끝난다.
+
 ## 13. 분석 파이프라인 (`Tools/ptbench/analysis`)
 
 사용 패키지: numpy, pandas, pyarrow, scipy, matplotlib, jsonschema. 버전을 고정한 venv/wheelhouse로 설치한다 (§4.7).
@@ -1511,6 +1528,14 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 | determinism | DET1 행렬과 첫 발산 프레임. DET2~DET5는 M15 | 확장 M8 |
 | report | `report/<date>/index.md` + PNG. comparability key마다 표 하나 (M10 전에는 scene × profile × flag × T마다) | 확장 M8 |
 | analytic | 모든 해석 기준값을 `dt_engine = (double)(float)dt`로 계산한다. ±1e-9 허용오차는 이 기준에만 쓴다 | 확장 M8 (단위 테스트 쪽은 MVP M1) |
+
+**M8 구현 메모 [V]** ([Progress.md](Progress.md) M8)
+- **load:** 입력은 세션 디렉터리, `-Gate=G8` 디렉터리, run 디렉터리다 (아니면 세 단계까지 찾아 내려간다). 모든 run의 `exit.json`·`manifest.json`을 스키마로 다시 검증해 parquet 네 개(runs, frames, effective, gates)를 `<세션>/analysis/`에 쓴다. 목록·객체 필드는 JSON 문자열로 둔다. 플래그 열은 nullable boolean, 코드·개수 열은 nullable Int64다 (도중에 죽은 run의 빈 값이 문자열 "nan"·"True"가 되지 않는다). 씬 이름에는 기본값(24301)이 아닌 `Seed`만 남긴다.
+- **validate:** run 거부 사유는 하나씩 모두 적는다 (`exit.json` 없음 = "원시 종료 코드는 믿지 않음", 종료 코드 ≠ 0, 스키마 불일치, viz·Behavior 모드, 계측 tier, preflight 게이트 실패, 오염, 헤드라인 자격 없음과 그 사유). 표는 scene × profile × flag profile × T이고, 한 표 안에 플래그 프로필이 둘이거나 `desc_sha256`이 둘이면 `TableError`로 표 자체를 거부한다 (리포트에는 "표 거부"로 남고 통계를 내지 않는다: perf가 그 표의 셀에 값을 만들지 않고 셀별 CV 목록에도 "표 거부"로만 적는다). 한 표의 run이 여러 빌드(exe_sha256, git_sha, preset)에서 오면 표는 만들되 주의를 단다 (M10 comparability key 전까지).
+- **perf:** run 값 = 윈도 `T_frame` 평균(manifest), 셀 = run 값의 중앙값·평균·최소·최대·CV(표본 표준편차 / 평균), p95·p99 = 셀의 모든 run의 윈도 프레임을 합친 nearest-rank, 프레임별 중앙값/IQR, N-스케일링 α(로그-로그 최소제곱), S(T)/E(T)(T가 여럿일 때), 오버헤드 모델 t = a + b·N(P0/P1/M3).
+- **report:** `<세션>/report/<날짜>/index.md` + PNG(표마다 막대 = 중앙값과 run 점, BoxPile 표마다 프레임별 중앙값/IQR, N-스케일링). 머리에 비공식 표시와, 전원 계획이 High performance가 아니면 그 사실과 우회 플래그를 굵게 적는다. 머리는 모든 입력에서 만든다: 세션마다의 게이트와 run마다의 manifest `platform.power_scheme_high_performance` (run 디렉터리·G8 디렉터리만의 리포트, 여러 세션, 세션 도중의 전원 계획 변경도 표시된다). `ptbench report`는 입력을 여럿 받는다. 같은 조건(비공식, High performance가 아닌 전원 계획, 게이트 우회)을 모든 표 제목 밑의 한 줄과 모든 그림 제목 위의 한 줄로도 적는다: 표나 PNG를 따로 떼어 봐도 조건이 보인다 (M8 수정 라운드 1). 고른 윈도에 값이 없는 series는 표에 "값 없음"으로 적고 그림에서 뺀다.
+- **determinism:** DET1 그룹(G8 디렉터리, 세션의 셀, 같은 exe·T·모듈의 run) × run의 마지막 `h_native`·`h_state`와, `hashes.csv`에서 기준 run(과반과 같은 run, 과반이 없으면 run 0)과 처음 다른 프레임(`h_native` 먼저, 그다음 `h_state`). 해시가 모든 프레임에 있으면 "per-frame"(정확한 첫 발산), 헤드라인 run처럼 마지막 프레임뿐이면 "sparse"(첫 발산은 그 프레임이거나 그 전)다. 기준 run은 해시 열이 과반과 같은 run이다 (run이 셋 이상일 때: run 0이 홀로 다르면 run 0을 다른 run으로 적는다. 과반이 없으면 run 0). 판정은 equal, DIFFERENT, incomplete다. incomplete는 run 하나라도 실패했거나(`exit.json` 없음, 0·4 밖의 종료 코드) 끝까지 간 run이 둘 미만인데 끝까지 간 run들은 같은 경우다: DET1은 N개가 **모두** 같아야 하므로 통과가 아니다 (M7 `-Gate=G8`도 자식이 실패하면 실패다). 종료 코드 4 run은 타이밍만 오염됐으므로 끝까지 간 run으로 센다. CLI 종료 코드는 0 모두 equal, 1 DIFFERENT, 2 run 없음, 3 incomplete (M8 수정 라운드 1).
+- **analytic:** `Analytic::*`(C++)와 같은 식을 같은 순서로 쓴다. 벤치의 `-AnalyticReferences`가 C++ 값을 입력과 함께 JSON으로 내고, `analytic.py --check-cpp`가 그 입력으로 다시 계산해 비교한다: 14 사례 22 값의 최대 차이 1.1e-13 (z60 = 501.83328137049938 cm는 두 쪽이 비트까지 같다).
 
 **Comparability key [확장 M10]**
 - `sha256(scene_sha256, desc_sha256, physics_sha256, mass_rule, flag_profile, tick_mode, dt, T, sync_policy, mode, instrumentation, harness_commit)`
@@ -1594,7 +1619,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 **반발 게이트 (G4, 그리고 `M5.BouncingBalls`)**
 - 60 Hz에서 h0 = 200 cm면 충돌 속도는 626 cm/s, 스텝당 10.4 cm를 움직인다. speculative contact가 없는 엔진은 접촉이 늦고 깊게 시작한다. PhysX UE4Compat의 contactOffset은 r=25에서 2 cm이고 maxDepenetration은 PX_MAX_F32다. 그러면 침투 해소가 반발에 더해져 apex 비가 ±0.02를 벗어날 수 있다.
 - 그래서 둘 중 하나를 쓴다:
-  - `analytic.py`가 z0를 골라, 이산 궤적이 정확히 스텝 경계에서 바닥에 닿게 한다. 낙하 거리 = g·dt_e²·k(k+1)/2이며, 예를 들어 k = 38이면 201.72 cm다.
+  - `Analytic::StepBoundaryDropHeight`(C++, M6. Python 쪽은 M8의 `analytic.py` `step_boundary_drop_height`)가 z0를 골라, 이산 궤적이 정확히 스텝 경계에서 바닥에 닿게 한다 (`S05` v2는 그 위 0.01 cm TouchGap). 낙하 거리 = g·dt_e²·k(k+1)/2이며, 예를 들어 k = 38이면 201.72 cm다.
   - 또는 접촉 구간 직전·직후 프레임의 COM 법선 속도로 e = −v_after / v_before를 잰다. apex 비는 보조 지표로 남긴다.
 - 엔진별 허용오차는 사유와 함께 `tolerances.json`에 **미리** 등록한다.
 

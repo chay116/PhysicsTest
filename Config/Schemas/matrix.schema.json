@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://physicstest.local/schemas/matrix.schema.json",
+  "title": "PhysicsTest run matrix (physicstest.matrix/1)",
+  "description": "Config/Matrices/<name>.json, read by Tools/ptbench (python -I -m ptbench run --matrix <name>; 03_WorkPlan M8, 02_Architecture 12.5). Cells = targets x profiles x scenes x threads minus the exclude rules; every repeat runs each cell once in a block shuffled with a seed derived from block_seed (docs/ResultsSchema.md 11).",
+  "type": "object",
+  "required": [ "schema", "name", "description", "purpose", "repeats", "block_seed", "targets", "profiles", "scenes" ],
+  "additionalProperties": false,
+  "properties": {
+    "$comment": { "type": "string" },
+    "schema": { "const": "physicstest.matrix/1" },
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,32}$" },
+    "description": { "type": "string", "minLength": 1 },
+    "purpose": {
+      "description": "perf: timing tables (R >= 5 is the protocol, 02 12.5; the report marks fewer). determinism: DET1 groups (fresh processes of one exe, same T), usually with -HashEvery=1 for the first divergent frame. M9 (behavior) and M11 (thread series) extend this enum and the schema version.",
+      "enum": [ "perf", "determinism" ]
+    },
+    "preset": {
+      "description": "The build whose out/<preset>/bin/PhysicsTestBench.exe runs the matrix (headline timing: test or test-avx2). --exe / --preset override it.",
+      "enum": [ "dbg", "dev", "test", "test-avx2" ]
+    },
+    "repeats": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "block_seed": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "cooldown_s": { "description": "Wait before every run (02 12.5: 2 s); the system load during it is recorded.", "type": "number", "minimum": 0, "maximum": 600 },
+    "timeout_s": { "description": "A run that does not end in time is killed and recorded as timed_out (no exit.json).", "type": "number", "exclusiveMinimum": 0, "maximum": 86400 },
+    "contaminated_retries": { "description": "Fresh-process retries of a run that ends with exit code 4 (default 2); the cell is 'contaminated' when every attempt ends with 4.", "type": "integer", "minimum": 0, "maximum": 10 },
+    "window": { "description": "The scene window whose per-run mean is the run's value (default headline).", "type": "string", "minLength": 1 },
+    "bench_args": { "description": "Extra PhysicsTestBench switches for every run (e.g. -HashEvery=1 for a determinism matrix). ptbench refuses a switch key (case-insensitive, before '='; -ini: up to [Section]:Key) that appears twice for a cell over the matrix's, the target's and --bench-arg switches - the bench reads the first occurrence only (FParse::Value) - and the switches the runner sets per cell (-Out, -Backend, -BackendProfile, -Profile, -Scenario, -Param:, -Threads, -Frames, -Repeat, -Order, -BlockSeed, -Session) or that start another mode (-Gate, -List, -Describe, -Conformance, -AnalyticReferences, -SceneHashes, -BusyHelper).", "type": "array", "items": { "type": "string", "pattern": "^-" } },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [ "label", "backend" ],
+        "additionalProperties": false,
+        "properties": {
+          "label": { "description": "The series label of a table (engine.variant).", "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,40}$" },
+          "backend": { "type": "string", "minLength": 1 },
+          "variant": { "type": "string" },
+          "bench_args": {
+            "description": "Extra PhysicsTestBench switches for this target only (e.g. an -ini: or -ExecCmds variant of one engine; M8 review: forward-compatible for M9 / M11). No key may repeat one of the matrix's bench_args or --bench-arg (the bench would read only the first occurrence, so the position never decides), nor be a runner switch (see bench_args). The label must tell the target apart: tables group by label.",
+            "type": "array",
+            "items": { "type": "string", "pattern": "^-" }
+          }
+        }
+      }
+    },
+    "profiles": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [ "scenario" ],
+        "additionalProperties": false,
+        "properties": {
+          "scenario": { "type": "string", "minLength": 1 },
+          "params": { "type": "object", "additionalProperties": { "type": [ "string", "integer" ] } },
+          "frames": { "description": "0 or absent = the scene's default.", "type": [ "integer", "null" ], "minimum": 0 }
+        }
+      }
+    },
+    "threads": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 64 } },
+    "exclude": {
+      "description": "Cells to leave out: every named field must match (a list means any of; params: every named parameter). E.g. {\"backend\": \"Bullet\", \"T\": [2, 3, 4, 5, 6], \"reason\": \"Bullet runs T = 1 only (02 9.6)\"}.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "reason" ],
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string", "minLength": 1 },
+          "label": { "type": [ "string", "array" ] },
+          "backend": { "type": [ "string", "array" ] },
+          "variant": { "type": [ "string", "array" ] },
+          "profile": { "type": [ "string", "array" ] },
+          "scenario": { "type": [ "string", "array" ] },
+          "params": { "type": "object" },
+          "T": { "type": [ "integer", "array" ] }
+        }
+      }
+    }
+  }
+}

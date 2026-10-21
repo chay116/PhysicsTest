@@ -272,10 +272,18 @@
 - DL29 (v1.0 append-only): ABI 레이아웃은 바꾸지 않았다. 입력 구조체의 Reserved 필드는 0이어야 한다는 규칙을 Kit 검사(`PT_E_INVALID_ARG`)와 A4 사례 7개로 넣었고, 선택 effective 키 `contact.point_pose`를 더했다 ([Abi.md](Abi.md) §2, §5.14). A4의 Reserved 사례는 M7 이후 Kit으로 빌드한 모듈에서만 통과한다 (적합성은 현재 Kit으로 다시 빌드한 모듈에 한다).
 
 **M7 수정 라운드 0 (독립 검사 반영) [V]** ([Progress.md](Progress.md) M7 §7)
-- DL11, 종료 코드 4 (Progress M7 D-1·D-2의 기본값, **리드 확인 대기**): 오염은 run의 코어 = 마스크 CPU와 그 SMT 형제에서 잰다 (`core_busy_other_pct`). 문턱은 "코어당 `-ContaminationPct`(기본 5%) × run의 코어 수"다. 형제 CPU의 부하는 같은 코어를 나눠 써 run을 느리게 하는데 첫 판은 이를 기록만 했고(형제 100%에도 헤드라인 자격 true), T개 CPU의 합을 코어 1개의 5%와 비교해 T ≥ 2 run이 대부분 4였다. 02 §12.2의 "코어 1개의 5%"를 코어마다 적용한 해석이다. 리드가 다른 규칙(예: T와 무관한 고정 문턱, M8이 T별로 `-ContaminationPct`를 줌)을 정하면 `-ContaminationPct`의 뜻과 [TimingContract.md](TimingContract.md) §5.1만 바꾼다.
+- DL11, 종료 코드 4 (Progress M7 D-1·D-2의 기본값. **M8에서 리드가 문턱 유지로 결정**, 아래 M8 메모): 오염은 run의 코어 = 마스크 CPU와 그 SMT 형제에서 잰다 (`core_busy_other_pct`). 문턱은 "코어당 `-ContaminationPct`(기본 5%) × run의 코어 수"다. 형제 CPU의 부하는 같은 코어를 나눠 써 run을 느리게 하는데 첫 판은 이를 기록만 했고(형제 100%에도 헤드라인 자격 true), T개 CPU의 합을 코어 1개의 5%와 비교해 T ≥ 2 run이 대부분 4였다. 02 §12.2의 "코어 1개의 5%"를 코어마다 적용한 해석이다. 리드가 다른 규칙(예: T와 무관한 고정 문턱, M8이 T별로 `-ContaminationPct`를 줌)을 정하면 `-ContaminationPct`의 뜻과 [TimingContract.md](TimingContract.md) §5.1만 바꾼다.
 - DL52: Fatal 훅은 run의 마지막 `exit.json` 전까지만 `exit.json`을 쓴다. teardown 중 Fatal은 `teardown.json`에 남고 프로세스는 run의 종료 코드로 `TerminateProcess`된다 (teardown은 판정을 바꾸지 않는다). UE_RUNTIME 모듈이 로드된 프로세스의 Fatal도 `TerminateProcess`로 끝난다 (`_Exit`은 ExitProcess라 DLL detach를 부른다).
 - DL19: G9 규칙의 `"scene"`은 이름 하나나 목록이고, `"by_scene"`이 씬별 기대값을 준다. 상자 기하의 상수 규칙 8개가 같은 상자를 쓰는 성능 씬 전부(`M3.BoxPile`, `P1.SmallScene`, `P0.EmptyStep`, `M2b.Pyramid1240`)에 걸린다 (Bullet `contact.speculative_distance`만 M2b 3.464 cm를 `by_scene`으로). `GateSuiteVersion` 6, `tolerances.json` version 5.
 - 03 M7 "타이밍 루프 안 할당 0": 헤드라인 조건은 하네스 훅(`operator new`) 그대로다. 엔진 자기 할당자는 세 SDK 모두 `PtMemoryStats.NumAllocs`로 센다 (Jolt·Bullet은 어댑터가 SDK의 공개 할당자 훅에 다는 세는 래퍼, SDK 수정 없음). 첫 판의 "Jolt·Bullet 할당자 훅은 SDK 쪽 변경"이라는 이유는 틀렸다.
+
+**M8 구현 메모 (DL11, DL21, DL23, DL52, Q9, Q17) [V]** ([Progress.md](Progress.md) M8, [TimingContract.md](TimingContract.md) §5.2, [ResultsSchema.md](ResultsSchema.md) §11)
+- DL11·Q9: 러너의 환경 게이트는 읽기 전용이다. 전원 계획이 High performance나 Ultimate(GUID 판정)가 아니면 거부하고 `--allow-balanced`로만 우회한다. 이 PC는 Balanced라 M8의 모든 세션이 우회했고, 그 사실이 `session.json`과 리포트 머리에 남는다. 리포트 머리는 세션 파일만이 아니라 모든 run의 manifest(`platform.power_scheme_high_performance`)에서도 만든다 (run 디렉터리만의 리포트, 여러 세션, 세션 도중의 변경, M8 수정 라운드 0). 유휴 검사는 2 s 창을 최대 `--idle-wait`(120 s) 동안 다시 본다. 시스템 설정은 바꾸지 않았다.
+- DL11, 종료 코드 4 (**리드 결정**): 오염 문턱(코어당 5% × run의 코어 수)은 그대로다. 사용 중인 데스크톱에서 문턱 근처의 run(M7 검사: PhysX T ≥ 2의 약 10%)은 러너가 fresh process로 최대 2번 다시 돌리고, 모든 시도가 4이면 셀을 `contaminated`로 표시한다. 시도마다 `index.csv`·`session.json`에 남는다.
+- DL52: 러너는 `exit.json`만 믿는다. `exit.json`이 없는 run은 원시 종료 코드가 0이어도 실패다 (시험 전용 `-InjectSilentExit`로 확인). M7 검토 지적대로 run 밖의 모드(`-Conformance`, `-Gate=`, `-Describe` 등)의 Fatal도 UE_RUNTIME 모듈이 있으면 `TerminateProcess`로 끝난다 (`FBenchmarkRunner::InstallFatalHook`, `FFatalExitScope`).
+- DL21: 표 안의 `desc_sha256` 동일성과 플래그 프로필 단일성을 `validate.check_table`이 강제한다 (어기면 표를 거부). 셀별 CV는 보고만 하고, CV 게이트·sentinel·bootstrap CI·comparability key·주장 규칙은 M10 그대로다.
+- DL23: `Tools/ptbench/analytic.py`가 dt_engine(numpy.float32)으로 C++ `Analytic::*`와 같은 기준값을 계산하고, 같은 빌드의 C++ 값(`PhysicsTestBench -AnalyticReferences`)과 1e-9 안에서 같은지 CTest가 본다 (최대 차이 1.1e-13).
+- Q17: 분석 패키지는 M0의 lock 그대로다. editable 설치에 필요한 빌드 도구(setuptools 65.5.0, wheel 0.45.1)만 `requirements-build.txt`에 따로 고정했다 (`pip freeze`가 둘을 빼므로 lock에 넣지 않는다). wheel은 M0 wheelhouse에 없어 오프라인 재설치 전에 한 번 받아 둬야 한다 (README).
 
 ### 4.2 마일스톤별 요약
 

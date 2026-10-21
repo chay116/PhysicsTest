@@ -270,7 +270,7 @@ TEST_CASE("PhysicsTest.Bench.ContactsFileLayout")
 {
 	const std::filesystem::path Dir = MakeTempDir("ContactsFileLayout");
 	BenchRecorders::FContactRecorder Recorder;
-	REQUIRE(Recorder.Open(Dir / "contacts.ptcn"));
+	REQUIRE(Recorder.Open(Dir / "contacts.ptcn", 1u));
 	PtContactPoint Points[3] = {};
 	for (uint32 Index = 0; Index < 3; ++Index)
 	{
@@ -285,6 +285,9 @@ TEST_CASE("PhysicsTest.Bench.ContactsFileLayout")
 	CHECK(std::memcmp(Bytes.data(), "PTCN", 4) == 0);
 	CHECK(ReadAt<uint32>(Bytes, 8) == 128u);
 	CHECK(ReadAt<uint32>(Bytes, 12) == 2u);
+	CHECK(ReadAt<uint32>(Bytes, 20) == PT_ABI_PROVISIONAL_REVISION);   // M8: the PtContactPoint layout revision (M7 review)
+	CHECK(ReadAt<uint32>(Bytes, 24) == 1u);                            // the declared contact.point_pose
+	CHECK(ReadAt<uint32>(Bytes, 28) == 0u);                            // reserved
 	CHECK(ReadAt<uint32>(Bytes, 32) == 4u);
 	CHECK(ReadAt<uint32>(Bytes, 36) == 3u);
 	CHECK(ReadAt<PtContactPoint>(Bytes, 40 + 2 * sizeof(PtContactPoint)).Body0 == 3u);

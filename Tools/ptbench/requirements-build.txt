@@ -1,0 +1,7 @@
+# Build-time requirements of the editable install of Tools/ptbench (M8):
+#   .venv\Scripts\python -m pip install -r Tools\ptbench\requirements-build.txt
+#   .venv\Scripts\python -m pip install --no-build-isolation --no-deps -e Tools\ptbench
+# setuptools 65.5.0 is the version a Python 3.11.9 venv starts with; it needs the wheel package for its bdist_wheel step.
+# pip freeze leaves setuptools and wheel out, so they are pinned here and not in requirements.lock (the analysis packages).
+setuptools==65.5.0
+wheel==0.45.1

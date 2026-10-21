@@ -8,7 +8,9 @@
 //   PhysicsTestBench.exe -Describe -Backend=Jolt [-Profile=..] [-Scenario=.. -Param:..]
 //   PhysicsTestBench.exe -Conformance -Backend=PhysX [-BackendProfile=UE4Compat] [-Profile=UEParity] [-Gates=G1,G9] [-Out=<dir>]
 //   PhysicsTestBench.exe -SceneHashes=<path>
-// -List, -Describe and -SceneHashes print pure JSON on stdout; their log lines go to stderr (M6, for the M7 / M8 tools).
+//   PhysicsTestBench.exe -AnalyticReferences                                                         (M8, Tools/ptbench)
+// -List, -Describe, -SceneHashes and -AnalyticReferences print pure JSON on stdout; their log lines go to stderr (M6, for the
+// M7 / M8 tools).
 // Every option is in BenchmarkRunner.h.
 //
 // No renderer is linked (the exe imports neither d3d11.dll nor dxgi.dll: CTest PhysicsTest.Probe.BenchNoRenderer).
@@ -34,13 +36,15 @@ int wmain(int ArgC, wchar_t** ArgVW)
 	{
 		FPlatformMisc::SuppressErrorDialogs();
 	}
+	// The process-wide Fatal fallback first: a Fatal in any mode with a UE_RUNTIME module loaded ends with TerminateProcess.
+	FBenchmarkRunner::InstallFatalHook();
 	FScenarioRegistry::CheckNotEmpty("PhysicsTestBench");   // WHOLE_ARCHIVE reached the registrars (A.12)
 
 	FBenchRunSpec Spec;
 	std::string Error;
 	const bool bParsed = FBenchRunSpec::FromCommandLine(FCommandLine::Get(), Spec, Error);
 	// A JSON mode owns stdout from the first line on: every log line (ours and the backends') goes to stderr (M6, lead (g)).
-	if (Spec.bList || Spec.bDescribe || !Spec.SceneHashesPath.empty())
+	if (Spec.bList || Spec.bDescribe || Spec.bAnalyticReferences || !Spec.SceneHashesPath.empty())
 	{
 		Logging::SetAllLinesToStderr(true);
 	}
@@ -63,7 +67,11 @@ int wmain(int ArgC, wchar_t** ArgVW)
 	}
 	UE_LOG(LogPhysicsTest, Display, "PhysicsTestBench | preset %s | %s | flags %s", PT_BUILD_PRESET, PT_BUILD_CONFIGURATION, PT_BUILD_FLAG_PROFILE);
 	EBenchExit Exit = EBenchExit::Ok;
-	if (Spec.bList)
+	if (Spec.bAnalyticReferences)
+	{
+		Exit = FBenchmarkRunner::AnalyticReferences();
+	}
+	else if (Spec.bList)
 	{
 		Exit = FBenchmarkRunner::List();
 	}

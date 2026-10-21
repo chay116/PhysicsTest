@@ -150,14 +150,16 @@ if(PT_WITH_BULLET)
 	pt_add_bench_exit_test(ExitBulletThreads 2 "runs single-threaded only" usage_error ARGS -Backend=Bullet -Scenario=M3.BoxPile -Frames=2 -Threads=2)
 endif()
 # M7: exit 4 - another process's load on the run's CPU (a busy helper pinned to CPU 0 next to a bench run on CPU 0).
+# The helper spins 10 s (M8 fix round 1; 4 s before): it must cover the bench's whole measured loop, and twice in full -j6
+# runs (dbg, test) the bench reached its loop only after a 4 s helper had ended (exit 0, 'host other 2.63%').
 pt_add_script_test(PhysicsTest.Bench.ExitContaminated SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunContaminated.cmake"
-	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ExitContaminated" -DPT_HELPER_SECONDS=4
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ExitContaminated" -DPT_HELPER_SECONDS=10
 	LABELS "bench")
 # The busy helper and the contaminated run must not share CPU 0 with other CTest processes in a parallel run.
 set_tests_properties(PhysicsTest.Bench.ExitContaminated PROPERTIES RUN_SERIAL ON)
 # M7 fix round 0 (TimingContract 5.1): the load on CPU 0's SMT sibling counts too - the bench's core is shared.
 pt_add_script_test(PhysicsTest.Bench.ExitContaminatedSibling SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunContaminated.cmake"
-	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ExitContaminatedSibling" -DPT_HELPER_SECONDS=4 -DPT_TARGET=sibling
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ExitContaminatedSibling" -DPT_HELPER_SECONDS=10 -DPT_TARGET=sibling
 	LABELS "bench")
 set_tests_properties(PhysicsTest.Bench.ExitContaminatedSibling PROPERTIES RUN_SERIAL ON)
 
@@ -280,31 +282,68 @@ if(_pt_thread_engines)
 	set_tests_properties(PhysicsTest.Bench.ThreadMatrix PROPERTIES RUN_SERIAL ON)
 endif()
 
-# The repository .venv (python -I, jsonschema) for the schema test; the system interpreter otherwise (as Tests/Probes).
-if(EXISTS "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
-	set(PT_PYTHON "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
-else()
-	find_package(Python3 COMPONENTS Interpreter QUIET)
-	set(PT_PYTHON "${Python3_EXECUTABLE}")
-endif()
+# M8 (M7 review): the positive control of the allocation hook - one operator new inside frame 3's Tick (the scene's PreTick
+# delegate, test only) must be counted: tick_new_calls 1, the first allocating frame 3, and the run is not headline-valid.
+pt_add_bench_exit_test(AllocHookPositiveControl 0 "status ok" ok
+	ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=6 -InjectTickAllocation=3 ${_pt_ctest_run_args}
+	MANIFEST_REGEX ".timing_valid_for_headline.: false,.*.timing_invalid_reasons.: [[][^]]*1 allocation[(]s[)] inside the timed buckets [(]first at frame 3[)].*.test_injections.: [{][^}]*.tick_allocation_frame.: 3.*.tick_new_calls.: 1,.*.tick_first_allocating_frame.: 3,")
+# M8 (M7 review): -InjectPreflightFault=g9:<key> on a key G9 does not compare (not READBACK, or no such key) is a usage error
+# (exit 2, status usage_error), never a silent pass or an ordinary G9 refusal.
+pt_add_bench_exit_test(PreflightG9InjectedNotCompared 2 "G9 does not compare 'solver.iterations'" usage_error
+	ARGS -Backend=Null -Scenario=M3.BoxPile -Frames=2 -InjectPreflightFault=g9:solver.iterations
+	MANIFEST_REGEX ".status.: .usage_error.*.preflight_error.: .*G9 does not compare 'solver.iterations'")
+pt_add_bench_exit_test(PreflightG9InjectedUnknownKey 2 "G9 does not compare 'no.such.key' on M3.BoxPile [(]no such effective key[)]" usage_error
+	ARGS -Backend=Null -Scenario=M3.BoxPile -Frames=2 -InjectPreflightFault=g9:no.such.key)
+# M8 (M7 review): a Fatal in -Conformance with a UE_RUNTIME module loaded writes exit.json (3, fatal) and ends with
+# TerminateProcess - no DLL_PROCESS_DETACH (M13 runs every Chaos gate through -Conformance).
+pt_add_bench_exit_test(UeRuntimeConformanceFatal 3 "TerminateProcess[(]GetCurrentProcess[(][)], 3[)]: a Fatal with a PT_MODULE_UE_RUNTIME module loaded" fatal
+	ARGS -Conformance -Backend=NullDll -InjectFatal
+	EXIT_REGEX ".terminate_process.: true"
+	FORBID_REGEX "DLL_PROCESS_DETACH"
+	ENVIRONMENT PT_NULL_DLL_UE_RUNTIME=1 PT_NULL_DLL_REPORT_DETACH=1)
+# M8: the runner's "died half-way" case - the process ends with a raw exit code 0 after frame 2 and leaves no exit.json
+# (CheckFatalExit: PT_EXPECT_NO_FILE). Tools/ptbench must report such a run as failed (PhysicsTest.Py.Integration).
+pt_add_script_test(PhysicsTest.Bench.InjectSilentExit SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=test-only -InjectSilentExit"
+		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Frames=6|-InjectSilentExit=2|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/InjectSilentExit"
+		"-DPT_EXPECT_NO_FILE=${_pt_bench_dir}/InjectSilentExit/exit.json"
+	LABELS "bench")
+# M8: -AnalyticReferences prints the C++ references as JSON (Tools/ptbench/analytic.py compares them: PhysicsTest.Py.AnalyticMatchesCpp).
+add_test(NAME PhysicsTest.Bench.AnalyticReferences COMMAND PhysicsTestBench -AnalyticReferences)
+set_tests_properties(PhysicsTest.Bench.AnalyticReferences PROPERTIES LABELS "bench"
+	PASS_REGULAR_EXPRESSION ".id.: .S00[.]free_fall_dt_engine.*.z.: 501[.]83328137")
+# M8 (M7 review): the headline positive control - a protocol-conformant run (tier 0, pre-roll 0.5 s, no injection) is
+# headline-valid except for what this machine and preset cannot give: in test / test-avx2 only a host contamination recorded
+# under -HostCheck=record may remain, in dev / dbg also the PT_DO_CHECK reason. RunHeadlineControl.cmake reads the manifest.
+pt_add_script_test(PhysicsTest.Bench.HeadlinePositiveControl SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunHeadlineControl.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/HeadlinePositiveControl"
+	LABELS "bench")
+
 # 03 M7: the manifest of an M3.BoxPile 5k run passes Config/Schemas/manifest.schema.json (jsonschema in the repository .venv,
-# python -I) with the criterion's fields filled; a broken copy must fail (the schema is not vacuous).
-if(PT_PYTHON)
-	set(_pt_schema_backend Null)
-	if(PT_WITH_JOLT)
-		set(_pt_schema_backend Jolt)
-	endif()
+# python -I) with the criterion's fields filled; a broken copy must fail (the schema is not vacuous). PT_PYTHON and the
+# jsonschema probe come from cmake/PTPython.cmake: without jsonschema the test is reported as Skipped with an install hint
+# (M8, M7 review), never run against an interpreter that cannot import it.
+pt_python_has(jsonschema _pt_have_jsonschema _pt_jsonschema_hint)
+set(_pt_schema_backend Null)
+if(PT_WITH_JOLT)
+	set(_pt_schema_backend Jolt)
+endif()
+if(_pt_have_jsonschema)
 	pt_add_script_test(PhysicsTest.Bench.ManifestSchema SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunManifestSchema.cmake"
 		ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ManifestSchema" "-DPT_PYTHON=${PT_PYTHON}"
 			"-DPT_VALIDATOR=${CMAKE_SOURCE_DIR}/Tools/validate_manifest.py" -DPT_BACKEND=${_pt_schema_backend}
 		LABELS "bench")
+else()
+	pt_add_skipped_python_test(PhysicsTest.Bench.ManifestSchema "${_pt_jsonschema_hint}")
 endif()
 
 # M7 fix round 0 (docs/ResultsSchema.md 1): every manifest.json and exit.json the bench tests above wrote validates against
 # Config/Schemas - refused, failed, contaminated and instrumented runs included (the G8 / G11 children too). It runs after them
 # (DEPENDS on every test of this directory); a directory a run of this build did not write keeps its old content or is absent
 # (skipped), so run the whole label, not this test alone.
-if(PT_PYTHON)
+if(NOT _pt_have_jsonschema)
+	pt_add_skipped_python_test(PhysicsTest.Bench.ManifestsValidate "${_pt_jsonschema_hint}")
+else()
 	get_property(_pt_bench_tests DIRECTORY PROPERTY TESTS)
 	set(_pt_manifest_dirs "${_pt_bench_dir}/G8" "${_pt_bench_dir}/G11")
 	foreach(_test IN LISTS _pt_bench_tests)

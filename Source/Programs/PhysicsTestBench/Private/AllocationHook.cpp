@@ -5,8 +5,12 @@
 // around each frame's Tick and records the totals in manifest.json (alloc group). The cost is one relaxed atomic increment
 // per allocation, so the hook is the same in every run (headline runs included) and never changes what a run measures.
 // Allocations an SDK makes through its own allocator (Jolt's JPH::Allocate -> malloc, PhysX's PxAllocatorCallback, Bullet's
-// btAlignedAlloc) do not pass through operator new; the backends that count those report them in PtMemoryStats (PhysX,
-// Null) and the manifest records the delta next to these counters.
+// btAlignedAlloc) do not pass through operator new; every backend counts those itself and reports them in
+// PtMemoryStats.NumAllocs - PhysX through its PxAllocatorCallback, Jolt through counting wrappers on the JPH::Allocate
+// family of function pointers, Bullet through btAlignedAllocSetCustom (M7 fix round 0), Null its own arrays - and the
+// manifest records the deltas next to these counters (alloc.backend_allocs_*). The hook binds inside this exe image only: a
+// DLL backend's operator new is not seen (alloc.hook_scope). The positive control -InjectTickAllocation=<f> (M8, CTest
+// PhysicsTest.Bench.AllocHookPositiveControl) shows that an operator new inside a Tick is counted.
 #include "BenchCore.h"
 
 #include <cstdlib>

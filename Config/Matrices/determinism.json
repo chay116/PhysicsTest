@@ -1,0 +1,29 @@
+{
+  "schema": "physicstest.matrix/1",
+  "name": "determinism",
+  "description": "DET1 (02 14.3, 03 M8 determinism): every backend / variant x UEParity, Normalized on M3.BoxPile 1k, 600 frames, T=1, three fresh processes of one exe each, with every frame's hashes (-HashEvery=1) so that analysis/determinism.py reports the first divergent frame. Timing is not the point (record-only host check, no pre-roll).",
+  "purpose": "determinism",
+  "preset": "test",
+  "repeats": 3,
+  "block_seed": 8008,
+  "cooldown_s": 0.5,
+  "timeout_s": 600,
+  "contaminated_retries": 0,
+  "window": "headline",
+  "bench_args": [ "-HashEvery=1", "-HostCheck=record", "-PreRoll=0" ],
+  "targets": [
+    { "label": "null", "backend": "Null" },
+    { "label": "null.Dll", "backend": "NullDll" },
+    { "label": "jolt.Default", "backend": "Jolt", "variant": "Default" },
+    { "label": "bullet.Default", "backend": "Bullet", "variant": "Default" },
+    { "label": "physx.UE4Compat", "backend": "PhysX", "variant": "UE4Compat" },
+    { "label": "physx.UE4Compat-TGS", "backend": "PhysX", "variant": "UE4Compat-TGS" },
+    { "label": "physx.UE4Compat-Stab", "backend": "PhysX", "variant": "UE4Compat-Stab" },
+    { "label": "physx.SdkDefault", "backend": "PhysX", "variant": "SdkDefault" }
+  ],
+  "profiles": [ "Normalized", "UEParity" ],
+  "scenes": [
+    { "scenario": "M3.BoxPile", "params": { "N": "1000" }, "frames": 600 }
+  ],
+  "threads": [ 1 ]
+}

@@ -73,6 +73,7 @@ namespace PhysicsTest
 		//    impulse one way only, G3.normal_impulse_eps; S05 version 2 with TouchGap; conformance.json post-run registrations).
 		// 5: M7 (G3 checks the optional contact.point_pose declaration against the inferred pose; G9 reads PhysX threads.workers
 		//    as the dispatcher's T workers; the G9 comparison is shared with the bench preflight).
+		// 6: M7 fix round 0 (G9 rules bound to a scene list, the per-scene "by_scene" values; tolerances.json version 5).
 		inline constexpr int32 GateSuiteVersion = 6;
 
 		// One override of a registered value: the most specific match wins (engine + variant + profile > engine + variant >

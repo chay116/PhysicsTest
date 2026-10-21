@@ -6,7 +6,8 @@
 # PASS when the exit code equals PT_EXPECT_RC and stdout + stderr match PT_EXPECT_REGEX (and, when given, PT_EXPECT_FILE /
 # PT_EXPECT_FILE2 exist after the run and their text matches PT_EXPECT_FILE_REGEX / PT_EXPECT_FILE2_REGEX; the files are
 # removed before the run). PT_FORBID_REGEX (M7): stdout + stderr must NOT match it. PT_ARGS: arguments separated by '|' (a ';'
-# list would be split by CTest).
+# list would be split by CTest). PT_EXPECT_NO_FILE (M8): that path must NOT exist after the run (removed before it; the
+# bench's -InjectSilentExit leaves no exit.json).
 foreach(_req PT_EXE PT_EXPECT_RC PT_EXPECT_REGEX)
 	if(NOT DEFINED ${_req})
 		message(FATAL_ERROR "CheckFatalExit.cmake: -D${_req}=... is required")
@@ -17,7 +18,7 @@ set(_args "")
 if(DEFINED PT_ARGS)
 	string(REPLACE "|" ";" _args "${PT_ARGS}")
 endif()
-foreach(_file_var PT_EXPECT_FILE PT_EXPECT_FILE2 PT_EXPECT_FILE3)
+foreach(_file_var PT_EXPECT_FILE PT_EXPECT_FILE2 PT_EXPECT_FILE3 PT_EXPECT_NO_FILE)
 	if(DEFINED ${_file_var})
 		file(REMOVE "${${_file_var}}")
 	endif()
@@ -48,4 +49,7 @@ ${_file_text}")
 	endif()
 	message(STATUS "CheckFatalExit: ${_path} matches")
 endforeach()
+if(DEFINED PT_EXPECT_NO_FILE AND EXISTS "${PT_EXPECT_NO_FILE}")
+	message(FATAL_ERROR "CheckFatalExit: '${PT_EXPECT_NO_FILE}' must not exist after the run")
+endif()
 message(STATUS "CheckFatalExit: PASS")

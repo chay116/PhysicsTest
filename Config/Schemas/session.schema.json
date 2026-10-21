@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://physicstest.local/schemas/session.schema.json",
+  "title": "PhysicsTest bench session (physicstest.session/1)",
+  "description": "session.json of one Tools/ptbench matrix execution (03_WorkPlan M8, 02_Architecture 12.5, docs/ResultsSchema.md 11): the environment gate, the matrix and its seeded blocks, every attempt of every run (exit.json is the verdict, never the raw process exit code) and the per-cell state with the reported CV. Rewritten after every run, so an interrupted session still validates (status running / aborted). index.csv has one row per attempt with the same fields.",
+  "type": "object",
+  "required": [ "schema", "session_id", "status", "started_utc", "finished_utc", "wall_s", "matrix", "runner", "bench", "git", "environment", "bypasses",
+    "unofficial", "unofficial_reasons", "blocks", "plan", "cells", "runs", "summary" ],
+  "properties": {
+    "schema": { "const": "physicstest.session/1" },
+    "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+    "status": { "enum": [ "running", "complete", "aborted", "refused" ] },
+    "abort_reason": { "type": "string" },
+    "started_utc": { "$ref": "#/$defs/utc" },
+    "finished_utc": { "anyOf": [ { "$ref": "#/$defs/utc" }, { "type": "null" } ] },
+    "wall_s": { "type": [ "number", "null" ], "minimum": 0 },
+    "matrix": {
+      "type": "object",
+      "required": [ "name", "path", "sha256", "purpose", "repeats", "block_seed", "document" ],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "purpose": { "enum": [ "perf", "determinism" ] },
+        "repeats": { "type": "integer", "minimum": 1 },
+        "block_seed": { "type": "integer", "minimum": 0 },
+        "document": { "type": "object" }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "required": [ "ptbench", "python", "cooldown_s", "timeout_s", "contaminated_retries", "window", "bench_args", "verdict_source" ],
+      "properties": {
+        "cooldown_s": { "type": "number", "minimum": 0 },
+        "timeout_s": { "type": "number", "exclusiveMinimum": 0 },
+        "contaminated_retries": { "type": "integer", "minimum": 0 },
+        "window": { "type": "string" },
+        "bench_args": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "bench": {
+      "type": "object",
+      "required": [ "exe", "exe_sha256", "preset" ],
+      "properties": {
+        "exe": { "type": "string" },
+        "exe_sha256": { "anyOf": [ { "$ref": "#/$defs/sha256" }, { "type": "null" } ] },
+        "preset": { "type": [ "string", "null" ] }
+      }
+    },
+    "git": {
+      "type": "object",
+      "required": [ "sha", "dirty" ],
+      "properties": { "sha": { "type": [ "string", "null" ] }, "dirty": { "type": [ "boolean", "null" ] } }
+    },
+    "environment": {
+      "description": "ptbench.envcheck.run_envcheck: the read-only gate (power plan, idle, other PhysicsTest processes).",
+      "type": "object",
+      "required": [ "power_scheme", "power_plan_high_performance", "checks", "bypasses", "refused" ],
+      "properties": {
+        "power_plan_high_performance": { "type": "boolean" },
+        "refused": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [ "id", "pass", "bypassed", "detail" ],
+            "properties": {
+              "id": { "enum": [ "power_plan", "idle", "processes" ] },
+              "pass": { "type": "boolean" },
+              "bypassed": { "type": "boolean" },
+              "bypass_flag": { "enum": [ "--allow-balanced", "--allow-busy", "--allow-concurrent", "--skip-idle" ] }
+            }
+          }
+        }
+      }
+    },
+    "bypasses": {
+      "description": "Every environment check that failed (or, --skip-idle, was not measured) and was let through; the report head lists them in bold.",
+      "type": "array",
+      "items": { "enum": [ "--allow-balanced", "--allow-busy", "--allow-concurrent", "--skip-idle" ] }
+    },
+    "unofficial": { "const": true },
+    "unofficial_reasons": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "repeat", "block_seed", "order" ],
+        "properties": { "repeat": { "type": "integer", "minimum": 0 }, "block_seed": { "type": [ "integer", "null" ] }, "order": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "run_name", "repeat", "order", "block_seed", "cell_key" ]
+      }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "cell_id", "key", "label", "backend", "variant", "profile", "scenario", "params", "T", "frames" ],
+        "properties": {
+          "state": { "enum": [ "ok", "contaminated", "failed", "incomplete" ] },
+          "cv_pct": { "description": "CV of values_ns (reported only; the report's CV over the validated runs is the authoritative one).", "type": [ "number", "null" ] },
+          "values_ns": { "description": "The window mean of every ok, headline-valid run (the last attempt of each repeat).", "type": "array", "items": { "type": "number" } },
+          "n_not_headline_valid": { "description": "ok runs with timing_valid_for_headline false: they give no value.", "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "run_name", "attempt", "cell_id", "cell_key", "repeat", "order", "block_seed", "out_dir", "wall_s", "timed_out", "process_exit_code",
+          "exit_json", "exit_code", "outcome", "retried" ],
+        "properties": {
+          "attempt": { "type": "integer", "minimum": 0 },
+          "exit_json": { "type": "boolean" },
+          "exit_code": { "enum": [ null, 0, 2, 3, 4, 5, 6 ] },
+          "process_exit_code": { "type": [ "integer", "null" ] },
+          "outcome": {
+            "description": "ok (exit.json 0, both files valid), contaminated (exit.json 4: retried while attempts remain), exit_<code>_<status>, no_exit_json (the process ended without exit.json: failed whatever its raw code), timeout, spawn_error, invalid_exit_json, invalid_manifest.",
+            "type": "string",
+            "pattern": "^(ok|contaminated|no_exit_json|timeout|spawn_error|invalid_exit_json|invalid_manifest|exit_[0-9]+_[a-z_]+)$"
+          },
+          "retried": { "type": "boolean" },
+          "teardown_killed": {
+            "description": "The process was still alive runner.teardown_grace_s after its exit.json appeared (a teardown hang, DL52) and was killed: not a failure, the exit.json verdict stands (M8 fix round 1).",
+            "type": "boolean"
+          },
+          "exit_json_after_s": { "description": "When the runner first saw exit.json, s after the start (null: the process ended before the first look).", "type": [ "number", "null" ] }
+        },
+        "allOf": [
+          { "if": { "properties": { "exit_json": { "const": false } } }, "then": { "properties": { "exit_code": { "const": null }, "outcome": { "enum": [ "no_exit_json", "timeout", "spawn_error" ] } } } },
+          { "if": { "properties": { "outcome": { "const": "ok" } } }, "then": { "properties": { "exit_json": { "const": true }, "exit_code": { "const": 0 } } } }
+        ]
+      }
+    },
+    "summary": { "type": "object", "required": [ "planned_runs", "attempts", "outcomes", "retries", "cells", "no_exit_json", "timed_out" ] }
+  },
+  "$defs": {
+    "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

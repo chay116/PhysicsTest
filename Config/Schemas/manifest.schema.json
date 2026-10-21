@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://physicstest.local/schemas/manifest.schema.json",
   "title": "PhysicsTest bench run manifest (physicstest.run/2)",
-  "description": "manifest.json of one PhysicsTestBench run (docs/ResultsSchema.md, 02_Architecture 12.3, 03_WorkPlan M7). Every run that initialised its backend writes one, refused runs included: a run refused by the engine-option preflight has no scene (scene.built false), so its scene-derived fields are null; every other run satisfies the stricter rules in allOf. Groups may gain fields (additional properties are allowed); the fields listed as required are what M8 analysis and the M7 criteria rely on. M10 fields (comparability_key, conformance_stamp, clock.tsc_hz, threads.census_*, summary.cpu_eff) are null until M10.",
+  "description": "manifest.json of one PhysicsTestBench run (docs/ResultsSchema.md, 02_Architecture 12.3, 03_WorkPlan M7). Every run that initialised its backend writes one, refused runs included: a run refused by the engine-option preflight has no scene (scene.built false), so its scene-derived fields are null; every other run satisfies the stricter rules in allOf. Groups may gain fields (additional properties are allowed); the fields listed as required are what M8 analysis and the M7 criteria rely on. M10 fields (comparability_key, conformance_stamp, clock.tsc_hz, threads.census_*, summary.cpu_eff) are null until M10. M8: status usage_error (exit 2) is a run refused after its scene was built because a test-only injection could not take effect (-InjectPreflightFault=g9:<key> on a key G9 does not compare). A headline-valid run (timing_valid_for_headline true) must be internally consistent: status ok, exit code 0, no reasons, Bench mode, no instrumentation tier, no per-frame recorder, no test injection, no allocation inside the timed buckets and an uncontaminated host; an invalid run names at least one reason.",
   "type": "object",
   "required": [
     "schema",
@@ -49,7 +49,8 @@
         "preflight_failed",
         "engine_error",
         "capacity_exceeded",
-        "contaminated_host"
+        "contaminated_host",
+        "usage_error"
       ]
     },
     "exit_code": {
@@ -1257,6 +1258,132 @@
         "properties": {
           "exit_code": {
             "const": 0
+          }
+        }
+      }
+    },
+    {
+      "$comment": "M8 usage_error: a refused test-only injection is exit code 2",
+      "if": {
+        "properties": {
+          "status": {
+            "const": "usage_error"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 2
+          },
+          "preflight_error": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "preflight_error"
+        ]
+      }
+    },
+    {
+      "$comment": "M8 headline consistency: timing_valid_for_headline true implies every condition of docs/TimingContract.md 6 (M7 review)",
+      "if": {
+        "properties": {
+          "timing_valid_for_headline": {
+            "const": true
+          }
+        },
+        "required": [
+          "timing_valid_for_headline"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "exit_code": {
+            "const": 0
+          },
+          "timing_invalid_reasons": {
+            "maxItems": 0
+          },
+          "run": {
+            "properties": {
+              "mode": {
+                "const": "Bench"
+              },
+              "instrumentation": {
+                "maxItems": 0
+              },
+              "instrument_flags": {
+                "const": 0
+              },
+              "scene_desc_instrument_flags": {
+                "const": 0
+              },
+              "tick_mode": {
+                "const": "FixedStep"
+              },
+              "hash_every": {
+                "const": 0
+              },
+              "states_every": {
+                "const": 0
+              },
+              "counters_every": {
+                "const": 0
+              },
+              "capture_every": {
+                "const": 0
+              },
+              "pre_roll_s": {
+                "type": "number",
+                "minimum": 0.5
+              },
+              "test_injections": {
+                "maxProperties": 0
+              }
+            }
+          },
+          "alloc": {
+            "properties": {
+              "tick_new_calls": {
+                "const": 0
+              }
+            },
+            "required": [
+              "tick_new_calls"
+            ]
+          },
+          "platform": {
+            "properties": {
+              "host_load": {
+                "properties": {
+                  "valid": {
+                    "const": true
+                  },
+                  "contaminated": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "valid",
+                  "contaminated"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "timing_invalid_reasons": {
+            "minItems": 1
           }
         }
       }

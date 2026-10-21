@@ -11,14 +11,18 @@
 //                        [-ExecCmds="cvar value, ..."] [-RequireEffectiveKey=key,...]
 //                        test only: [-InjectEngineErrorBits=0x..] [-InjectPreflightFault=g0|g9:<key>|listener|drawer]
 //                                   [-InjectSceneInstrumentFlags=0x8] [-InjectFatal] [-InjectTeardownFatal]
-//                                   [-InjectStatePerturbation=<frame>]
+//                                   [-InjectStatePerturbation=<frame>] [-InjectTickAllocation=<frame>]
+//                                   [-InjectSilentExit=<frame>]
 //   PhysicsTestBench.exe -Gate=G8 [-Runs=3] <run arguments>   DET1: N fresh processes of the run, equal final h_native
 //   PhysicsTestBench.exe -Gate=G11 <run arguments>            contacts off / on, every frame's hashes bit-identical
 //                        test only: [-InjectGateFault=<frame>] perturbs one child (G8: the last run, G11: contacts on), so
 //                                   the comparison must fail (the negative control)
 //   PhysicsTestBench.exe -BusyHelper=<seconds> -Affinity=0x1  the exit-4 test load (spins the mask at HIGH priority)
 //   PhysicsTestBench.exe -List | -Describe -Backend=.. | -Conformance -Backend=.. | -SceneHashes=<path>   (M3 / M6)
-// -List, -Describe and -SceneHashes print pure JSON on stdout: every log line goes to stderr in these modes (M6).
+//   PhysicsTestBench.exe -AnalyticReferences   the C++ analytic references as JSON (M8: Tools/ptbench/analytic.py must agree
+//                                              within 1e-9, CTest PhysicsTest.Py.AnalyticMatchesCpp)
+// -List, -Describe, -SceneHashes and -AnalyticReferences print pure JSON on stdout: every log line goes to stderr in these
+// modes (M6).
 //
 // Run order (02 12.2; M7): parse -> run directory and the Fatal hook (exit.json 3) -> host controls (affinity, priority,
 // power throttling opt-out, timeBeginPeriod; before any SDK init or LoadLibrary) -> config (Base -> profile -> variant ->
@@ -118,9 +122,15 @@ namespace PhysicsTest
 		                                           // dynamic body after frame f (between frames; the G8 / G11 negative control)
 		int32 InjectGateFaultFrame = -1;     // -InjectGateFault=<f> with -Gate=: the gate passes -InjectStatePerturbation=<f> to
 		                                     // one child only (G8: the last run; G11: contacts on), so the comparison must fail
+		int32 InjectTickAllocationFrame = -1;   // -InjectTickAllocation=<f>: one operator new inside frame f's Tick (the scene's
+		                                        // PreTick delegate) - the positive control of the allocation hook (M8)
+		int32 InjectSilentExitFrame = -1;    // -InjectSilentExit=<f>: the process ends with TerminateProcess(0) after frame f,
+		                                     // before any output or exit.json - a run that died half-way with a raw exit code
+		                                     // of 0, which the M8 runner must report as failed (exit.json missing)
 		// ---- modes ----
 		bool bList = false;
 		bool bDescribe = false;
+		bool bAnalyticReferences = false;    // -AnalyticReferences (M8)
 		// -Conformance (M6, 02 14.3): the physics gate suite on this backend / variant / profile -> conformance.json in the
 		// run directory; exit 0 when every gate passes or skips, 2 when one fails. -Gates=G1,G9 selects (default: all).
 		bool bConformance = false;
@@ -207,6 +217,22 @@ namespace PhysicsTest
 		bool WriteAndFlush(const std::filesystem::path& OutDir) const;
 	};
 
+	// The Fatal hook of one run, -Conformance or -Gate= (M7; public since M8 so that BenchMultiRun.cpp arms it too). While
+	// alive, a Fatal writes <OutDir>/exit.json (3, status fatal) before the process ends; with a PT_MODULE_UE_RUNTIME module
+	// loaded the process then ends with TerminateProcess. After EnterTeardown the verdict is final (DL52): a Fatal goes to
+	// teardown.json and the process ends with the run's code. Leaving the scope disarms it (the process-wide fallback of
+	// FBenchmarkRunner::InstallFatalHook stays).
+	class FFatalExitScope
+	{
+	public:
+		FFatalExitScope(const std::filesystem::path& OutDir, const std::string& RunId);
+		~FFatalExitScope();
+		FFatalExitScope(const FFatalExitScope&) = delete;
+		FFatalExitScope& operator=(const FFatalExitScope&) = delete;
+		// Right after the final exit.json: a later Fatal never rewrites it.
+		void EnterTeardown(EBenchExit RunExit);
+	};
+
 	class FBenchmarkRunner
 	{
 	public:
@@ -228,6 +254,13 @@ namespace PhysicsTest
 		static EBenchExit Conformance(const FBenchRunSpec& Spec);
 		// -SceneHashes=<path> (M6): the golden scene hashes of the gate scenes (and S00.FreeFall), built on Null.
 		static EBenchExit WriteSceneHashes(const FBenchRunSpec& Spec);
+		// -AnalyticReferences (M8): the Analytic:: references (AnalyticReference.h) of the gate scenes' canonical inputs as JSON
+		// on stdout (schema physicstest.analytic/1); Tools/ptbench/analytic.py recomputes every case within 1e-9.
+		static EBenchExit AnalyticReferences();
+		// Once, first thing in main (M7 review, M8): the process-wide Fatal callback. Outside a run (-Describe, -List,
+		// -SceneHashes) a Fatal with a PT_MODULE_UE_RUNTIME module loaded ends the process with TerminateProcess (never the CRT
+		// exit that runs DLL_PROCESS_DETACH); -Conformance and -Gate= also write their exit.json (3, status fatal) first.
+		static void InstallFatalHook();
 		// True when this process loaded a PT_MODULE_UE_RUNTIME module (every mode then ends with TerminateProcess, 02 12.2).
 		[[nodiscard]] static bool HasUeRuntimeModule();
 		// Flushes stdio and ends the process with TerminateProcess(GetCurrentProcess(), Code), logged first with Why (default:

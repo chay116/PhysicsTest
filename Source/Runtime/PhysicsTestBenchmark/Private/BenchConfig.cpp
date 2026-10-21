@@ -187,6 +187,7 @@ namespace PhysicsTest
 		}
 		Out.bList = FParse::Param(Cmd, "List");
 		Out.bDescribe = FParse::Param(Cmd, "Describe");
+		Out.bAnalyticReferences = FParse::Param(Cmd, "AnalyticReferences");
 		Out.bConformance = FParse::Param(Cmd, "Conformance");
 		Out.bInjectFatal = FParse::Param(Cmd, "InjectFatal");
 		Out.bInjectTeardownFatal = FParse::Param(Cmd, "InjectTeardownFatal");
@@ -303,7 +304,9 @@ namespace PhysicsTest
 			|| !ReadOptionalInt("HashEvery=", Out.HashEvery, 0, 10000000) || !ReadOptionalInt("StatesEvery=", Out.StatesEvery, 0, 10000000)
 			|| !ReadOptionalInt("CountersEvery=", Out.CountersEvery, 0, 10000000) || !ReadOptionalInt("CaptureEvery=", Out.CaptureEvery, 0, 10000000)
 			|| !ReadInt("InjectStatePerturbation=", Out.InjectStatePerturbationFrame, 0, 10000000)
-			|| !ReadInt("InjectGateFault=", Out.InjectGateFaultFrame, 0, 10000000))
+			|| !ReadInt("InjectGateFault=", Out.InjectGateFaultFrame, 0, 10000000)
+			|| !ReadInt("InjectTickAllocation=", Out.InjectTickAllocationFrame, 0, 10000000)
+			|| !ReadInt("InjectSilentExit=", Out.InjectSilentExitFrame, 0, 10000000))
 		{
 			return false;
 		}
@@ -388,6 +391,10 @@ namespace PhysicsTest
 		}
 		const bool bSceneHashes = !Out.SceneHashesPath.empty();
 		const bool bBusyHelper = Out.BusyHelperSeconds > 0.0;
+		if (Out.bAnalyticReferences)
+		{
+			return true;   // needs nothing else (M8)
+		}
 		if (!Out.bList && !bSceneHashes && !bBusyHelper && Out.Backend.empty())
 		{
 			OutError = "-Backend=<name> is required (see -List)";

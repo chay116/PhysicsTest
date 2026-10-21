@@ -411,11 +411,17 @@ namespace PhysicsTest
 		void OnFatalExit(const int32 ExitCode, const char* Message)
 		{
 			const EFatalHookPhase Phase = GFatalHook.Phase.load();
+			const bool bUeRuntime = FBenchmarkRunner::HasUeRuntimeModule();
 			if (Phase == EFatalHookPhase::Off)
 			{
-				return;
+				// Outside a run, -Conformance or -Gate= (-Describe, -List, -SceneHashes): no exit.json to write, but a UE DLL must
+				// not see DLL_PROCESS_DETACH after a Fatal either (M7 review, ChaosBackendGuide 2).
+				if (bUeRuntime)
+				{
+					FBenchmarkRunner::TerminateProcessNow(ExitCode, "a Fatal outside a run with a PT_MODULE_UE_RUNTIME module loaded");
+				}
+				return;   // RequestExitFatal ends the process with ExitCode
 			}
-			const bool bUeRuntime = FBenchmarkRunner::HasUeRuntimeModule();
 			if (Phase == EFatalHookPhase::Run)
 			{
 				FExitRecord Record;
@@ -444,32 +450,6 @@ namespace PhysicsTest
 			FBenchmarkRunner::TerminateProcessNow(GFatalHook.RunExitCode.load(), "a Fatal during the teardown, after exit.json (the run's code stands)");
 		}
 
-		// Arms the Fatal hook for one run; every way out of the run disarms it.
-		class FFatalHookScope
-		{
-		public:
-			FFatalHookScope(const std::filesystem::path& OutDir, const std::string& RunId)
-			{
-				GFatalHook.OutDir = OutDir;
-				GFatalHook.RunId = RunId;
-				GFatalHook.RunExitCode.store(0);
-				GFatalHook.Phase.store(EFatalHookPhase::Run);
-				FPlatformMisc::SetFatalExitCallback(&OnFatalExit);
-			}
-			~FFatalHookScope()
-			{
-				GFatalHook.Phase.store(EFatalHookPhase::Off);
-				FPlatformMisc::SetFatalExitCallback(nullptr);
-			}
-			FFatalHookScope(const FFatalHookScope&) = delete;
-			FFatalHookScope& operator=(const FFatalHookScope&) = delete;
-			// Right after the run's final exit.json: a later Fatal never rewrites it.
-			void EnterTeardown(const EBenchExit RunExit)
-			{
-				GFatalHook.RunExitCode.store(static_cast<int32>(RunExit));
-				GFatalHook.Phase.store(EFatalHookPhase::Teardown);
-			}
-		};
 
 		// The per-process host controls of one run, applied before the backend is loaded (02 12.2 step 2).
 		struct FHostControls
@@ -622,6 +602,95 @@ namespace PhysicsTest
 		std::_Exit(Code);   // not reached
 	}
 
+	// ---- the Fatal hook (run, -Conformance, -Gate=; process-wide fallback) ----------------------------------------------
+	FFatalExitScope::FFatalExitScope(const std::filesystem::path& OutDir, const std::string& RunId)
+	{
+		GFatalHook.OutDir = OutDir;
+		GFatalHook.RunId = RunId;
+		GFatalHook.RunExitCode.store(0);
+		GFatalHook.Phase.store(EFatalHookPhase::Run);
+		FPlatformMisc::SetFatalExitCallback(&OnFatalExit);
+	}
+
+	FFatalExitScope::~FFatalExitScope()
+	{
+		// Disarmed; the callback stays (InstallFatalHook's fallback: a UE_RUNTIME process still ends with TerminateProcess).
+		GFatalHook.Phase.store(EFatalHookPhase::Off);
+	}
+
+	void FFatalExitScope::EnterTeardown(const EBenchExit RunExit)
+	{
+		GFatalHook.RunExitCode.store(static_cast<int32>(RunExit));
+		GFatalHook.Phase.store(EFatalHookPhase::Teardown);
+	}
+
+	void FBenchmarkRunner::InstallFatalHook()
+	{
+		FPlatformMisc::SetFatalExitCallback(&OnFatalExit);
+	}
+
+	// ---- -AnalyticReferences (M8) ----------------------------------------------------------------------------------------
+	// The canonical inputs are the gate scenes' (GateScenes.h): S00 / S00d free fall from z0 1000 cm under -980 cm/s^2 for 60
+	// steps (S00d: linear damping 0.5 1/s, both declared formulas), S06 friction slide 500 cm/s with mu 0.5, S05 touch step
+	// K = 38. Tools/ptbench/analytic.py has the same case table and recomputes every value from these inputs (CTest
+	// PhysicsTest.Py.AnalyticMatchesCpp: |difference| <= 1e-9, DL23).
+	EBenchExit FBenchmarkRunner::AnalyticReferences()
+	{
+		const double DtEngine = Analytic::EngineDeltaTime(1.0f / 60.0f);
+		FJson Cases = FJson::array();
+		const auto AddDt = [&Cases](const char* Id, const double Dt)
+		{
+			Cases.push_back({ { "id", Id }, { "function", "EngineDeltaTime" }, { "inputs", { { "dt", Dt } } }, { "values", { { "dt_engine", Analytic::EngineDeltaTime(Dt) } } } });
+		};
+		AddDt("dt_engine.1_60", 1.0 / 60.0);
+		AddDt("dt_engine.1_30", 1.0 / 30.0);
+		AddDt("dt_engine.1_120", 1.0 / 120.0);
+		AddDt("dt_engine.1_50", 1.0 / 50.0);
+		const auto AddFreeFall = [&Cases](const char* Id, const double Z0, const double V0, const double GravityZ, const double Dt, const int32 Steps)
+		{
+			const Analytic::FFreeFallState State = Analytic::SemiImplicitEulerFreeFall(Z0, V0, GravityZ, Dt, Steps);
+			Cases.push_back({ { "id", Id }, { "function", "SemiImplicitEulerFreeFall" },
+				{ "inputs", { { "z0", Z0 }, { "v0", V0 }, { "gravity_z", GravityZ }, { "dt", Dt }, { "steps", Steps } } },
+				{ "values", { { "z", State.Z }, { "vz", State.Vz } } } });
+		};
+		AddFreeFall("S00.free_fall_dt_engine", 1000.0, 0.0, -980.0, DtEngine, 60);
+		AddFreeFall("S00.free_fall_exact_1_60", 1000.0, 0.0, -980.0, 1.0 / 60.0, 60);
+		AddFreeFall("free_fall_v0_30_steps", 500.0, 250.0, -980.0, DtEngine, 30);
+		const auto AddDamped = [&Cases](const char* Id, const double LinearDamping, const double Dt, const int32 Steps, const Analytic::EDampingFormula Formula)
+		{
+			const Analytic::FFreeFallState State = Analytic::DampedFreeFall(1000.0, -980.0, LinearDamping, Dt, Steps, Formula);
+			Cases.push_back({ { "id", Id }, { "function", "DampedFreeFall" },
+				{ "inputs", { { "z0", 1000.0 }, { "gravity_z", -980.0 }, { "linear_damping", LinearDamping }, { "dt", Dt }, { "steps", Steps },
+					{ "formula", static_cast<int32>(Formula) } } },
+				{ "values", { { "z", State.Z }, { "vz", State.Vz } } } });
+		};
+		AddDamped("S00d.damped_ue_order", GateScenes::S00d::LinearDamping, DtEngine, GateScenes::S00d::Frames, Analytic::EDampingFormula::UEOrder);
+		AddDamped("S00d.damped_before_forces", GateScenes::S00d::LinearDamping, DtEngine, GateScenes::S00d::Frames, Analytic::EDampingFormula::BeforeForces);
+		AddDamped("damped_heavy_c80", 80.0, DtEngine, 60, Analytic::EDampingFormula::UEOrder);   // c dt >= 1: the multiplier clamps to 0
+		const auto AddFriction = [&Cases](const char* Id, const double V0, const double Mu, const double G, const double Dt)
+		{
+			Cases.push_back({ { "id", Id }, { "function", "FrictionSlideStopDistance" }, { "inputs", { { "v0", V0 }, { "mu", Mu }, { "g", G }, { "dt", Dt } } },
+				{ "values", { { "distance", Analytic::FrictionSlideStopDistance(V0, Mu, G, Dt) } } } });
+		};
+		AddFriction("S06.friction_stop", GateScenes::S06::V0, GateScenes::S06::Friction, 980.0, DtEngine);
+		AddFriction("friction_stop_mu_0_3", 300.0, 0.3, 980.0, DtEngine);
+		const auto AddDrop = [&Cases](const char* Id, const double G, const double Dt, const int32 K)
+		{
+			Cases.push_back({ { "id", Id }, { "function", "StepBoundaryDropHeight" }, { "inputs", { { "g", G }, { "dt", Dt }, { "k", K } } },
+				{ "values", { { "height", Analytic::StepBoundaryDropHeight(G, Dt, K) }, { "touch_speed", G * Dt * static_cast<double>(K) } } } });
+		};
+		AddDrop("S05.drop_height_k38", 980.0, DtEngine, GateScenes::S05::TouchStep);
+		AddDrop("drop_height_k10", 980.0, DtEngine, 10);
+		FJson Json;
+		Json["schema"] = "physicstest.analytic/1";
+		Json["note"] = "C++ Analytic:: references (Source/Runtime/PhysicsCore/Public/Physics/AnalyticReference.h) on the gate scenes' canonical inputs; "
+			"dt_engine = (double)(float)dt (DL23). Tools/ptbench/analytic.py must reproduce every value within 1e-9.";
+		Json["preset"] = PT_BUILD_PRESET;
+		Json["cases"] = Cases;
+		std::printf("%s\n", Json.dump(2).c_str());
+		return EBenchExit::Ok;
+	}
+
 	// ---- FBenchmarkRunner --------------------------------------------------------------------------------------------
 	EBenchExit FBenchmarkRunner::List()
 	{
@@ -763,7 +832,7 @@ namespace PhysicsTest
 			[[nodiscard]] int64 ReadBackendAllocs() const;
 
 			const FBenchRunSpec& Spec;
-			FFatalHookScope* Hook = nullptr;
+			FFatalExitScope* Hook = nullptr;
 			uint64 RunBegin = 0;
 			std::string RunId;
 			std::filesystem::path OutDir;
@@ -835,6 +904,8 @@ namespace PhysicsTest
 			int64 BackendAllocsAfterFrame0 = -1;    // after frame 0's Tick
 			int64 BackendAllocsAfterLastTick = -1;  // after the last frame's Tick
 			uint32 PhaseFrames = 0;            // frames with a solver_ns value (phases tier)
+			int32 TickFrame = -1;              // the frame whose Tick runs (the -InjectTickAllocation delegate reads it)
+			std::unique_ptr<int64> InjectedTickAllocation;   // test only: the block -InjectTickAllocation allocates inside a Tick
 			FHostLoad Load;
 
 			// results
@@ -873,7 +944,7 @@ namespace PhysicsTest
 					return EBenchExit::GateFailed;   // no directory: no exit.json possible
 				}
 			}
-			FFatalHookScope HookScope(OutDir, RunId);
+			FFatalExitScope HookScope(OutDir, RunId);
 			Hook = &HookScope;
 			if (!ResolveScenario() || !ApplyHostControls() || !LoadConfig() || !LoadBackend())
 			{
@@ -1173,10 +1244,14 @@ namespace PhysicsTest
 			Inputs.DtEngine = DtEngine;
 			Preflight = BenchPreflight::Run(Inputs);
 			PreflightTicks = FClockBuckets::End(PhaseBegin);
-			bPreflightPassed = MissingKeys.empty() && Preflight.bPassed;
+			bPreflightPassed = MissingKeys.empty() && Preflight.bPassed && Preflight.InjectionError.empty();
 			if (!MissingKeys.empty())
 			{
 				PreflightError = std::to_string(MissingKeys.size()) + " required effective key(s) missing";
+			}
+			if (!Preflight.InjectionError.empty())
+			{
+				PreflightError += (PreflightError.empty() ? "" : "; ") + Preflight.InjectionError;
 			}
 			for (const FGateReport& Report : Preflight.Reports)
 			{
@@ -1207,7 +1282,24 @@ namespace PhysicsTest
 			Scene->PrepareForSimulation();
 			PrepareTicks = FClockBuckets::End(PhaseBegin);
 			IPhysicsTestScenario* const RunScenario = Scenario;
-			Scene->OnPhysScenePreTick = [RunScenario](FPhysScene* InScene, const float DeltaSeconds) { RunScenario->OnPreTick(*InScene, DeltaSeconds); };
+			if (Spec.InjectTickAllocationFrame < 0)
+			{
+				Scene->OnPhysScenePreTick = [RunScenario](FPhysScene* InScene, const float DeltaSeconds) { RunScenario->OnPreTick(*InScene, DeltaSeconds); };
+			}
+			else
+			{
+				// Test only (-InjectTickAllocation=<f>, M8: the positive control of the allocation hook): one operator new inside
+				// frame f's Tick, from the PreTick delegate (FPhysScene::Tick, the span the hook counts). The block outlives the
+				// loop, so the allocation cannot be elided; it is freed after the loop.
+				Scene->OnPhysScenePreTick = [this, RunScenario](FPhysScene* InScene, const float DeltaSeconds)
+				{
+					if (TickFrame == Spec.InjectTickAllocationFrame && !InjectedTickAllocation)
+					{
+						InjectedTickAllocation = std::make_unique<int64>(TickFrame);
+					}
+					RunScenario->OnPreTick(*InScene, DeltaSeconds);
+				};
+			}
 			// Everything the loop records is sized or opened here (02 9.3: no allocation, I/O or log inside the timing loop).
 			Recorder.Reserve(Frames);
 			Hashes.Reserve(static_cast<size_t>(CountRecordedFrames(Test.HashEvery, Frames)));
@@ -1219,7 +1311,12 @@ namespace PhysicsTest
 			FPhysicsDebugSnapshot Snapshot;
 			if (bContactsTier)
 			{
-				bContacts = Scene->GetBackendInfo().Has(PT_CAP_CONTACT_POINTS) && Contacts.Open(OutDir / "contacts.ptcn");
+				// The header records the PROVISIONAL(M9) layout revision of the PtContactPoint records and the backend's declared
+				// narrow-phase pose (contact.point_pose; M7 review), so the M9 analysis can reject a file of another layout.
+				const auto PointPose = std::find_if(Settings.begin(), Settings.end(), [](const FEffectiveSetting& S) { return S.Key == "contact.point_pose"; });
+				const uint32 PointPoseValue = PointPose != Settings.end() && PointPose->bHasCanonical && PointPose->Canonical >= 0.0
+					? static_cast<uint32>(PointPose->Canonical) : BenchRecorders::FContactRecorder::UnknownPointPose;
+				bContacts = Scene->GetBackendInfo().Has(PT_CAP_CONTACT_POINTS) && Contacts.Open(OutDir / "contacts.ptcn", PointPoseValue);
 				ContactsNote = bContacts ? "" : "the backend declares no contact points (PT_CAP_CONTACT_POINTS): no contacts.ptcn";
 				Snapshot.Contacts.reserve(static_cast<size_t>(std::max<uint32>(Capacity.MaxContactConstraints, 64u)) * 4);
 				Snapshot.Particles.reserve(Scene->GetBodies().size());
@@ -1248,6 +1345,7 @@ namespace PhysicsTest
 				// Inside Tick: no allocation, no I/O, no log (02 9.3). The counters around it are two relaxed loads.
 				const uint64 NewBefore = FAllocationCounters::NumNew.load(std::memory_order_relaxed);
 				const uint64 DeleteBefore = FAllocationCounters::NumDelete.load(std::memory_order_relaxed);
+				TickFrame = Frame;
 				Scene->Tick(FrameDeltaSeconds);
 				const uint64 FrameNew = FAllocationCounters::NumNew.load(std::memory_order_relaxed) - NewBefore;
 				TickAllocations += FrameNew;
@@ -1324,6 +1422,15 @@ namespace PhysicsTest
 				{
 					PerturbedBody->AddImpulse(FVector(0.0, 0.0, 1.0e-3), true);
 				}
+				if (Frame == Spec.InjectSilentExitFrame)
+				{
+					// Test only (-InjectSilentExit=<f>, M8): the process dies half-way with a raw exit code of 0 - no output, no
+					// exit.json. The runner must report the run as failed (it never trusts the raw code, 02 12.2).
+					UE_LOG(LogPhysicsBench, Warning, "test-only -InjectSilentExit: TerminateProcess(GetCurrentProcess(), 0) after frame %d, before any output or exit.json", Frame);
+					std::fflush(stdout);
+					std::fflush(stderr);
+					TerminateProcess(GetCurrentProcess(), 0);
+				}
 				if (Frame == 0)
 				{
 					Frame0Ticks = FClockBuckets::End(PhaseBegin);
@@ -1332,6 +1439,7 @@ namespace PhysicsTest
 			}
 			LoopTicks = FClockBuckets::End(PhaseBegin);
 			LoopAllocations = FAllocationCounters::NumNew.load(std::memory_order_relaxed) - LoopNewBegin;
+			InjectedTickAllocation.reset();   // test only (-InjectTickAllocation): freed outside the loop
 			Load = LoadMonitor.End(Controls.Mask, Controls.CoreMask);
 			if (bStates && !States.Close())
 			{
@@ -1376,7 +1484,15 @@ namespace PhysicsTest
 			ContaminationLimitPct = Spec.ContaminationPct * static_cast<double>(std::max<uint32>(Controls.Shape.Cores, 1u));
 			bContaminated = Load.bValid && Load.CoreBusyOtherCorePct > ContaminationLimitPct;
 
-			if (!bPreflightPassed)
+			if (!bPreflightPassed && !Preflight.InjectionError.empty())
+			{
+				// A test-only injection that cannot take effect is a usage error, never a "passed" or an ordinary G9 refusal.
+				Exit = EBenchExit::GateFailed;
+				Status = "usage_error";
+				Category = "usage";
+				Reason = Preflight.InjectionError;
+			}
+			else if (!bPreflightPassed)
 			{
 				Exit = EBenchExit::GateFailed;
 				Status = "preflight_failed";
@@ -1449,7 +1565,8 @@ namespace PhysicsTest
 #if PT_DO_CHECK
 			InvalidReasons.push_back(std::string("checks compiled in (PT_DO_CHECK=1, preset ") + PT_BUILD_PRESET + "): headline runs use the test presets");
 #endif
-			if (Spec.InjectEngineErrorBits != 0 || !Spec.InjectPreflightFault.empty() || Spec.InjectSceneInstrumentFlags != 0 || Spec.InjectStatePerturbationFrame >= 0)
+			if (Spec.InjectEngineErrorBits != 0 || !Spec.InjectPreflightFault.empty() || Spec.InjectSceneInstrumentFlags != 0 || Spec.InjectStatePerturbationFrame >= 0
+				|| Spec.InjectTickAllocationFrame >= 0 || Spec.InjectSilentExitFrame >= 0)
 			{
 				InvalidReasons.push_back("a test-only injection was used");
 			}
@@ -1667,6 +1784,14 @@ namespace PhysicsTest
 				if (Spec.InjectStatePerturbationFrame >= 0)
 				{
 					Injections["state_perturbation_frame"] = Spec.InjectStatePerturbationFrame;
+				}
+				if (Spec.InjectTickAllocationFrame >= 0)
+				{
+					Injections["tick_allocation_frame"] = Spec.InjectTickAllocationFrame;
+				}
+				if (Spec.InjectSilentExitFrame >= 0)
+				{
+					Injections["silent_exit_frame"] = Spec.InjectSilentExitFrame;   // only when the run ended before that frame
 				}
 				Run["test_injections"] = Injections;
 				J["run"] = Run;
@@ -1948,6 +2073,9 @@ namespace PhysicsTest
 			UE_LOG(LogPhysicsBench, Error, "cannot create '%s': %s", StringConv::PathToUtf8(OutDir).c_str(), DirError.message().c_str());
 			return EBenchExit::GateFailed;   // no directory: no exit.json possible
 		}
+		// A Fatal from here on (a gate's check, a UE module's Fatal) writes exit.json (3, fatal) first; with a UE_RUNTIME module
+		// the process then ends with TerminateProcess (M7 review: M13 runs every Chaos gate through -Conformance).
+		FFatalExitScope FatalScope(OutDir, RunId);
 		const auto Finish = [&](const EBenchExit Code, const char* Status, const char* Category, const std::string& Reason, const std::vector<std::string>& Outputs)
 		{
 			FExitRecord Record;
@@ -1982,6 +2110,15 @@ namespace PhysicsTest
 		{
 			UE_LOG(LogPhysicsBench, Error, "tolerances: %s", Error.c_str());
 			return Finish(EBenchExit::GateFailed, "usage_error", "usage", "tolerances: " + Error, {});
+		}
+		if (Spec.bInjectFatal)
+		{
+			// Test only (CTest PhysicsTest.Bench.UeRuntimeConformanceFatal): a Fatal with the backend module loaded.
+			if (FPhysicsBackendRegistry::Get().FindOrLoadModule(Spec.Backend, Error) == nullptr)
+			{
+				return Finish(EBenchExit::BackendUnavailable, "backend_unavailable", "backend", Error, {});
+			}
+			UE_LOG(LogPhysicsBench, Fatal, "test-only -InjectFatal in -Conformance (exit.json must say 3; a UE_RUNTIME module ends with TerminateProcess)");
 		}
 
 		Gates::FGateTarget Target;

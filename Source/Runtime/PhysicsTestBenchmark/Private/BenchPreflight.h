@@ -52,6 +52,9 @@ namespace PhysicsTest
 			std::vector<FGateReport> Reports;   // G0, G9, G10a
 			bool bPassed = true;
 			std::vector<std::string> TimingInvalidReasons;   // what G10a found that keeps the timing off the headline
+			// A test-only -InjectPreflightFault=g9:<key> that cannot fail G9 (no such key, or G9 does not compare it on this
+			// scene): the run is refused as a usage error, so a mistyped injection never passes silently (M8, M7 review).
+			std::string InjectionError;
 		};
 
 		[[nodiscard]] FResult Run(const FInputs& Inputs);

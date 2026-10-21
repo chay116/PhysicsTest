@@ -1,6 +1,7 @@
 // AnalyticReference.h - analytic reference values for gates and unit tests (DL23, 02_Architecture 13 "analytic").
 // [MVP M1: dt_engine and free fall; M6: the gate references (damped fall, discrete friction stop, restitution drop
-// height); the Python counterpart Tools/ptbench/analysis/analytic.py arrives in M8]
+// height); M8: the Python counterpart Tools/ptbench/analytic.py reproduces every value within 1e-9 (PhysicsTestBench
+// -AnalyticReferences, CTest PhysicsTest.Py.AnalyticMatchesCpp)]
 //
 // Every analytic reference is computed with the dt the engines actually receive: dt_engine = (double)(float)dt. The
 // +-1e-9 tolerances apply only against references computed this way (DL23). Example: S00.FreeFall (z0 = 1000 cm,

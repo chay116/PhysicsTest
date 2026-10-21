@@ -14,7 +14,7 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | Jolt | 5.6.0 (`e77f1755`) | M3: 벤치·뷰어에서 사용 가능 |
 | Chaos | UE 5.8.3, UBT Program DLL + C ABI | 나중에 직접 구현 |
 
-> **현재 상태 (2026-10-22):** M7(벤치 러너 + 측정 프로토콜)까지 마쳤습니다. `PhysicsTestBench.exe`가 1 run = 1 process 실행 순서(호스트 제어 → preflight G0·G9·G10a → spin pre-roll → 측정 루프 → `exit.json`)를 따르고, 종료 코드 0/2/3/4/5/6을 모두 `exit.json`에 남기며, `manifest.json`(`physicstest.run/2`, `Config/Schemas/manifest.schema.json`), `hashes.csv`, `states.ptst`, `contacts.ptcn`을 씁니다. 결정성 1단계(G8, fresh process 3회)와 결과 중립 knob(G11, 접촉 캡처)이 모든 백엔드·변형에서 통과하고, 성능 씬 `P0.EmptyStep`, `P1.SmallScene`, `M2b.Pyramid1240`, 스레드 매핑 T = 1..6, `test-avx2` 프리셋이 생겼습니다. 측정 규약은 [docs/TimingContract.md](docs/TimingContract.md), 결과 형식은 [docs/ResultsSchema.md](docs/ResultsSchema.md)입니다. **타이밍은 여전히 비공식입니다** (적합성 스탬프와 cpu_eff는 M10). 리드가 확인할 것: 오염 판정의 문턱 규칙(코어당 5% × run의 코어 수, [docs/Progress.md](docs/Progress.md) M7 §7). 다음 단계는 M8(오케스트레이션 + 분석 기본)입니다. 그 전 단계 요약: M6(물리 게이트 + 게이트 씬 + **ABI 핵심 v1.0 동결** + ChaosBackendGuide 초안)까지 마쳤습니다. Jolt, Bullet, PhysX 변형 4종이 UEParity·Normalized에서 물리 게이트 G1~G7, G9, G12를 ABI로 통과하고 (`PhysicsTest.Gates.*`, `PhysicsTestBench -Conformance` → `conformance.json`), 엔진별 편차는 `Config/Golden/tolerances.json`에 사유와 함께 있습니다. C ABI는 v1.0(major 1)으로 동결했고 조인트·디버그 스냅샷·네이티브 드로만 M9까지 잠정입니다 ([docs/Abi.md](docs/Abi.md)). Chaos 브리지 작성 안내는 [docs/ChaosBackendGuide.md](docs/ChaosBackendGuide.md)입니다. 그 전에 M5(Bullet + PhysX 백엔드)와 **체크포인트 A**를 끝냈습니다 ([docs/Checkpoints.md](docs/Checkpoints.md)). UE 이름·기본값의 데이터 모델(M1)과 C ABI + Kit + Null 백엔드(M2) 위에 Jolt 5.6.0(M3), Bullet 3.25와 PhysX 5.11(UE4 방식 변형 3종 + SDK 기본값, M5)이 같은 ABI로 붙었습니다. 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)를 세 엔진이 같은 `desc_sha256`으로 돌리고, `PhysicsTestBench.exe`가 결과 파일을 씁니다. `PhysicsTestViewer.exe`(M4)는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서로 세 엔진을 보여 줍니다 (엔진 전환, PhysX SdkDefault ↔ UE4Compat은 "재시작 필요"). 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다.
+> **현재 상태 (2026-10-22):** M8(오케스트레이션 + 분석 기본)까지 마쳤습니다. `Tools/ptbench`(Python, `.venv`에 editable 설치, `python -I -m ptbench`)가 읽기 전용 환경 게이트(전원 계획이 High performance/Ultimate가 아니면 `--allow-balanced` 없이는 거부, 유휴, 다른 PhysicsTest 프로세스), 매트릭스(`Config/Matrices/{smoke,determinism}.json`)의 seed 고정 블록 셔플·fresh process·쿨다운·타임아웃·종료 코드 4 재시도, `exit.json` 판정(원시 종료 코드는 기록만), `session.json`·`index.csv`, 분석 load/validate/perf/report/determinism과 C++와 1e-9 안에서 같은 `analytic.py`를 갖췄습니다. smoke 매트릭스(4 엔진 변형 × P0, BoxPile 1k·5k × R = 5)가 무인으로 돌아 리포트(`report/<날짜>/index.md` + PNG)를 만듭니다. 이 PC의 전원 계획은 Balanced라 모든 리포트 머리에 그 사실이 표시되고, **모든 타이밍은 비공식입니다** (스탬프·CV 게이트는 M10, High performance 세션은 M11). 결과는 [docs/Progress.md](docs/Progress.md) M8, 비공식 리포트 예시는 [docs/reports/m8_smoke/](docs/reports/m8_smoke/)입니다. 다음 단계는 M9(거동 씬 + 조인트)·M10(측정 엄밀성)입니다. 그 전 단계: M7(벤치 러너 + 측정 프로토콜)까지 마쳤습니다. `PhysicsTestBench.exe`가 1 run = 1 process 실행 순서(호스트 제어 → preflight G0·G9·G10a → spin pre-roll → 측정 루프 → `exit.json`)를 따르고, 종료 코드 0/2/3/4/5/6을 모두 `exit.json`에 남기며, `manifest.json`(`physicstest.run/2`, `Config/Schemas/manifest.schema.json`), `hashes.csv`, `states.ptst`, `contacts.ptcn`을 씁니다. 결정성 1단계(G8, fresh process 3회)와 결과 중립 knob(G11, 접촉 캡처)이 모든 백엔드·변형에서 통과하고, 성능 씬 `P0.EmptyStep`, `P1.SmallScene`, `M2b.Pyramid1240`, 스레드 매핑 T = 1..6, `test-avx2` 프리셋이 생겼습니다. 측정 규약은 [docs/TimingContract.md](docs/TimingContract.md), 결과 형식은 [docs/ResultsSchema.md](docs/ResultsSchema.md)입니다. **타이밍은 여전히 비공식입니다** (적합성 스탬프와 cpu_eff는 M10). 오염 판정의 문턱(코어당 5% × run의 코어 수)은 M8에서 리드가 유지로 정했고, 러너가 종료 코드 4를 다시 돕니다. 그 전 단계 요약: M6(물리 게이트 + 게이트 씬 + **ABI 핵심 v1.0 동결** + ChaosBackendGuide 초안)까지 마쳤습니다. Jolt, Bullet, PhysX 변형 4종이 UEParity·Normalized에서 물리 게이트 G1~G7, G9, G12를 ABI로 통과하고 (`PhysicsTest.Gates.*`, `PhysicsTestBench -Conformance` → `conformance.json`), 엔진별 편차는 `Config/Golden/tolerances.json`에 사유와 함께 있습니다. C ABI는 v1.0(major 1)으로 동결했고 조인트·디버그 스냅샷·네이티브 드로만 M9까지 잠정입니다 ([docs/Abi.md](docs/Abi.md)). Chaos 브리지 작성 안내는 [docs/ChaosBackendGuide.md](docs/ChaosBackendGuide.md)입니다. 그 전에 M5(Bullet + PhysX 백엔드)와 **체크포인트 A**를 끝냈습니다 ([docs/Checkpoints.md](docs/Checkpoints.md)). UE 이름·기본값의 데이터 모델(M1)과 C ABI + Kit + Null 백엔드(M2) 위에 Jolt 5.6.0(M3), Bullet 3.25와 PhysX 5.11(UE4 방식 변형 3종 + SDK 기본값, M5)이 같은 ABI로 붙었습니다. 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)를 세 엔진이 같은 `desc_sha256`으로 돌리고, `PhysicsTestBench.exe`가 결과 파일을 씁니다. `PhysicsTestViewer.exe`(M4)는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서로 세 엔진을 보여 줍니다 (엔진 전환, PhysX SdkDefault ↔ UE4Compat은 "재시작 필요"). 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다.
 
 ![뷰어: M3.BoxPile 1k, Jolt UEParity, 섬 표시(잠든 섬은 Black)](docs/images/m4_viewer_boxpile1k_islands.png)
 
@@ -115,7 +115,7 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Bench.ExitSceneNeedsSleeping` | (M6) sleep을 끈 프로필(Normalized)에서 `S08.StartAsleep`은 종료 코드 2 |
 | `PhysicsTest.Bench.ExitCapacityBullet` | (M5) Bullet manifold 풀을 64로 줄인 BoxPile 1k: heap fallback이 용량 bit 0x1(`errors.capacity_bits` 0x3)이 되어 종료 코드 5 |
 | `PhysicsTest.Bench.Exit{BackendUnavailable,BadCommandLine,UnknownScenario,UnknownParam,BadSeed,BadEngineOption,PreflightMissingKey,EngineError,Fatal,Capacity,EngineErrorOverCapacity,BulletThreads}` | 벤치 종료 코드 6, 2, 2, 2, 2, 2, 2, 3, 3, 5, 3, 2. M7부터 모든 경로에서 `exit.json`의 코드와 `status`도 확인한다. BadEngineOption(변형에 없는 Jolt 키)과 PreflightMissingKey(`-RequireEffectiveKey=no.such.key`)는 `manifest.json`의 `status = preflight_failed`도 확인한다 (PreflightMissingKey는 `frames_run` 0). EngineError: 시험용 `-InjectEngineErrorBits=0x200`(Null). Fatal(M7): 시험용 `-InjectFatal`의 Fatal 뒤에도 `exit.json`이 3 (`status fatal`). Capacity: temp allocator를 1 MiB로 줄인 Jolt BoxPile 1k (manifest의 용량 bit 묶음 확인). EngineErrorOverCapacity: 둘 다 있으면 엔진 오류(3)가 이기고 manifest에 두 묶음이 남음. BulletThreads(M7): Bullet은 T = 1만. M3의 ExitHashEvery는 M7 recorder가 생겨 지웠다 |
-| `PhysicsTest.Bench.ExitContaminated{,Sibling}` | (M7, 직렬) 같은 CPU 0(Sibling: CPU 0의 SMT 형제)에 `-BusyHelper` 부하 프로세스를 띄운 측정 프로토콜 run(`-HostCheck=enforce`)이 종료 코드 4, `exit.json` `contaminated_host`. 오염은 run의 코어(마스크 CPU + SMT 형제)에서 잰다 |
+| `PhysicsTest.Bench.ExitContaminated{,Sibling}` | (M7, 직렬) 같은 CPU 0(Sibling: CPU 0의 SMT 형제)에 `-BusyHelper` 부하 프로세스(10 s: 벤치의 측정 구간 전체를 덮는다, M8 수정 라운드 1)를 띄운 측정 프로토콜 run(`-HostCheck=enforce`)이 종료 코드 4, `exit.json` `contaminated_host`. 오염은 run의 코어(마스크 CPU + SMT 형제)에서 잰다 |
 | `PhysicsTest.Bench.{ExitTeardownFatal,UeRuntimeFatal,ConformanceBackendUnavailable}` | (M7 수정 라운드 0) teardown 중 Fatal은 `exit.json`을 바꾸지 않고 `teardown.json`에 남음; UE_RUNTIME Null DLL의 Fatal도 `TerminateProcess`로 끝남(`DLL_PROCESS_DETACH` 없음); `-Conformance`도 게이트 전에 멈추면 `exit.json`을 남김 |
 | `PhysicsTest.Bench.InstrumentPhases` | (M7 수정 라운드 0) phases tier: phase timer를 선언하는 Null DLL 시험 대역(`PT_NULL_DLL_PHASE_TIMERS=1`)의 `solver_ns`가 매 프레임 채워짐 |
 | `PhysicsTest.Bench.{G8,G11}NegativeControl` | (M7 수정 라운드 0) 시험용 `-InjectGateFault=4`가 자식 하나만 흔들면 G8·G11이 차이를 찾아 종료 코드 2 |
@@ -127,6 +127,13 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Bench.{G8Det1,G11ContactCapture}` | (M7) `-Gate=G8`(fresh process 3회의 마지막 `h_native`가 같음)와 `-Gate=G11`(접촉 캡처 끔/켬의 프레임별 `h_native`·`h_state`가 같음)을 Null, NullDll, Jolt, Bullet, PhysX 변형 4종으로 (BoxPile 1k, 60 프레임. 600 프레임은 증거 run) |
 | `PhysicsTest.Bench.ThreadMatrix` | (M7, 직렬) Jolt·PhysX T = 1..6, Bullet T = 1: 마스크 0x1~0x555, 엔진 워커 수, "cpu_eff 미검증 (M10)" 표기 |
 | `PhysicsTest.Bench.ManifestSchema` | (M7) BoxPile 5k run과 거부된 run 둘(엔진 옵션 preflight, 빠진 필수 키)의 `manifest.json`·`exit.json`이 `Config/Schemas/*.schema.json`을 통과하고 (`Tools/validate_manifest.py`, `.venv` Python `-I`, jsonschema), 일부러 망가뜨린 사본 넷(mode, 전원 계획 이름, 전원 계획 GUID, 0 ns 빈 윈도)은 실패 |
+| `PhysicsTest.Bench.{AllocHookPositiveControl,HeadlinePositiveControl}` | (M8, M7 검토) 시험용 `-InjectTickAllocation=3`이 `Tick` 안에서 한 `operator new`를 훅이 셈 (`tick_new_calls` 1, 첫 프레임 3, 자격 없음). 측정 프로토콜 그대로의 run(pre-roll 0.5 s, tier 0)은 헤드라인 자격이 있음 (test 프리셋: 사유 0. 기록만 한 오염과 dev/dbg의 `PT_DO_CHECK` 사유만 허용) |
+| `PhysicsTest.Bench.{PreflightG9InjectedNotCompared,PreflightG9InjectedUnknownKey}` | (M8, M7 검토) `-InjectPreflightFault=g9:<key>`의 key를 G9가 비교하지 않으면(READBACK이 아님, 없는 키) 조용히 통과하지 않고 종료 코드 2 `usage_error` |
+| `PhysicsTest.Bench.UeRuntimeConformanceFatal` | (M8, M7 검토) UE_RUNTIME Null DLL을 로드한 `-Conformance`의 Fatal도 `exit.json`(3, `terminate_process`)을 쓴 뒤 `TerminateProcess`로 끝나 `DLL_PROCESS_DETACH`가 없음 |
+| `PhysicsTest.Bench.{InjectSilentExit,AnalyticReferences}` | (M8) 시험용 `-InjectSilentExit=2`는 원시 종료 코드 0으로 끝나지만 `exit.json`을 남기지 않음 (러너가 실패로 판정해야 하는 경우). `-AnalyticReferences`는 C++ 해석 기준값 JSON을 냄 |
+| `PhysicsTest.Py.Unit` | (M8, `.venv`의 ptbench) 셔플(splitmix64 기준값), 매트릭스 전개(smoke 12셀 × 5블록), 겹치는 스위치 키와 러너 스위치의 거부, `analytic.py`의 문서 값(읽을 수 없는 C++ 기준값은 한 줄 오류와 종료 코드 2), 통계(nearest-rank, CV, α, 오버헤드 모델), validate 규칙(viz 거부, `exit.json` 없음 = 실패, 플래그 프로필·`desc_sha256` 섞임 = 오류, Fatal run은 manifest 없이도 됨), 거부된 표는 통계 없음(리포트 §3 포함), 리포트 머리의 전원 계획 표시(run 디렉터리만, 여러 세션), 모든 표 밑·그림 위의 조건 줄, 값이 없는 윈도, parquet 열 형식, 과반 기준 run의 첫 발산 프레임과 incomplete 판정, 러너의 teardown 멈춤 처리·타임아웃·중단 시 자식 종료·job object, 절대 경로 실행(git, powercfg), 전원 계획 파싱과 Balanced 거부(계획을 주입해 어느 기계에서나), 유휴 대기, `--skip-idle` 우회 기록, UTF-8 콘솔 출력, 스키마 |
+| `PhysicsTest.Py.AnalyticMatchesCpp` | (M8) `analytic.py`가 `PhysicsTestBench -AnalyticReferences`의 모든 C++ 값과 1e-9 이내 (z60 = 501.8332813705 cm 포함) |
+| `PhysicsTest.Py.Integration` | (M8) 이 빌드의 벤치로: 환경 게이트가 거부하면 run 없이 종료 코드 3, 도중에 죽은 run(원시 코드 0, `exit.json` 없음)과 타임아웃은 실패, 종료 코드 4는 2번 재시도 뒤 `contaminated`(건너뛰지 않음), 매트릭스·타깃·`--bench-arg` 스위치가 벤치에 닿음(manifest로 확인)과 겹치는 키 거부, viz manifest 거부, Shipped + MatchedAVX2와 다른 `desc_sha256`은 표 오류, `-Gate=G8` run의 DET1 행렬과 해시를 일부러 바꾼 사본의 첫 발산 프레임, 짧은 세션의 끝까지(스키마, parquet 열 형식, 리포트, run 디렉터리만으로 만든 리포트의 전원 계획 표시, 출력을 파이프로 받은 `ptbench perf`) |
 | `PhysicsTest.Bench.ManifestsValidate` | (M7 수정 라운드 0) 위 벤치 테스트들이 쓴 모든 `manifest.json`·`exit.json`(거부·실패·오염·계측 run, G8·G11 자식 포함)이 스키마를 통과. 다른 벤치 테스트 뒤에 돈다 (`DEPENDS`) |
 | `PhysicsTest.Smoke.{Jolt,Bullet,PhysX}` | SDK 스모크: SI, Z-up, g = 9.80, damping 0, sleep 끔. z(60) = 5.0183328 m ± 2e-5. Jolt는 설정 문자열(AVX2, Profile/Debug Renderer/FP Exceptions 없음)도 검사. `RunSmoke.cmake`가 `PT_SMOKE_JSON` 줄이 유효한 JSON인지도 확인 |
 | `PhysicsTest.Probe.ThirdPartyIncludes` | Core를 먼저 include한 TU가 래퍼 쌍을 거쳐 doctest·ImGui·ImPlot·nlohmann/json을 include하고 컴파일됨 |
@@ -185,7 +192,7 @@ PhysicsTestBench.exe -Gate=G8 -Runs=3 -Backend=Jolt -Scenario=M3.BoxPile -Param:
 PhysicsTestBench.exe -Gate=G11 -Backend=Bullet -Scenario=M3.BoxPile -Param:N=1000
 ```
 
-- **실행 순서와 규약 (M7):** 호스트 제어(affinity, HIGH_PRIORITY_CLASS, power throttling opt-out, `timeBeginPeriod(1)`. 전원 계획은 읽기만) → 설정 → 백엔드 → 씬과 `desc_sha256` → effective 덤프와 preflight(필수 키, G0, G9, G10a) → Prepare → 0.5 s spin pre-roll → frame 0 → 측정 루프 → 출력 → `exit.json`(마지막) → teardown. 정의는 [docs/TimingContract.md](docs/TimingContract.md), 파일 형식은 [docs/ResultsSchema.md](docs/ResultsSchema.md)에 있습니다. 종료 코드: 0 ok, 2 명령줄·preflight·게이트 실패, 3 엔진 오류·Fatal, 4 오염된 호스트(run 마스크 CPU의 다른 프로세스 바쁨 > 코어 1개의 5%), 5 용량 초과, 6 백엔드 없음. 러너는 프로세스 종료 코드보다 `exit.json`을 믿습니다.
+- **실행 순서와 규약 (M7):** 호스트 제어(affinity, HIGH_PRIORITY_CLASS, power throttling opt-out, `timeBeginPeriod(1)`. 전원 계획은 읽기만) → 설정 → 백엔드 → 씬과 `desc_sha256` → effective 덤프와 preflight(필수 키, G0, G9, G10a) → Prepare → 0.5 s spin pre-roll → frame 0 → 측정 루프 → 출력 → `exit.json`(마지막) → teardown. 정의는 [docs/TimingContract.md](docs/TimingContract.md), 파일 형식은 [docs/ResultsSchema.md](docs/ResultsSchema.md)에 있습니다. 종료 코드: 0 ok, 2 명령줄·preflight·게이트 실패, 3 엔진 오류·Fatal, 4 오염된 호스트(run의 코어 = 마스크 CPU와 그 SMT 형제의 다른 프로세스 바쁨 > 코어당 5% × 코어 수, M7 수정 라운드 0. M8 러너가 4를 fresh process로 최대 2번 다시 돈다), 5 용량 초과, 6 백엔드 없음. 러너는 프로세스 종료 코드보다 `exit.json`을 믿습니다.
 - **헤드라인 자격:** `manifest.json`의 `timing_valid_for_headline`은 bench 모드·계측 tier 0·FixedStep·프레임별 recorder 없음·호스트 제어 적용·pre-roll 0.5 s 이상·오염 없음·타이밍 버킷 안 할당 0·`PT_DO_CHECK=0`(test 프리셋)·시험 주입 없음이 모두 참일 때만 참입니다. 참이어도 `"unofficial": true`입니다 (M10 전까지).
 - 아래는 M3~M6 설명입니다.
 
@@ -256,6 +263,35 @@ py -3.11 -m venv .venv
 
 - `Tools/ptbench/requirements.lock`은 `pip freeze` 결과 그대로입니다 (numpy 2.4.6, pandas 3.0.6, pyarrow 26.0.0, scipy 1.17.1, matplotlib 3.11.2, jsonschema 4.26.0과 그 의존성). 직접 의존성 목록은 `requirements.in`입니다.
 - 오프라인 재설치: `pip download --only-binary=:all: -d Tools\ptbench\wheelhouse -r Tools\ptbench\requirements.lock`로 받아 두고 `pip install --no-index --find-links Tools\ptbench\wheelhouse -r Tools\ptbench\requirements.lock`. wheelhouse(약 103 MB)와 `.venv`는 git이 무시합니다.
+- M8: ptbench 패키지를 editable로 설치합니다 (파일은 복사되지 않고 경로만 등록됩니다). `.venv`의 setuptools 65.5.0은 wheel 패키지가 있어야 해서 `requirements-build.txt`에 고정했습니다 (setuptools 65.5.0은 Python 3.11.9 venv에 들어 있고, wheel 0.45.1은 한 번 PyPI에서 받습니다). 오프라인 재설치까지 하려면 wheelhouse를 만들 때 `-r Tools\ptbench\requirements-build.txt`도 함께 받아 둡니다: `pip download -d Tools\ptbench\wheelhouse wheel==0.45.1`. 이 PC의 지금 wheelhouse(M0)에는 wheel이 없습니다. pip 버전은 고정하지 않습니다 (PEP 660 editable 설치는 pip 21.3 이상이면 됩니다. 이 `.venv`는 26.2.2). 설치한 뒤 CMake를 다시 configure해야 Python CTest가 Skipped가 아니라 실행됩니다.
+
+```bat
+.venv\Scripts\python -m pip install -r Tools\ptbench\requirements-build.txt
+.venv\Scripts\python -m pip install --no-build-isolation --no-deps -e Tools\ptbench
+.venv\Scripts\python -I -m ptbench --help
+```
+
+### 오케스트레이션과 분석 (M8, `Tools/ptbench`)
+
+```bat
+rem 환경 게이트만 (읽기 전용: 전원 계획, 2 s 유휴 < 3%를 최대 --idle-wait 120 s 동안, 다른 PhysicsTest 프로세스). 거부되면 종료 코드 3
+.venv\Scripts\python -I -m ptbench envcheck
+rem smoke 매트릭스를 무인으로 돌리고 리포트까지 (Balanced인 이 PC에서는 --allow-balanced가 필요하고 리포트 머리에 표시됩니다)
+.venv\Scripts\python -I -m ptbench run --matrix smoke --allow-balanced --report
+rem 이미 있는 세션의 분석 (report는 run 디렉터리나 여러 세션도 받고, 머리의 전원 계획 표시는 모든 run의 manifest에서 읽습니다)
+.venv\Scripts\python -I -m ptbench report Saved\Results\smoke-<UTC>
+.venv\Scripts\python -I -m ptbench load Saved\Results\smoke-<UTC>          (parquet: runs, frames, effective, gates)
+.venv\Scripts\python -I -m ptbench determinism Saved\Results\determinism-<UTC>   (DET1 행렬과 첫 발산 프레임. 종료 코드 0 equal, 1 DIFFERENT, 3 incomplete)
+.venv\Scripts\python -I -m ptbench analytic --check-cpp out\test\bin\PhysicsTestBench.exe
+```
+
+- 세션은 `Saved/Results/<matrix>-<UTC 시각>/`에 `session.json`, `index.csv`, `runs/`(벤치 run 디렉터리, `child.log`), `analysis/`, `report/<날짜>/`를 남깁니다 ([docs/ResultsSchema.md](docs/ResultsSchema.md) §11). `Saved/`는 커밋하지 않습니다.
+- 판정은 `exit.json`입니다. 원시 종료 코드는 기록만 하고, `exit.json`이 없는 run은 실패입니다. 종료 코드 4는 fresh process로 최대 2번 다시 돌고 모두 4이면 셀이 `contaminated`입니다 ([docs/TimingContract.md](docs/TimingContract.md) §5.2).
+- CV는 셀마다 보고만 합니다 (2% 미만은 목표, 게이트는 M10).
+- 추가 벤치 스위치(매트릭스·타깃의 `bench_args`, `--bench-arg`)는 한 셀에서 같은 키를 두 번 쓸 수 없고 러너가 넘기는 스위치(`-Frames`, `-Out` 등)도 쓸 수 없습니다. 벤치는 스위치의 첫 출현만 읽으므로(`FParse::Value`) 중복은 말없이 무시되기 때문입니다 (종료 코드 2, [docs/ResultsSchema.md](docs/ResultsSchema.md) §11).
+- 리포트의 모든 표 제목 밑과 모든 그림 제목 위에 조건(UNOFFICIAL, High performance가 아닌 전원 계획, 게이트 우회)이 적힙니다.
+- 콘솔 출력은 UTF-8입니다 (`python -I`는 `PYTHONIOENCODING`을 무시하므로 ptbench가 stdout을 직접 UTF-8로 바꿉니다). 파일로 돌려받은 출력(`> out.txt`)도 UTF-8로 읽습니다.
+- 유휴 검사는 사용 중인 데스크톱에서 2 s 창을 최대 120 s 동안 다시 봅니다. 그래도 거부되면 `--idle-wait`을 늘리거나 `--allow-busy`로 우회합니다 (우회는 리포트 머리에 남습니다).
 
 ### 디버거
 
@@ -294,7 +330,7 @@ Source/Backends/  NullBackend (static + DLL), JoltBackend (M3), BulletBackend, P
 Source/Programs/  PhysicsTestAutomation (doctest 단위 테스트), PhysicsTestBench (벤치 exe, M3), PhysicsTestViewer (뷰어, M4)
 Source/Editor/    PhysicsTestEditor (뷰어 세션, 패널, 카메라 컨트롤러, M4)
 Source/Tests/     SdkSmoke (스모크 3종), Probes (CTest 프로브), AbiTwin (Kit 분리 시험 백엔드)
-Tools/            cmake.cmd, ctest.cmd, vcenv.cmd, check_physx_isolation.cmd, CompareBuildFlags.cmake, ptbench/
+Tools/            cmake.cmd, ctest.cmd, vcenv.cmd, check_physx_isolation.cmd, CompareBuildFlags.cmake, validate_manifest.py, ptbench/ (M8: python -I -m ptbench)
 docs/             설계 문서와 Progress.md
 prototypes/       타당성 검토 때의 일회성 코드 (기록용, 빌드하지 않음)
 ```

@@ -272,7 +272,7 @@ namespace PhysicsTest::BenchRecorders
 		}
 	}
 
-	bool FContactRecorder::Open(const std::filesystem::path& Path)
+	bool FContactRecorder::Open(const std::filesystem::path& Path, const uint32 PointPose)
 	{
 		FrameCount = 0;
 		PointCount = 0;
@@ -290,9 +290,9 @@ namespace PhysicsTest::BenchRecorders
 		AppendValue(Header, static_cast<uint32>(sizeof(PtContactPoint)));   // record size 128
 		AppendValue(Header, uint32(0));                                     // frame_count (patched by Close)
 		AppendValue(Header, uint32(0));                                     // flags (bit 0: frame_count final)
-		AppendValue(Header, uint32(0));
-		AppendValue(Header, uint32(0));
-		AppendValue(Header, uint32(0));
+		AppendValue(Header, uint32(PT_ABI_PROVISIONAL_REVISION));           // the PtContactPoint layout revision (PROVISIONAL(M9))
+		AppendValue(Header, PointPose);                                     // contact.point_pose (0xFFFFFFFF: not declared)
+		AppendValue(Header, uint32(0));                                     // reserved
 		if (Header.size() != HeaderSize || std::fwrite(Header.data(), 1, Header.size(), File) != Header.size())
 		{
 			bFailed = true;

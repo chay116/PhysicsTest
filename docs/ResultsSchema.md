@@ -1,7 +1,7 @@
 # 결과 포맷 (Results Schema)
 
 > **작성일:** 2026-10-22 (M7)
-> **상태:** M7 벤치 출력의 정본이다. 스키마 파일은 `Config/Schemas/manifest.schema.json`(physicstest.run/2)과 `Config/Schemas/exit.schema.json`(physicstest.exit/1)이고, `Tools/validate_manifest.py`가 검증한다. session·matrix 스키마는 M8, stamp 스키마는 M10이다.
+> **상태:** M7 벤치 출력과 M8 세션 출력의 정본이다. 스키마 파일은 `Config/Schemas/manifest.schema.json`(physicstest.run/2), `Config/Schemas/exit.schema.json`(physicstest.exit/1), M8의 `session.schema.json`(physicstest.session/1)과 `matrix.schema.json`(physicstest.matrix/1)이고, `Tools/validate_manifest.py`와 `Tools/ptbench`가 검증한다. stamp 스키마는 M10이다.
 > **관련 문서:** [02_Architecture.md](02_Architecture.md) §12.3 · [03_WorkPlan.md](03_WorkPlan.md) M7, M8 · [TimingContract.md](TimingContract.md) · [Scenes.md](Scenes.md) · [Abi.md](Abi.md) · [Progress.md](Progress.md) M7
 
 ---
@@ -37,8 +37,8 @@ run/1은 M3~M6의 최소 벤치 manifest다 (host·clock·order·alloc·gates �
 
 | 그룹 / 필드 | 내용 |
 |---|---|
-| `schema`, `status`, `exit_code` | `physicstest.run/2`; ok, preflight_failed, engine_error, capacity_exceeded, contaminated_host; 0, 2, 3, 4, 5 |
-| `timing_valid_for_headline`, `timing_invalid_reasons` | 헤드라인 자격과 그 사유 목록 ([TimingContract.md](TimingContract.md) §6) |
+| `schema`, `status`, `exit_code` | `physicstest.run/2`; ok, preflight_failed, engine_error, capacity_exceeded, contaminated_host, usage_error(M8: 씬을 만든 뒤 시험 전용 주입이 효과를 낼 수 없다고 판정한 run, 종료 코드 2. `-InjectPreflightFault=g9:<key>`의 key를 G9가 비교하지 않을 때); 0, 2, 3, 4, 5 |
+| `timing_valid_for_headline`, `timing_invalid_reasons` | 헤드라인 자격과 그 사유 목록 ([TimingContract.md](TimingContract.md) §6). M8부터 스키마가 둘의 일관성을 강제한다: 참이면 사유 0개, status ok, 종료 코드 0, Bench 모드, 계측 tier 없음(`instrumentation` 빈 배열, `instrument_flags`·`scene_desc_instrument_flags` 0), FixedStep, `hash_every`·`states_every`·`counters_every`·`capture_every` 0, `pre_roll_s` ≥ 0.5, `test_injections` 빈 객체, `alloc.tick_new_calls` 0, `host_load.valid` 참·`contaminated` 거짓. 거짓이면 사유가 하나 이상이다 (M7 검토 지적) |
 | `unofficial`, `timing_label` | M10 전에는 언제나 true와 사유 문장 |
 | `comparability_key`, `conformance_stamp` | M10 전에는 null |
 | `run_id`, `session`, `utc`, `command_line`, `wall_time_s` | |
@@ -48,7 +48,7 @@ run/1은 M3~M6의 최소 벤치 manifest다 (host·clock·order·alloc·gates �
 | `profile` | `physics`, `profile_file`, `variant_file`, `mass_rule`, `physics_sha256`, `profile_sha256`, `variant_sha256`, `warnings`, `resolved[]`(key, value, unit, origin, origin_name, applied). 명령줄의 run 옵션(`-Threads`, `-RunMode`, `-Instrument` 등)은 physics 키가 아니어서 여기 없고 `run`·`threads`에 쓴다 |
 | `effective`, `effective_module`, `missing_effective_keys`, `bodies_sampled` | effective 설정(§8), 빠진 필수 키, 동적 바디 세 개의 질량·관성 텐서 비교 |
 | `scene` | `name`, `version`, `kind`, `params`, `seed`, `scene_sha256`, `built`(씬을 만들었는지), `desc_sha256`, `desc_sha256_scope`, `options_sha256`, `num_bodies`, `num_dynamic_bodies`, `start_asleep_skipped`, `capacity_hints`, `windows[]`(씬이 선언한 윈도: name, first, last) |
-| `run` | `mode`, `instrumentation[]`(tier 이름), `instrument_flags`, `scene_desc_instrument_flags`(백엔드가 실제로 받은 값), `frames`, `frames_run`, `dt_s`, `dt_engine_s` = (double)(float)dt, `dt_engine_last_plan_s`, `tick_mode`, `clamp_rule`, `frame_driver`, `sync_policy`, `hash_every`, `states_every`, `counters_every`, `capture_every`, `pre_roll_s`, `async_interpolated`, `steps_total`, `sim_time_s`, `test_injections{}`(시험 전용 주입: `engine_error_bits`, `preflight_fault`, `scene_instrument_flags`, `state_perturbation_frame`) |
+| `run` | `mode`, `instrumentation[]`(tier 이름), `instrument_flags`, `scene_desc_instrument_flags`(백엔드가 실제로 받은 값), `frames`, `frames_run`, `dt_s`, `dt_engine_s` = (double)(float)dt, `dt_engine_last_plan_s`, `tick_mode`, `clamp_rule`, `frame_driver`, `sync_policy`, `hash_every`, `states_every`, `counters_every`, `capture_every`, `pre_roll_s`, `async_interpolated`, `steps_total`, `sim_time_s`, `test_injections{}`(시험 전용 주입: `engine_error_bits`, `preflight_fault`, `scene_instrument_flags`, `state_perturbation_frame`, M8의 `tick_allocation_frame`·`silent_exit_frame`) |
 | `threads` | `T`, `affinity_mask`(16진 문자열), `affinity_applied`, `affinity_before`, `logical_cpus[]`, `smt_sibling_mask`, `series`(`p_cores_one_lp` / `p_cores_smt` / `with_e_cores`, 02 §9.6), `cores`, `smt_pair_cores`, `e_cores`, `mapping`, `engine_native`(`threads.workers` READBACK: workers, native, source), `engine_thread_settings{}`, `scaling_note`("cpu_eff 미검증 (M10)" 등), `census_init`·`census_window`·`foreign_cycles_fraction`(M10, null) |
 | `platform` | `cpu`, `logical_processors`, `p_cores[]`, `os_build`, `priority_class`, `priority_before`, `priority_set`, `throttling`, `timer_resolution`(requested_ms, applied, before, after), `host_control_errors`, `power_scheme`, `power_scheme_guid`, `power_scheme_high_performance`, `qpc_hz`, `cpu_mhz[]`, `system_busy_other_pct`, `host_load`(valid, window, wall_s, unit, own_process_pct, `core_mask`(마스크 CPU + SMT 형제), `cores`, `core_busy_other_pct`(종료 코드 4의 측정값), mask_busy_other_pct, smt_sibling_busy_pct, system_busy_other_pct, per_cpu[](cpu, in_mask, busy_pct), policy, `threshold_pct`(코어당), `threshold_total_pct`(코어당 × cores: core_busy_other_pct와 비교), contaminated; [TimingContract.md](TimingContract.md) §5.1) |
 | `clock` | `source`, `qpc_hz`, `qpc_tick_ns`, `read_overhead_ns`, `read_overhead_method`, `tsc_hz`(M10, null) |
@@ -124,7 +124,7 @@ run/1은 M3~M6의 최소 벤치 manifest다 (host·clock·order·alloc·gates �
 
 ## 7. `contacts.ptcn` (PTCN v1)
 
-헤더 32 B: magic `PTCN`, u32 version 1, u32 record_size 128(`sizeof(PtContactPoint)`), u32 frame_count(닫을 때), u32 flags(bit 0 = frame_count 확정), u32 reserved[3]. 그 뒤 기록한 프레임마다 `{u32 frame, u32 count}`와 `PtContactPoint` count개를 백엔드가 쓴 그대로 둔다. 규약은 v1.0 ABI다 ([Abi.md](Abi.md) §7.1, §9.1 결정 2·3): Normal은 Body1 위에서 Body0 쪽, Phi < 0은 침투, flag는 ACTIVE / ACTIVE_APPROX / SPECULATIVE 중 하나 이하, PointOn은 그 스텝의 narrow phase 자세 기준. 어느 자세인지는 effective 키 `contact.point_pose`가 선언한다 (0 = 스텝 시작 자세: Jolt, Bullet, PhysX; 1 = 예측 자세: Chaos).
+헤더 32 B: magic `PTCN`, u32 version 1, u32 record_size 128(`sizeof(PtContactPoint)`), u32 frame_count(닫을 때), u32 flags(bit 0 = frame_count 확정), u32 abi_provisional_revision(오프셋 20), u32 point_pose(오프셋 24), u32 reserved. M8에서 M7의 reserved 세 칸 중 앞 두 칸을 채웠다 (레이아웃과 version 1은 그대로): `abi_provisional_revision`은 기록한 빌드의 `PT_ABI_PROVISIONAL_REVISION`이다. `PtContactPoint`는 PROVISIONAL(M9) 구조체라, 읽는 쪽(M9 분석)은 record_size가 같아도 revision이 다른 파일을 거부한다. `point_pose`는 백엔드의 effective 키 `contact.point_pose`(0 스텝 시작 자세, 1 예측 자세, 0xFFFFFFFF 선언 없음)다. M7이 쓴 파일은 두 칸이 0이다 (revision 0 = M8 이전). 그 뒤 기록한 프레임마다 `{u32 frame, u32 count}`와 `PtContactPoint` count개를 백엔드가 쓴 그대로 둔다. 규약은 v1.0 ABI다 ([Abi.md](Abi.md) §7.1, §9.1 결정 2·3): Normal은 Body1 위에서 Body0 쪽, Phi < 0은 침투, flag는 ACTIVE / ACTIVE_APPROX / SPECULATIVE 중 하나 이하, PointOn은 그 스텝의 narrow phase 자세 기준. 어느 자세인지는 effective 키 `contact.point_pose`가 선언한다 (0 = 스텝 시작 자세: Jolt, Bullet, PhysX; 1 = 예측 자세: Chaos).
 
 ## 8. `effective_settings.jsonl`
 
@@ -138,7 +138,31 @@ run/1은 M3~M6의 최소 벤치 manifest다 (host·clock·order·alloc·gates �
 
 `gate`, `result`(pass / fail), `command_line`, `utc`, `runs[]`(label, out_dir, started, timed_out, process_exit_code, exit_json_code, status, h_native, h_state, desc_sha256, T, frames_run, wall_s, spawn_error), `failures[]`, `notes[]`, `injected_gate_fault_frame`(시험용 `-InjectGateFault`를 썼을 때만: 음성 대조, [TimingContract.md](TimingContract.md) §8). 자식 run 디렉터리(`run0`..`runN-1`, 또는 `off`·`on`)에 자식의 결과 전부와 `child.log`(표준 출력·오류)가 있다. 게이트 프로세스 자신의 `exit.json`도 같은 디렉터리에 있다.
 
-## 11. 검증
+## 11. 세션과 매트릭스 (M8, `Tools/ptbench`)
+
+`python -I -m ptbench run --matrix <name>`이 세션 하나를 `Saved/Results/<matrix>-<UTC 시각>/`에 만든다 (`--out`으로 바꿀 수 있다).
+
+| 파일 | 형식 |
+|---|---|
+| `session.json` | physicstest.session/1 (`Config/Schemas/session.schema.json`). run이 끝날 때마다 원자적으로 다시 쓴다. 그래서 중단된 세션도 스키마를 통과한다 (`status` running / aborted) |
+| `index.csv` | 시도마다 한 줄 (재시도 포함). 열은 아래 runs 항목과 같다 |
+| `runs/r<반복>_<순서 3자리>_<셀 키>[_a<시도>]/` | 벤치의 run 디렉터리 (`-Out`). `child.log`에 벤치의 stdout·stderr. 셀 키는 셀 id의 SHA-1 앞 8자리다 (경로를 짧게: LongPathsEnabled=0) |
+| `analysis/{runs,frames,effective,gates}.parquet` | `ptbench load`의 tidy 표 (스키마 검증 결과 포함). 플래그 열(`exit_json_valid`, `manifest_valid`, `timing_valid_for_headline`, `contaminated`, `power_scheme_high_performance` 등)은 nullable boolean, 코드·개수 열(`exit_code`, `process_exit_code`, `T`, `attempt`, `repeat`, `win_*_first/last/count` 등)은 nullable Int64, 목록·객체는 JSON 문자열이다. 값이 없는 run(도중에 죽은 run)은 빈 값이지 문자열 "nan"이 아니다 |
+| `report/<날짜>/index.md`, `*.png` | `ptbench report` |
+
+**`session.json` 필드:** `session_id`, `status`(running, complete, aborted, refused), `started_utc`·`finished_utc`·`wall_s`, `matrix`(name, path, sha256, purpose, repeats, block_seed, 문서 전체), `runner`(ptbench 버전, Python, 명령줄, `cooldown_s`, `timeout_s`, `teardown_grace_s`(30), `child_containment`(job object 여부), `contaminated_retries`, `window`, `bench_args`, `verdict_source` = exit.json), `bench`(exe, exe_sha256, preset), `git`(sha, dirty), `environment`(환경 게이트 결과: 전원 계획 GUID·이름·종류, 유휴 `idle`(측정창 `samples_pct`, `windows`, 기다린 시간 `waited_s`, `wait_limit_s`, `skipped`), 다른 PhysicsTest 프로세스, 검사별 pass·bypassed·bypass_flag, refused, 호스트), `bypasses`(`--allow-balanced`, `--allow-busy`, `--allow-concurrent`, `--skip-idle`: 재지 않은 유휴도 우회다), `unofficial`(언제나 참)·`unofficial_reasons`, `blocks[]`(반복마다 block_seed와 셀 순서), `plan[]`, `cells[]`, `runs[]`, `summary`.
+
+- **runs[] (시도 하나):** `run_name`, `attempt`(0부터, 종료 코드 4 재시도), 셀 정보(`cell_id`, `cell_key`, label, backend, variant, profile, scenario, params, T, frames), `repeat`·`order`·`block_seed`(벤치에 `-Repeat`·`-Order`·`-BlockSeed`로 넘겨 manifest `order`에도 남는다), `out_dir`, `started_utc`, `wall_s`, `cooldown_s`·`cooldown_system_busy_pct`(쿨다운 동안 시스템 전체 바쁨), `timed_out`, `teardown_killed`·`exit_json_after_s`·`note`(`exit.json`을 쓴 뒤 `teardown_grace_s` 안에 끝나지 않아 러너가 죽인 run: 실패가 아니고 판정은 그 `exit.json`이다), `process_exit_code`(**기록만**), `exit_json`(있는지), `exit_code`·`exit_status`·`exit_category`(exit.json), `exit_json_valid`·`manifest_valid`·`schema_errors`, `outcome`, `retried`, manifest에서 읽은 `timing_valid_for_headline`·사유, 윈도 평균 `window_mean_ns`·`window_count`, `core_busy_other_pct`·`contamination_limit_pct`, `desc_sha256`, `flag_profile`, `h_native`, `frames_run`, `exe_sha256`, `command`.
+- **outcome:** `ok`(exit.json 0이고 두 파일이 스키마를 통과), `contaminated`(exit.json 4), `exit_<코드>_<status>`, `no_exit_json`(프로세스가 exit.json 없이 끝났다: 원시 종료 코드가 0이어도 실패), `timeout`(러너가 죽였다), `spawn_error`, `invalid_exit_json`, `invalid_manifest`. 스키마가 "exit.json 없음 ⇒ exit_code null, outcome no_exit_json/timeout/spawn_error"와 "ok ⇒ exit.json 0"을 강제한다.
+- **cells[]:** 셀 정보(`bench_args`: 타깃의 추가 스위치)와 `state`(ok: 모든 반복이 ok, contaminated: 어떤 반복의 시도가 모두 4, failed: 어떤 반복이 다른 이유로 실패, incomplete), `repeat_states`, `n_attempts`, `n_ok`, `n_contaminated_attempts`, ok이고 `timing_valid_for_headline`이 참인 run의 윈도 평균 `values_ns`와 `median_ns`·`mean_ns`·`cv_pct`(보고만, 게이트는 M10), 헤드라인 자격이 없어 값이 없는 ok run의 수 `n_not_headline_valid`. 리포트의 validate와 같은 run만 세지만 권위 있는 CV는 리포트의 것이다.
+- **manifest가 없어도 되는 run:** 종료 코드 0, 3, 4, 5는 manifest를 쓴다. 단 Fatal run(종료 코드 3, status `fatal`: Fatal 훅은 `exit.json`만 쓴다)과 usage error(2), 종료 코드 6은 `exit.json`만 쓴다. 러너와 validate는 이들에게 "manifest.json missing"을 붙이지 않는다.
+- **러너 종료 코드:** 0 모든 셀 ok, 1 셀이 failed·contaminated이거나 `session.json`이 스키마를 통과하지 못함, 2 매트릭스나 벤치 exe 없음, 또는 추가 스위치의 키가 겹치거나 러너의 스위치를 쓴다 (아래), 3 환경 게이트 거부.
+
+**매트릭스 (`Config/Matrices/<name>.json`, physicstest.matrix/1):** `name`, `description`, `purpose`(perf / determinism), `preset`, `repeats`, `block_seed`, `cooldown_s`(기본 2), `timeout_s`, `contaminated_retries`(기본 2), `window`(기본 headline), `bench_args`, `targets[]`(label, backend, variant, 선택 `bench_args`: 이 타깃에만 붙는 벤치 스위치. 표는 label로 나뉘므로 label이 달라야 한다), `profiles[]`, `scenes[]`(scenario, params, frames), `threads[]`, `exclude[]`(이름 붙은 필드가 모두 맞는 셀을 뺀다. reason 필수). 셀 = targets × profiles × scenes × threads − exclude. 반복 r의 block seed = splitmix64(block_seed + r)의 출력, 블록 순서 = 그 seed의 splitmix64 Fisher-Yates 셔플 (Python 버전과 무관하게 재현된다). M8 매트릭스는 `smoke`(03 M8 완료 기준)와 `determinism`(DET1, `-HashEvery=1`)이다.
+
+**추가 스위치 규칙 (M8 수정 라운드 1):** 한 셀의 매트릭스 `bench_args`, 타깃 `bench_args`, `--bench-arg`에서 같은 스위치 키(대소문자 무시, `=` 앞까지, `-ini:`는 `[Section]:Key`까지, `-Param:`은 이름까지)가 두 번 나오면 러너가 매트릭스를 거부한다 (종료 코드 2, run 없음). 벤치는 `FParse::Value`로 첫 출현만 읽으므로(UE Parse.cpp:265) 중복은 말없이 무시되기 때문이다. 러너가 셀마다 넘기는 스위치(`-Out`, `-Backend`, `-BackendProfile`, `-Profile`, `-Scenario`, `-Param:`, `-Threads`, `-Frames`, `-Repeat`, `-Order`, `-BlockSeed`, `-Session`)와 다른 모드를 여는 스위치(`-Gate`, `-List`, `-Describe`, `-Conformance`, `-AnalyticReferences`, `-SceneHashes`, `-BusyHelper`)도 거부한다. 그래서 명령줄의 순서는 아무것도 정하지 않는다 ("뒤의 것이 이긴다"는 M8 수정 라운드 0의 설명은 틀렸다).
+
+## 12. 검증
 
 ```
 .venv\Scripts\python.exe -I Tools\validate_manifest.py --require-fields <run dir>...
@@ -146,4 +170,6 @@ run/1은 M3~M6의 최소 벤치 manifest다 (host·clock·order·alloc·gates �
 
 - `manifest.json`을 `Config/Schemas/manifest.schema.json`, `exit.json`을 `Config/Schemas/exit.schema.json`으로 검증한다 (jsonschema, Draft 2020-12).
 - `--require-fields`는 03 M7 완료 기준 1의 필드(mode, instrumentation, timing_valid_for_headline, dt_engine_s, threads, platform의 전원 계획, clock)가 채워졌는지도 본다.
-- CTest `PhysicsTest.Bench.ManifestSchema`가 `M3.BoxPile` 5k run(윈도보다 짧아 headline이 clipped, settled가 비어 통계 null)과 거부된 run 둘(엔진 옵션 preflight: `scene.built` false, 빠진 필수 키)의 manifest를 검증한다. 일부러 망가뜨린 사본 넷이 실패하는지도 확인한다: `run.mode` = "Fast", `platform.power_scheme`(전원 계획 이름) 삭제, `platform.power_scheme_guid` = "x", 빈 윈도에 0 ns 통계.
+- CTest `PhysicsTest.Bench.ManifestSchema`가 `M3.BoxPile` 5k run(윈도보다 짧아 headline이 clipped, settled가 비어 통계 null)과 거부된 run 둘(엔진 옵션 preflight: `scene.built` false, 빠진 필수 키)의 manifest를 검증한다. 일부러 망가뜨린 사본이 실패하는지도 확인한다: `run.mode` = "Fast", `platform.power_scheme`(전원 계획 이름) 삭제, `platform.power_scheme_guid` = "x", 빈 윈도에 0 ns 통계, 그리고 M8의 헤드라인 일관성 규칙 둘(사유가 남은 채 `timing_valid_for_headline` 참, 사유 없이 거짓).
+- jsonschema를 import할 수 없는 인터프리터에서는 스키마 CTest가 설치 안내와 함께 **Skipped**로 나온다 (`cmake/PTPython.cmake`, M8. 전에는 시스템 Python으로 떨어져 ImportError로 실패했다).
+- M8: `Tools/ptbench`의 러너는 run마다 `exit.json`과 `manifest.json`을 스키마로 검증하고(`session.json` runs[].schema_errors), 세션 끝에 `session.json` 자신도 `session.schema.json`으로 검증한다. `ptbench load`는 모든 run을 다시 검증해 parquet의 `exit_json_valid`·`manifest_valid`에 남긴다.

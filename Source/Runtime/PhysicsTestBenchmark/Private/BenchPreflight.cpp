@@ -336,15 +336,28 @@ namespace PhysicsTest::BenchPreflight
 						SkipKeys.push_back(Setting.Key);
 					}
 				}
-				const bool bPerf = Inputs.Scenario->GetKind() == EScenarioKind::Perf;
-				if (!bPerf)
+				if (!bPerfScene)
 				{
 					SkipKeys.push_back("shape.wrapping");   // gate / behaviour scenes may need wrappers (S02 COMNudge, S03 capsules)
 				}
-				Gates::CheckEffectiveReadback(Target, Context, Settings, SkipKeys, bPerf, Inputs.Scenario->GetName(), G9);
+				Gates::CheckEffectiveReadback(Target, Context, Settings, SkipKeys, bPerfScene, Inputs.Scenario->GetName(), G9);
 				if (Fault.rfind("g9:", 0) == 0 || Fault.rfind("G9:", 0) == 0)
 				{
 					G9.Note(InjectNote);
+					// The injection must be able to fail G9 (M7 review): the same check on the untouched settings must find
+					// fewer failures. Otherwise the key does not exist or G9 does not compare it here (not READBACK, no rule,
+					// a scene-bound rule, left to G10a) and the run is refused as a usage error instead of passing silently.
+					FGateReport Clean;
+					Clean.Gate = "G9";
+					Gates::CheckEffectiveReadback(Target, Context, *Inputs.Settings, SkipKeys, bPerfScene, Inputs.Scenario->GetName(), Clean);
+					if (G9.Failures.size() <= Clean.Failures.size())
+					{
+						const std::string Key = Fault.substr(3);
+						const FEffectiveSetting* Setting = FindSetting(*Inputs.Settings, Key);
+						Result.InjectionError = "-InjectPreflightFault=" + Fault + ": G9 does not compare '" + Key + "' on " + Inputs.Scenario->GetName() + " ("
+							+ (Setting == nullptr ? std::string("no such effective key") : "source " + Setting->Source + ", no G9 comparison here")
+							+ "): the test-only injection would not fail G9 (use a READBACK key a tolerances.json G9 rule compares, e.g. world.gravity)";
+					}
 				}
 			}
 			Result.Reports.push_back(G9);

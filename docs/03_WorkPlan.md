@@ -738,6 +738,14 @@ Chaos 행까지:
 
 **산출물:** `Tools/ptbench/{runner,envcheck,analysis/{load,validate,perf,report,determinism},analytic}`, `Config/Matrices/{smoke,determinism}.json`, `Config/Schemas/{session,matrix}.schema.json`.
 
+**M8 실행 메모 [V]** (자세한 결과와 이유는 [Progress.md](Progress.md) M8)
+- **패키지와 설치:** 모듈은 `Tools/ptbench`에 바로 있고 `pyproject.toml`이 그 폴더를 패키지 `ptbench`로 잇는다 (위 산출물 경로 그대로). `.venv`에 `pip install --no-build-isolation --no-deps -e Tools/ptbench`로 설치한다. `.venv`의 setuptools 65.5.0이 wheel 패키지를 요구해 `Tools/ptbench/requirements-build.txt`(setuptools, wheel 고정)를 더했다. 분석 의존성(lock)은 그대로다.
+- **"무인으로 30분 안에":** smoke 60 run이 이 PC에서 약 4분에 끝났다 (Balanced, 사용 중인 데스크톱, `--allow-balanced`). 유휴 검사(시스템 전체 < 3%)는 이 데스크톱에서 2.5~4.9%를 오간다. 2 s 창을 하나씩 보며 한 창이라도 통과하면 되고, 최소 5창, `--idle-wait`(기본 120 s) 동안 기다린다 (5창 고정이던 첫 구현은 무인 시작을 셋 중 하나꼴로 거부했다, M8 수정 라운드 0). 그래도 넘으면 거부되고, `--allow-busy`로 우회하면 세션과 리포트 머리에 남는다.
+- **"도중에 죽은 run" 시험:** 벤치에 시험 전용 `-InjectSilentExit=<f>`(frame f 뒤 `TerminateProcess(0)`, 출력·`exit.json` 없음)를 더해 실제 프로세스로 시험한다. 러너는 그 run을 원시 코드 0인데도 `no_exit_json` 실패로 남긴다.
+- **"analytic.py와 C++ 기준값이 1e-9 이내":** 벤치의 `-AnalyticReferences`가 C++ `Analytic::*` 값을 입력과 함께 JSON으로 내고 `analytic.py`가 같은 입력으로 다시 계산한다 (CTest `PhysicsTest.Py.AnalyticMatchesCpp`). 값을 문서에서 옮겨 적는 대신 같은 빌드의 C++와 직접 비교한다.
+- **"Shipped와 MatchedAVX2를 한 표에 섞으면 오류":** 리포트의 표는 플래그 프로필별이라(02 §13) 정상 경로에서는 섞이지 않는다. 섞인 표(예: 플래그 키 없이 묶은 표, 두 빌드의 run을 한 표로 고른 경우)는 `validate.check_table`이 `TableError`로 거부한다. 시험은 실제 run의 manifest를 복사해 `build.flag_profile`만 바꾼 사본을 쓴다.
+- **종료 코드 4 (리드 결정):** 오염 문턱은 그대로 두고, 러너가 4로 끝난 run을 fresh process로 최대 2번 다시 돌린다. 모든 시도가 4이면 셀이 `contaminated`다.
+
 **선행:** M7.
 
 ---

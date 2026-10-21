@@ -18,6 +18,7 @@ include(PTOptions)
 include(PTToolchain)
 include(PTFlagProfiles)
 include(PTModules)
+include(PTPython)   # PT_PYTHON (.venv) and its probes for the Python tests (M7 schema, M8 Tools/ptbench)
 
 # Third-party dependencies (each module creates PT::<Dep> wrapper targets).
 include(SmallDeps)

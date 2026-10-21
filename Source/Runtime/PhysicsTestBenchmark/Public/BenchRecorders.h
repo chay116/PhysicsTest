@@ -85,16 +85,20 @@ namespace PhysicsTest
 		};
 
 		// contacts.ptcn (PTCN v1, little-endian, 02 12.3): a 32-byte header {char magic[4] "PTCN", u32 version 1, u32
-		// record_size 128, u32 frame_count, u32 flags, u32 reserved[3]}, then per recorded frame {u32 frame, u32 count} and
-		// count PtContactPoint records as the backend wrote them (128 bytes each, docs/Abi.md 7.1 conventions; the
-		// narrow-phase pose is the backend's effective key contact.point_pose).
+		// record_size 128, u32 frame_count, u32 flags, u32 abi_provisional_revision, u32 point_pose, u32 reserved}, then per
+		// recorded frame {u32 frame, u32 count} and count PtContactPoint records as the backend wrote them (128 bytes each,
+		// docs/Abi.md 7.1 conventions). abi_provisional_revision is PT_ABI_PROVISIONAL_REVISION (PtContactPoint is a
+		// PROVISIONAL(M9) struct: a reader rejects a file of another revision even at the same record size); point_pose is the
+		// backend's effective key contact.point_pose (0 start-of-step, 1 predicted; UnknownPointPose when not declared). Both
+		// fill reserved words of the M7 header (M8, M7 review): the layout and version 1 are unchanged.
 		class FContactRecorder
 		{
 		public:
 			static constexpr uint32 HeaderSize = 32;
+			static constexpr uint32 UnknownPointPose = 0xFFFFFFFFu;
 
 			~FContactRecorder();
-			bool Open(const std::filesystem::path& Path);
+			bool Open(const std::filesystem::path& Path, uint32 PointPose);
 			void Append(uint32 Frame, std::span<const PtContactPoint> Contacts);
 			bool Close();
 			[[nodiscard]] uint32 GetFrameCount() const { return FrameCount; }

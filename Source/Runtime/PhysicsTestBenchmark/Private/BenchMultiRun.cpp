@@ -6,6 +6,7 @@
 //   -BusyHelper=<s>   spins the -Affinity CPUs at HIGH_PRIORITY_CLASS for <s> seconds (the contaminated-host CTest)
 // Test only: -InjectGateFault=<f> hands -InjectStatePerturbation=<f> to one child (G8: the last run, G11: contacts on), so
 // the comparison has to fail - the negative control that shows the gates can fail (M7 fix round 0).
+// A Fatal in the gate process writes the gate's exit.json (3, fatal) through FFatalExitScope (M8, M7 review).
 // The children are spawned with FProcessSpawner (job object, timeout, stdout / stderr to child.log) one after the other and
 // read back through their exit.json and manifest.json, exactly as the M8 runner will (02 12.5). Children run with
 // -HostCheck=record: another process's load changes timings, not states.
@@ -235,6 +236,7 @@ namespace PhysicsTest
 			UE_LOG(LogPhysicsBenchGate, Error, "cannot create '%s': %s", StringConv::PathToUtf8(OutDir).c_str(), DirError.message().c_str());
 			return EBenchExit::GateFailed;
 		}
+		const FFatalExitScope FatalScope(OutDir, RunId);   // a Fatal in the gate process still leaves exit.json (3, fatal)
 		std::vector<FChildRun> Children;
 		std::vector<std::string> Failures;
 		std::vector<std::string> Notes;

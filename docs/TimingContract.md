@@ -1,7 +1,7 @@
 # 타이밍 계약 (Timing Contract)
 
 > **작성일:** 2026-10-22 (M7)
-> **상태:** M7 측정 프로토콜의 정본이다. TSC 버킷, 스레드 센서스(cpu_eff, G10b), 적합성 스탬프는 M10에 더한다.
+> **상태:** M7 측정 프로토콜의 정본이다. M8에서 러너(반복·셔플·쿨다운·재시도, §5.2)와 경미한 정정을 더했다. TSC 버킷, 스레드 센서스(cpu_eff, G10b), 적합성 스탬프는 M10에 더한다.
 > **관련 문서:** [02_Architecture.md](02_Architecture.md) §9, §12 · [03_WorkPlan.md](03_WorkPlan.md) M7, M10 · [ResultsSchema.md](ResultsSchema.md) · [Scenes.md](Scenes.md) · [Abi.md](Abi.md) · [Progress.md](Progress.md) M7
 > **근거 표기:** **[V]** 직접 빌드·실행해 확인 · **[R]** 추정
 
@@ -19,7 +19,7 @@
 | 2 | 호스트 제어 (§5): affinity, HIGH_PRIORITY_CLASS, power throttling opt-out, `timeBeginPeriod(1)`. SDK 초기화와 LoadLibrary보다 먼저 | - |
 | 3 | ini 계층 리졸브 (Base → 프로필 → 변형 → 명령줄) | - |
 | 4 | 백엔드 로드와 `InitGamePhys` | `phases_ns.backend_init` |
-| 5 | 엔진 옵션 preflight (바디 없는 시험 씬) | `phases_ns.option_preflight` |
+| 4b | 엔진 옵션 preflight (바디 없는 시험 씬) | `phases_ns.option_preflight` |
 | 6 | 씬 구성: BuildScene → Flush → `desc_sha256` | `phases_ns.scene_create` |
 | 7 | effective 덤프와 preflight: 필수 키, G0, G9, G10a ([ResultsSchema.md](ResultsSchema.md) §2 gates) | `phases_ns.preflight` |
 | 8 | `PrepareForSimulation` (모든 엔진에 같은 비타이밍 기회: Jolt `OptimizeBroadPhase`·temp 블록 pre-fault, PhysX scratch pre-fault) | `phases_ns.prepare` |
@@ -28,8 +28,8 @@
 | 12 | 결과를 모두 쓴다. 마지막에 `exit.json` | - |
 | 13 | teardown: 씬 해제, `TermGamePhys` → `teardown.json`. UE_RUNTIME 모듈이면 `TerminateProcess` | `teardown.json.teardown_ns` |
 
-- 5·11단계의 스레드 센서스는 M10이다.
-- preflight가 실패하면 8~10단계를 건너뛰고 종료 코드 2로 끝난다. 출력은 그대로 쓴다. 엔진 옵션 preflight(5단계)가 거부하면 씬이 없으므로 씬에서 나오는 manifest 필드는 null이고 `scene.built`가 false다. 이때도 13단계(teardown)는 돈다.
+- 5·11단계(스레드 센서스 #1, #2)는 M10이다. 엔진 옵션 preflight는 02 §12.2의 4단계와 6단계 사이라 4b로 적는다 (M8에서 번호를 고쳤다. M7 판은 5로 적어 센서스 자리와 겹쳤다).
+- preflight가 실패하면 8~10단계를 건너뛰고 종료 코드 2로 끝난다. 출력은 그대로 쓴다. 엔진 옵션 preflight(4b단계)가 거부하면 씬이 없으므로 씬에서 나오는 manifest 필드는 null이고 `scene.built`가 false다. 이때도 13단계(teardown)는 돈다.
 - teardown의 실패는 종료 코드를 바꾸지 않는다. `exit.json`이 이미 쓰인 뒤이므로 `teardown.json`에만 남는다. **Fatal도 같다 (M7 수정 라운드 0):** Fatal 훅은 12단계의 `exit.json`을 쓰기 전까지만 `exit.json`(3, `fatal`)을 쓴다. 그 뒤의 Fatal(예: `TermGamePhys`의 `checkf`, UE 모듈이 넘긴 Fatal)은 `teardown.json`의 `fatal`에 기록하고, 프로세스는 run의 종료 코드로 `TerminateProcess`된다 (DL52, CTest `PhysicsTest.Bench.ExitTeardownFatal`). 훅은 run이 어느 경로로 끝나든 해제된다.
 - UE_RUNTIME 모듈이 로드된 프로세스의 Fatal은 `exit.json`(`terminate_process: true`)을 쓴 뒤 바로 `TerminateProcess`로 끝난다. CRT 종료 경로(`_Exit` = ExitProcess)는 DLL의 `DLL_PROCESS_DETACH`를 부르므로 쓰지 않는다 (`PhysicsTest.Bench.UeRuntimeFatal`).
 - `-Conformance`도 run 디렉터리를 먼저 만든다. 게이트 전에 멈춘 경우(백엔드 없음, 설정·허용치 오류)도 `exit.json`이 남는다.
@@ -72,7 +72,7 @@ QPC 눈금이 100 ns이므로 버킷 하나가 수 µs 아래인 작은 씬(`P0.
 | Chaos (M13) | `FChaosScene::SetUpForFrame` (중력은 UE처럼 매 프레임) | `StartFrame` | `WaitPhysScenes` | `EndFrame` (PT→GT pull, SQ 갱신, 이벤트 flip 포함) | GT API X/R/V/W |
 
 - Chaos의 `T_step`에는 GT 동기화가 들어가고 SDK 엔진의 `T_step`에는 없다. 그래서 `T_step`은 보조 열이며 "Chaos와 직접 비교 불가"로 표시한다 (02 §9.3). 엔진 간 비교는 `T_frame`만 한다.
-- bench 모드에서 금지되는 것: Jolt ContactListener·ActivationListener·DebugRenderer·profiler, PhysX `eNOTIFY_*`·event callback·PVD, Bullet debug drawer. G10a가 이를 preflight에서 확인한다 (§6).
+- bench 모드에서 금지되는 것: Jolt ContactListener·ActivationListener·DebugRenderer·profiler, PhysX `eNOTIFY_*`·event callback·PVD, Bullet debug drawer. **preflight가 실제로 확인하는 것 (M8 정정, M7 검토):** G10a는 백엔드가 받은 `PtSceneDesc`(RunMode Bench, InstrumentFlags 0), effective 키 `listeners.installed`(Jolt는 어댑터가 설치한 접촉 리스너 — 엔진의 `PhysicsSystem::GetContactListener()`가 아니라 어댑터의 멤버에서 읽는다, PhysX는 시뮬레이션 이벤트 콜백, Bullet은 전역 접촉 콜백 수), `*.debug_drawer`(Bullet만 실제 드로어가 있다)를 본다. Jolt DebugRenderer·profiler는 빌드 사실이라 G0(Jolt 설정 문자열)가 막는다. Jolt ActivationListener와 PhysX PVD는 어댑터가 설치하지 않으며 어느 키로도 확인하지 않는다 (M9의 네이티브 드로·조인트 작업에서 READBACK 키를 더할 후보).
 
 ## 3. 윈도와 헤드라인 값
 
@@ -91,6 +91,7 @@ QPC 눈금이 100 ns이므로 버킷 하나가 수 µs 아래인 작은 씬(`P0.
 - **훅의 범위:** 교체한 `operator new`는 exe 이미지 안에서만 묶인다. DLL 백엔드(Null DLL, Chaos)는 자기 `operator new`나 `FMemory`(GMalloc)로 할당하므로 훅에 보이지 않는다. 그런 run의 `tick_new_calls` 0은 그 백엔드에 대해 아무것도 말하지 않는다. manifest `alloc.hook_scope`가 이를 적는다. Chaos는 M13에서 GMalloc 래퍼로 `PtMemoryStats`에 할당 수를 낸다 ([ChaosBackendGuide.md](ChaosBackendGuide.md) §15 C-11).
 - SDK가 자기 할당기로 하는 할당(Jolt `JPH::Allocate` 계열, PhysX `PxAllocatorCallback`, Bullet `btAlignedAlloc`)은 `operator new`를 지나지 않는다. 백엔드가 `PtMemoryStats.NumAllocs`로 그 호출 수를 낸다: PhysX는 할당자 콜백, Jolt와 Bullet은 M7 수정 라운드 0부터 어댑터가 SDK의 공개 훅(`JPH::Allocate`·`Reallocate`·`AlignedAllocate` 등의 함수 포인터, `btAlignedAllocSetCustom`)에 다는 세는 래퍼다. 래퍼는 SDK 기본 구현과 같은 CRT 함수를 같은 순서로 부르고 원자 카운터만 더하므로 결과를 바꾸지 않는다 (G8 해시가 그대로다). Null은 자기 배열의 할당을 센다. 벤치는 frame 0 직전, frame 0의 Tick 뒤, 마지막 Tick 뒤에만 읽어(프레임 사이, 타이밍 밖) `alloc.backend_allocs_in_loop`, `backend_allocs_frame0`, `backend_allocs_after_frame0`에 쓴다. 엔진 할당은 엔진 거동이므로 기록만 하고 헤드라인 조건에 넣지 않는다 (§6 조건 8은 하네스 훅 값이다).
 - 관측값 [V] (dev, `M3.BoxPile` 1k 60 프레임): Jolt 119회(frame 0에 1), Bullet 128회(frame 0에 14), PhysX UE4Compat 2086회(frame 0에 161). 세 엔진 모두 프레임마다 조금씩 할당한다.
+- **양성 대조 (M8, M7 검토):** 시험 전용 `-InjectTickAllocation=<f>`는 frame f의 `Tick` 안(씬의 PreTick 델리게이트, `FPhysScene::Tick` 안이라 훅이 세는 구간)에서 `operator new`를 한 번 한다. 훅이 그것을 센다: `tick_new_calls` 1, `tick_first_allocating_frame` f, 헤드라인 자격 없음 (CTest `PhysicsTest.Bench.AllocHookPositiveControl`). 그래서 다른 모든 run의 0은 "보지 못해서 0"이 아니다.
 
 ### 4.2 프레임 사이의 기록 작업
 
@@ -127,7 +128,7 @@ QPC 눈금이 100 ns이므로 버킷 하나가 수 µs 아래인 작은 씬(`P0.
 | affinity | `SetProcessAffinityMask`. 뒤에 만들어지는 엔진 워커가 물려받는다 | `threads.affinity_mask`, `affinity_applied`, `affinity_before` |
 | 우선순위 | `HIGH_PRIORITY_CLASS` | `platform.priority_set`, `priority_before`, `priority_class` |
 | power throttling | `SetProcessInformation(ProcessPowerThrottling)`: EXECUTION_SPEED와 IGNORE_TIMER_RESOLUTION을 제어하고 끈다 | `platform.throttling.opt_out_applied` |
-| 타이머 해상도 | `timeBeginPeriod(1)`. UE DLL이 프로세스 전역으로 하므로 모든 엔진에 똑같이 (WindowsPlatformMisc.cpp:1076) | `platform.timer_resolution` (전후 `NtQueryTimerResolution`) |
+| 타이머 해상도 | `timeBeginPeriod(1)`. UE DLL이 프로세스 전역으로 하므로 모든 엔진에 똑같이 (WindowsPlatformMisc.cpp:1076) | `platform.timer_resolution` (전후 `NtQueryTimerResolution`). `current_ms`는 시스템 전체의 현재 주기다. Windows 10 2004부터 `timeBeginPeriod`는 프로세스별이라 `after`가 이 프로세스의 1 ms 요청을 증명하지는 않는다. 이 프로세스의 요청은 `applied`(`timeBeginPeriod`의 반환값)다 (M8 정정, M7 검토) |
 | 전원 계획 | 읽어서 기록만 한다 | `platform.power_scheme`, `power_scheme_guid`, `power_scheme_high_performance` |
 | CPU MHz | `CallNtPowerInformation(ProcessorInformation)`으로 run의 CPU만 읽는다 | `platform.cpu_mhz` (하이브리드 Intel은 정격값을 내기도 한다) |
 
@@ -143,9 +144,17 @@ spin pre-roll은 run의 마스크에 든 CPU마다 스레드 하나를 0.5 s 돌
 - **판정:** `core_busy_other_pct` > `threshold_total_pct` = `-ContaminationPct`(코어당, 기본 5: 02 §12.2 "코어 1개의 5%") × run의 코어 수(`host_load.cores`)이면 오염이다. `-HostCheck=enforce`(기본)이면 종료 코드 4, `record`이면 기록만 하고 헤드라인 자격을 뺀다.
 - 왜 시스템 전체가 아닌가: M8 러너의 유휴 기준(시스템 전체 3% 미만)은 이 PC에서 코어 0.6개에 해당한다. 시스템 전체를 5% of core로 판정하면 사용 중인 데스크톱에서는 거의 모든 run이 4가 된다. run을 실제로 방해하는 것은 자기 코어에 끼어든 일이다.
 - 왜 SMT 형제를 넣는가 (M7 수정 라운드 0): 형제 논리 CPU의 부하는 같은 코어의 실행 자원을 나눠 써 run을 느리게 한다. 첫 판은 마스크 CPU만 판정해서, CPU 1(형제)을 100% 바쁘게 해도 `contaminated` false, `timing_valid_for_headline` true였다 (독립 검사). 지금은 그 run이 종료 코드 4다 (CTest `PhysicsTest.Bench.ExitContaminatedSibling`: 형제 99.999%, run 코어 100.19% > 5%).
-- 왜 코어 수에 비례하는가 (M7 수정 라운드 0, Progress.md M7 §3 D-2의 기본값): 첫 판은 T개 CPU의 합을 코어 1개의 5%와 비교해, T가 클수록 같은 배경 부하에서도 4가 났다 (이 PC에서 PhysX BoxPile 10k T = 2~6이 끝까지 돈 뒤 4). 코어마다 같은 5%를 허용하면 T와 무관한 기준이 된다. **리드 확인 대기:** 리드가 다른 규칙을 정하면 `-ContaminationPct`(코어당)와 이 절만 바꾸면 된다. M8 러너는 `threshold_total_pct`와 `core_busy_other_pct`를 그대로 읽는다.
+- 왜 코어 수에 비례하는가 (M7 수정 라운드 0, Progress.md M7 §3 D-2의 기본값): 첫 판은 T개 CPU의 합을 코어 1개의 5%와 비교해, T가 클수록 같은 배경 부하에서도 4가 났다 (이 PC에서 PhysX BoxPile 10k T = 2~6이 끝까지 돈 뒤 4). 코어마다 같은 5%를 허용하면 T와 무관한 기준이 된다. **리드 결정 (M8):** 이 문턱을 그대로 둔다. 사용 중인 데스크톱에서 T ≥ 2 PhysX run의 약 10%가 끝까지 돈 뒤 4로 끝나는 것은(M7 독립 검사: 20 run 중 2, 문턱의 55~115%) 측정이 아니라 러너가 다룬다: 종료 코드 4인 run을 fresh process로 최대 2번 다시 돌리고, 모든 시도가 4이면 셀을 `contaminated`로 표시한다 (§5.2). M8 러너는 `threshold_total_pct`와 `core_busy_other_pct`를 그대로 읽는다.
 - 관측값 [V] (test, 측정 프로토콜, Progress.md M7 §7): 사용 중인 이 데스크톱에서 혼자 돈 T = 1 run은 run 코어(CPU 0, 1)의 다른 부하가 1.4~2.8% of core다 (CPU 0 0.5~1.1%, 형제 0.8~1.7%). BoxPile 10k T = 2..6은 Jolt 5.2~10.1%, PhysX UE4Compat 8.4~17.6%로 문턱(10~30%) 아래다 (첫 판의 규칙이면 PhysX T = 2~6이 모두 4였다). 같은 CPU 0을 HIGH 우선순위로 도는 도우미 프로세스를 붙이면 약 50% of core로 종료 코드 4가 된다 (CTest `PhysicsTest.Bench.ExitContaminated`).
 - CTest는 병렬 실행 때 서로의 CPU 0을 오염시키므로 `-HostCheck=record`로 돈다 (`ExitContaminated`만 enforce, RUN_SERIAL).
+
+### 5.2 러너 (M8, `Tools/ptbench`)
+
+- **환경 게이트 (읽기 전용):** `powercfg /getactivescheme`가 High performance나 Ultimate(GUID로 판정, 이름은 지역화된다)가 아니면 거부한다. `--allow-balanced`로만 우회하고, 우회한 세션은 리포트 머리, 모든 표 제목 밑의 조건 줄, 모든 그림 제목 위의 조건 줄로 표시된다 (M8 수정 라운드 1: 처음에는 머리에만 있어 따로 떼어 본 PNG에는 표시가 없었다). 유휴: 시스템 전체 바쁨 < 3% (2 s 창). 창을 하나씩 계속 보며 하나라도 통과하면 된다: 최소 5창, 그리고 `--idle-wait`(기본 120 s) 동안 (M8 수정 라운드 0: 이 데스크톱은 2.5~4.9%를 오가 5창으로는 무인 시작이 절반쯤 거부됐다). 기다린 시간과 모든 창이 `session.json` `environment.idle`에 남는다. 다른 PhysicsTest 프로세스가 없어야 한다. 실패한 검사는 `--allow-busy`, `--allow-concurrent`로 우회할 수 있다. 시험용 `--skip-idle`(유휴를 재지 않음)도 유휴 검사의 우회로 기록된다. 모든 우회는 `session.json` `bypasses`와 리포트 머리에 굵게 남는다. 리포트 머리는 세션 파일 하나가 아니라 모든 입력에서 만든다: 각 세션의 게이트와 각 run manifest의 `platform.power_scheme_high_performance` 중 하나라도 거짓이면 표시한다 (run 디렉터리만으로 만든 리포트, 여러 세션, 세션 도중의 전원 계획 변경). 시스템 설정은 바꾸지 않는다.
+- **순서:** 반복 r마다 모든 셀을 한 번씩, seed 고정 셔플 순서로 돈다 (splitmix64 + Fisher-Yates, [ResultsSchema.md](ResultsSchema.md) §11). run마다 fresh process, 그 전에 쿨다운 2 s(그동안의 시스템 바쁨을 기록), 타임아웃이면 프로세스를 죽인다. 벤치에 `-Repeat`, `-Order`, `-BlockSeed`, `-Session`, `-Out`을 넘긴다.
+- **판정은 `exit.json`이다:** 원시 프로세스 종료 코드는 기록만 한다. `exit.json`이 없으면 그 run은 끝까지 가지 못한 실패다(`no_exit_json`, 또는 `timeout`). 시험 전용 `-InjectSilentExit=<f>`(frame f 뒤 `TerminateProcess(0)`, 출력 없음)로 확인한다: 원시 코드 0인데 실패로 남는다 (CTest `PhysicsTest.Bench.InjectSilentExit`, `PhysicsTest.Py.Integration`).
+- **종료 코드 4:** 같은 run을 쿨다운 뒤 fresh process로 최대 `contaminated_retries`(기본 2)번 더 돈다. 시도마다 `index.csv` 한 줄과 `session.json` runs[] 항목이 남는다. 모든 시도가 4이면 그 반복과 셀이 `contaminated`다.
+- **CV:** 셀마다 ok이고 `timing_valid_for_headline`이 참인 run의 윈도 평균으로 CV(표본 표준편차 / 평균)를 보고한다 (리포트의 validate와 같은 run). ok지만 헤드라인 자격이 없는 run(dev·dbg, `-HostCheck=record`로 기록된 오염 등)은 값이 없고 `n_not_headline_valid`로 센다. 2% 미만은 목표로만 적는다 (게이트, 추가 블록, sentinel은 M10). 권위 있는 CV는 리포트의 것이다.
 
 ## 6. 헤드라인 자격 (`timing_valid_for_headline`)
 
@@ -160,7 +169,7 @@ spin pre-roll은 run의 마스크에 든 CPU마다 스레드 하나를 0.5 s 돌
 7. 호스트 부하가 측정됐고 오염 기준 아래 (`-HostCheck=record`로 기록만 한 오염도 자격을 뺀다).
 8. 타이밍 버킷 안 할당 0 (`alloc.tick_new_calls`).
 9. `PT_DO_CHECK = 0` 빌드 (test, test-avx2 프리셋). dev와 dbg는 check가 켜져 있어 자격이 없다.
-10. 시험 전용 주입(`-InjectEngineErrorBits`, `-InjectPreflightFault`, `-InjectSceneInstrumentFlags`, `-InjectStatePerturbation`)이 없음.
+10. 시험 전용 주입(`-InjectEngineErrorBits`, `-InjectPreflightFault`, `-InjectSceneInstrumentFlags`, `-InjectStatePerturbation`, M8의 `-InjectTickAllocation`, `-InjectSilentExit`)이 없음. 사유는 "test-only injection"이고 주입은 `run.test_injections`에 남는다 (`BenchmarkRunner.cpp`의 헤드라인 사유 목록).
 
 ### 6.1 preflight 게이트
 
@@ -199,4 +208,5 @@ spin pre-roll은 run의 마스크에 든 CPU마다 스레드 하나를 0.5 s 돌
 | TSC 버킷(rdtscp + lfence), run 전체 QPC 보정, TSC 읽기 오버헤드, ABI 오버헤드 게이트 | M10 |
 | 스레드 센서스 #1/#2, cpu_eff, 외부 스레드 cycle, G10b | M10 |
 | comparability key, 적합성 스탬프, preflight의 스탬프 확인 | M10 |
-| 반복·셔플·쿨다운·CV 보고 | M8 |
+| 반복·셔플·쿨다운·CV 보고 | M8 (구현, §5.2) |
+| CV 게이트(추가 블록, `noisy`), sentinel, bootstrap CI | M10 |

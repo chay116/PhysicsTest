@@ -1,0 +1,26 @@
+# Tools/ptbench - orchestration and analysis of PhysicsTestBench runs (03_WorkPlan M8, 02_Architecture 12.5, 13).
+#
+# Install into the repository .venv (02_Architecture 4.7; the pinned versions are requirements.lock, M0):
+#   .venv\Scripts\python -m pip install -r Tools\ptbench\requirements.lock -r Tools\ptbench\requirements-build.txt
+#   .venv\Scripts\python -m pip install --no-build-isolation --no-deps -e Tools\ptbench
+# then run it with the isolated interpreter (the current directory is not on sys.path):
+#   .venv\Scripts\python -I -m ptbench --help
+#
+# The modules live directly in Tools/ptbench (runner, envcheck, matrix, analytic, analysis/...), so the package directory is
+# mapped onto this folder. The editable install only adds a path entry: no file is copied and no build output appears here.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ptbench"
+version = "0.8.0"
+description = "PhysicsTest bench orchestration (matrix runner, environment gate) and basic analysis (load, validate, perf, report, determinism, analytic)"
+requires-python = ">=3.11"
+# Exact versions: requirements.lock (pip freeze of requirements.in). Installed with --no-deps, so this list is documentation.
+dependencies = ["numpy", "pandas", "pyarrow", "scipy", "matplotlib", "jsonschema"]
+
+[tool.setuptools]
+package-dir = { "ptbench" = "." }
+packages = ["ptbench", "ptbench.analysis", "ptbench.tests"]
+include-package-data = false

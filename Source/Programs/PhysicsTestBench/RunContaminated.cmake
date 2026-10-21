@@ -3,15 +3,17 @@
 # helper (this exe with -BusyHelper=<s>) spinning a CPU at HIGH_PRIORITY_CLASS, and a bench run pinned to CPU 0 (-Affinity=0x1,
 # also HIGH). The bench measures other processes on its cores - CPU 0 and its SMT sibling (docs/TimingContract.md 5.1) - so
 # it must exit 4 with exit.json saying contaminated_host. The helper ends by itself after <s> seconds and execute_process
-# waits for both: nothing is left running.
+# waits for both: nothing is left running. <s> must cover the bench's whole life up to the end of its measured loop
+# (process start, DLL loads, -PreRoll=1.5, 60 frames): 10 s by default since M8 fix round 1. With 4 s the bench sometimes
+# (a Debug build, a busy desktop) reached its loop after the helper had ended and exited 0 ("host other 2.63%").
 #   PT_TARGET=cpu0     (default) the helper spins CPU 0 itself: the two processes share the logical CPU
 #   PT_TARGET=sibling  (M7 fix round 0) the helper spins CPU 0's SMT sibling (read from a probe run's threads.smt_sibling_mask):
 #                      the bench's own CPU is free, but the core it runs on is shared. Skipped (PASS with a note) on a CPU
 #                      without SMT
-#   cmake -DPT_BENCH_EXE=<exe> -DPT_OUT_DIR=<dir> [-DPT_HELPER_SECONDS=4] [-DPT_TARGET=cpu0|sibling] -P RunContaminated.cmake
+#   cmake -DPT_BENCH_EXE=<exe> -DPT_OUT_DIR=<dir> [-DPT_HELPER_SECONDS=10] [-DPT_TARGET=cpu0|sibling] -P RunContaminated.cmake
 cmake_minimum_required(VERSION 3.25)
 if(NOT PT_HELPER_SECONDS)
-	set(PT_HELPER_SECONDS 4)
+	set(PT_HELPER_SECONDS 10)
 endif()
 if(NOT PT_TARGET)
 	set(PT_TARGET cpu0)
@@ -47,7 +49,14 @@ if(NOT _helper_rc EQUAL 0)
 	message(FATAL_ERROR "the busy helper exited ${_helper_rc}")
 endif()
 if(NOT _bench_rc EQUAL 4)
-	message(FATAL_ERROR "the bench exited ${_bench_rc}, expected 4 (contaminated host)")
+	set(_load "")
+	if(EXISTS "${PT_OUT_DIR}/run/manifest.json")
+		file(READ "${PT_OUT_DIR}/run/manifest.json" _manifest)
+		string(JSON _core ERROR_VARIABLE _json_error GET "${_manifest}" platform host_load core_busy_other_pct)
+		string(JSON _wall ERROR_VARIABLE _json_error GET "${_manifest}" platform host_load wall_s)
+		set(_load " (other load on the run's core ${_core}% over ${_wall} s: did the ${PT_HELPER_SECONDS} s helper end before the measured loop?)")
+	endif()
+	message(FATAL_ERROR "the bench exited ${_bench_rc}, expected 4 (contaminated host)${_load}")
 endif()
 if(NOT EXISTS "${PT_OUT_DIR}/run/exit.json" OR NOT EXISTS "${PT_OUT_DIR}/run/manifest.json")
 	message(FATAL_ERROR "exit.json / manifest.json missing")

@@ -6,7 +6,8 @@
 # M7 fix round 0: the manifests of two refused runs validate too (ResultsSchema 1: every run that initialised its backend
 # writes a physicstest.run/2 manifest) - the engine-option preflight (no scene: scene.built false) and a missing required
 # key. Negative controls, each must FAIL: run.mode = "Fast", platform.power_scheme removed, platform.power_scheme_guid = "x",
-# and an empty window with a 0 ns mean instead of null statistics.
+# an empty window with a 0 ns mean instead of null statistics, and (M8) timing_valid_for_headline true while reasons remain or
+# false without any reason (the schema's headline consistency rule).
 #   cmake -DPT_BENCH_EXE=<exe> -DPT_OUT_DIR=<dir> -DPT_PYTHON=<python> -DPT_VALIDATOR=<validate_manifest.py> -DPT_BACKEND=Jolt
 #         [-DPT_FRAMES=30] -P RunManifestSchema.cmake
 # Second mode (M7 fix round 0, PhysicsTest.Bench.ManifestsValidate): -DPT_VALIDATE_DIRS=<dir>|<dir>|... validates every
@@ -71,7 +72,10 @@ string(JSON _bad_power_guid SET "${_manifest}" platform power_scheme_guid "\"x\"
 string(JSON _zero_stats GET "${_manifest}" summary windows headline frame_ns)
 string(JSON _zero_stats SET "${_zero_stats}" mean 0)
 string(JSON _bad_window SET "${_manifest}" summary windows settled frame_ns "${_zero_stats}")
-foreach(_bad bad_mode bad_power bad_power_guid bad_window)
+# M8 (M7 review): the headline flag must agree with its reasons - true with reasons left, and false without any reason.
+string(JSON _bad_headline SET "${_manifest}" timing_valid_for_headline true)
+string(JSON _bad_no_reason SET "${_manifest}" timing_invalid_reasons "[]")
+foreach(_bad bad_mode bad_power bad_power_guid bad_window bad_headline bad_no_reason)
 	file(MAKE_DIRECTORY "${PT_OUT_DIR}/${_bad}")
 	file(WRITE "${PT_OUT_DIR}/${_bad}/manifest.json" "${_${_bad}}")
 	execute_process(COMMAND "${PT_PYTHON}" -I "${PT_VALIDATOR}" --require-fields "${PT_OUT_DIR}/${_bad}"
@@ -90,4 +94,4 @@ string(JSON _power GET "${_manifest}" platform power_scheme_guid)
 string(JSON _valid GET "${_manifest}" timing_valid_for_headline)
 message(STATUS "PASS: ${_schema} M3.BoxPile 5k (${PT_BACKEND}) validates: mode ${_mode}, dt_engine_s ${_dt}, affinity ${_mask} (${_series}), power scheme ${_power}, "
 	"timing_valid_for_headline ${_valid}; headline window clipped at ${_last}, settled empty (null statistics); the two refused runs' manifests validate; "
-	"the four broken copies (mode, power_scheme, power_scheme_guid, a 0 ns empty window) are rejected")
+	"the six broken copies (mode, power_scheme, power_scheme_guid, a 0 ns empty window, headline true with reasons, false without one) are rejected")
