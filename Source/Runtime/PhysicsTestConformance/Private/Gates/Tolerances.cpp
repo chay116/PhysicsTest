@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 #include "Misc/PtThirdPartyIncludesEnd.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -73,17 +74,38 @@ namespace PhysicsTest::Gates
 			{
 				Out.Fallback = Fallback->get<std::string>();
 			}
-			if (const auto Options = Object.find("options"); Options != Object.end() && Options->is_array())
+			// M7 (M6 review): malformed entries are load errors, never a json::type_error that ends the program.
+			if (const auto Options = Object.find("options"); Options != Object.end())
 			{
+				if (!Options->is_array())
+				{
+					OutError = Where + ": \"options\" is a list of variant option names (strings)";
+					return false;
+				}
 				for (const FJson& Option : *Options)
 				{
+					if (!Option.is_string())
+					{
+						OutError = Where + ": options/flags entries must be strings (\"options\" holds " + std::string(Option.type_name()) + ")";
+						return false;
+					}
 					Out.Options.push_back(Option.get<std::string>());
 				}
 			}
-			if (const auto Flags = Object.find("flags"); Flags != Object.end() && Flags->is_object())
+			if (const auto Flags = Object.find("flags"); Flags != Object.end())
 			{
+				if (!Flags->is_object())
+				{
+					OutError = Where + ": \"flags\" is an object of \"<name>\": \"option:<Key>\" | \"profile:<name>\"";
+					return false;
+				}
 				for (auto It = Flags->begin(); It != Flags->end(); ++It)
 				{
+					if (!It.value().is_string())
+					{
+						OutError = Where + ": options/flags entries must be strings (\"flags." + It.key() + "\" holds " + std::string(It.value().type_name()) + ")";
+						return false;
+					}
 					Out.Flags[It.key()] = It.value().get<std::string>();
 				}
 			}
@@ -98,6 +120,28 @@ namespace PhysicsTest::Gates
 			if (const auto Reason = Object.find("reason"); Reason != Object.end() && Reason->is_string())
 			{
 				Out.Reason = Reason->get<std::string>();
+			}
+			if (const auto Scene = Object.find("scene"); Scene != Object.end())
+			{
+				// One scenario name or a list of them (M7 fix round 0).
+				const auto IsName = [](const FJson& Name) { return Name.is_string() && !Name.get<std::string>().empty(); };
+				const bool bList = Scene->is_array() && !Scene->empty() && std::all_of(Scene->begin(), Scene->end(), IsName);
+				if (!IsName(*Scene) && !bList)
+				{
+					OutError = Where + ": \"scene\" names the scenario (ID.Name) whose geometry the expectation holds for, or a non-empty list of them";
+					return false;
+				}
+				if (bList)
+				{
+					for (const FJson& Name : *Scene)
+					{
+						Out.Scenes.push_back(Name.get<std::string>());
+					}
+				}
+				else
+				{
+					Out.Scenes.push_back(Scene->get<std::string>());
+				}
 			}
 			const bool bNeedsReason = Out.Expect.rfind("const:", 0) == 0 || Out.Expect.rfind("min:", 0) == 0;
 			if (bNeedsReason && Out.Reason.empty())
@@ -133,6 +177,25 @@ namespace PhysicsTest::Gates
 	}
 
 	bool FTolerances::LoadText(const std::string_view Text, const std::string& DisplayName, std::string& OutError)
+	{
+		// Every field is type-checked where it is read; a field of an unexpected JSON type that an accessor still meets
+		// (Item.value("engine", ...) on a number, a readback scope that is not an object) is reported as a load error too,
+		// so a malformed file never ends the program (M7, M6 review).
+		try
+		{
+			return LoadTextChecked(Text, DisplayName, OutError);
+		}
+		catch (const nlohmann::json::exception& Exception)
+		{
+			Entries.clear();
+			ReadbackRules.clear();
+			AllowedSkips.clear();
+			OutError = DisplayName + ": malformed entry (" + Exception.what() + ")";
+			return false;
+		}
+	}
+
+	bool FTolerances::LoadTextChecked(const std::string_view Text, const std::string& DisplayName, std::string& OutError)
 	{
 		Entries.clear();
 		ReadbackRules.clear();
@@ -199,14 +262,50 @@ namespace PhysicsTest::Gates
 				}
 				if (Check.key() == "readback")
 				{
+					if (!Check.value().is_object())
+					{
+						OutError = Where + ": an object of scopes (\"*\", \"<Engine>\", \"<Engine>.<Variant>\")";
+						return false;
+					}
 					for (auto Scope = Check.value().begin(); Scope != Check.value().end(); ++Scope)
 					{
+						if (!Scope.value().is_object())
+						{
+							OutError = Where + "." + Scope.key() + ": an object of \"<effective key>\": { rule }";
+							return false;
+						}
 						for (auto Key = Scope.value().begin(); Key != Scope.value().end(); ++Key)
 						{
 							FReadbackRule Rule;
-							if (!ParseReadbackRule(Key.value(), Where + "." + Scope.key() + "." + Key.key(), Rule, OutError))
+							const std::string RuleWhere = Where + "." + Scope.key() + "." + Key.key();
+							if (!ParseReadbackRule(Key.value(), RuleWhere, Rule, OutError))
 							{
 								return false;
+							}
+							// "by_scene": { "<scene>": { rule } } - another scene's own expectation of the same key (M7 fix round 0).
+							if (const auto ByScene = Key.value().find("by_scene"); ByScene != Key.value().end())
+							{
+								if (!ByScene->is_object() || ByScene->empty())
+								{
+									OutError = RuleWhere + ": \"by_scene\" is an object of \"<scene>\": { rule }";
+									return false;
+								}
+								for (auto Entry = ByScene->begin(); Entry != ByScene->end(); ++Entry)
+								{
+									FReadbackRule SceneRule;
+									const std::string SceneWhere = RuleWhere + ".by_scene." + Entry.key();
+									if (Entry.key().empty() || !Entry.value().is_object() || Entry.value().contains("by_scene") || Entry.value().contains("scene"))
+									{
+										OutError = SceneWhere + ": a by_scene entry is a rule of a named scene, without its own \"scene\" or \"by_scene\"";
+										return false;
+									}
+									if (!ParseReadbackRule(Entry.value(), SceneWhere, SceneRule, OutError))
+									{
+										return false;
+									}
+									SceneRule.Scenes = { Entry.key() };
+									ReadbackRules[Scope.key()][Key.key() + "@" + Entry.key()] = std::move(SceneRule);
+								}
 							}
 							ReadbackRules[Scope.key()][Key.key()] = std::move(Rule);
 						}
@@ -228,6 +327,11 @@ namespace PhysicsTest::Gates
 				}
 				if (const auto Overrides = Object.find("overrides"); Overrides != Object.end())
 				{
+					if (!Overrides->is_array())
+					{
+						OutError = Where + ": \"overrides\" is a list of { \"engine\", \"value\", \"reason\", ... }";
+						return false;
+					}
 					for (const FJson& Item : *Overrides)
 					{
 						FToleranceOverride Override;
@@ -352,9 +456,11 @@ namespace PhysicsTest::Gates
 		return Out;
 	}
 
-	const FReadbackRule* FTolerances::FindReadbackRule(const std::string_view Engine, const std::string_view Variant, const std::string_view Key) const
+	const FReadbackRule* FTolerances::FindReadbackRule(const std::string_view Engine, const std::string_view Variant, const std::string_view Key,
+		const std::string_view Scene) const
 	{
 		const std::string Scopes[3] = { std::string(Engine) + "." + std::string(Variant), std::string(Engine), "*" };
+		const std::string SceneKey = Scene.empty() ? std::string() : std::string(Key) + "@" + std::string(Scene);
 		for (const std::string& Scope : Scopes)
 		{
 			const auto ScopeIt = ReadbackRules.find(Scope);
@@ -362,7 +468,15 @@ namespace PhysicsTest::Gates
 			{
 				continue;
 			}
-			const auto Rule = ScopeIt->second.find(Key);
+			if (!SceneKey.empty())
+			{
+				const auto SceneRule = ScopeIt->second.find(SceneKey);
+				if (SceneRule != ScopeIt->second.end())
+				{
+					return &SceneRule->second;
+				}
+			}
+			const auto Rule = ScopeIt->second.find(std::string(Key));
 			if (Rule != ScopeIt->second.end())
 			{
 				return &Rule->second;

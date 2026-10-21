@@ -55,6 +55,73 @@ namespace PhysicsTest::JoltBackend
 		Abi::FKitServices* GKitForHooks = nullptr;
 		std::atomic<uint32> GNumJoltAsserts{ 0 };
 
+		// Counting wrappers around Jolt's default allocator (M7 fix round 0, docs/TimingContract.md 4.1). Jolt routes every
+		// heap allocation through the function pointers JPH::Allocate / Reallocate / Free / AlignedAllocate / AlignedFree
+		// (Memory.h:27-31 [V]; JPH_OVERRIDE_NEW_DELETE and STLAllocator use them). RegisterDefaultAllocator points them at
+		// malloc / realloc / free / _aligned_malloc / _aligned_free (Memory.cpp:22-80 [V]); the wrappers call exactly those
+		// functions in the same order and add a relaxed atomic count each, so the engine's results and addresses do not change.
+		// Public hooks of the SDK: nothing in Jolt is modified.
+		std::atomic<int64> GJoltHeapAllocs{ 0 };
+		std::atomic<int64> GJoltHeapFrees{ 0 };
+		JPH::AllocateFunction GJoltDefaultAllocate = nullptr;
+		JPH::ReallocateFunction GJoltDefaultReallocate = nullptr;
+		JPH::FreeFunction GJoltDefaultFree = nullptr;
+		JPH::AlignedAllocateFunction GJoltDefaultAlignedAllocate = nullptr;
+		JPH::AlignedFreeFunction GJoltDefaultAlignedFree = nullptr;
+
+		void* CountingAllocate(const size_t Size)
+		{
+			GJoltHeapAllocs.fetch_add(1, std::memory_order_relaxed);
+			return GJoltDefaultAllocate(Size);
+		}
+
+		void* CountingReallocate(void* Block, const size_t OldSize, const size_t NewSize)
+		{
+			GJoltHeapAllocs.fetch_add(1, std::memory_order_relaxed);
+			return GJoltDefaultReallocate(Block, OldSize, NewSize);
+		}
+
+		void CountingFree(void* Block)
+		{
+			if (Block != nullptr)
+			{
+				GJoltHeapFrees.fetch_add(1, std::memory_order_relaxed);
+			}
+			GJoltDefaultFree(Block);
+		}
+
+		void* CountingAlignedAllocate(const size_t Size, const size_t Alignment)
+		{
+			GJoltHeapAllocs.fetch_add(1, std::memory_order_relaxed);
+			return GJoltDefaultAlignedAllocate(Size, Alignment);
+		}
+
+		void CountingAlignedFree(void* Block)
+		{
+			if (Block != nullptr)
+			{
+				GJoltHeapFrees.fetch_add(1, std::memory_order_relaxed);
+			}
+			GJoltDefaultAlignedFree(Block);
+		}
+
+		// Jolt's defaults, then the wrappers on top (a second call - InitGamePhys after TermGamePhys - starts from the
+		// defaults again, so the wrappers never wrap themselves).
+		void RegisterCountingAllocator()
+		{
+			JPH::RegisterDefaultAllocator();
+			GJoltDefaultAllocate = JPH::Allocate;
+			GJoltDefaultReallocate = JPH::Reallocate;
+			GJoltDefaultFree = JPH::Free;
+			GJoltDefaultAlignedAllocate = JPH::AlignedAllocate;
+			GJoltDefaultAlignedFree = JPH::AlignedFree;
+			JPH::Allocate = &CountingAllocate;
+			JPH::Reallocate = &CountingReallocate;
+			JPH::Free = &CountingFree;
+			JPH::AlignedAllocate = &CountingAlignedAllocate;
+			JPH::AlignedFree = &CountingAlignedFree;
+		}
+
 		void JoltTrace(const char* Format, ...)
 		{
 			char Buffer[1024];
@@ -97,6 +164,16 @@ namespace PhysicsTest::JoltBackend
 		return GNumJoltAsserts.load(std::memory_order_relaxed);
 	}
 
+	int64 GetJoltHeapAllocCount()
+	{
+		return GJoltHeapAllocs.load(std::memory_order_relaxed);
+	}
+
+	int64 GetJoltHeapFreeCount()
+	{
+		return GJoltHeapFrees.load(std::memory_order_relaxed);
+	}
+
 	void RaiseTestAssert(const char* Where)
 	{
 		GNumJoltAsserts.fetch_add(1, std::memory_order_relaxed);
@@ -137,7 +214,7 @@ namespace PhysicsTest::JoltBackend
 		// Jolt's type registry is process-global: the module owns it between InitGamePhys and TermGamePhys.
 		if (JPH::Factory::sInstance == nullptr)
 		{
-			JPH::RegisterDefaultAllocator();
+			RegisterCountingAllocator();
 			JPH::Factory::sInstance = new JPH::Factory();
 			JPH::RegisterTypes();
 			bJoltRegistered = true;
@@ -215,9 +292,11 @@ namespace PhysicsTest::JoltBackend
 
 	PtResult FJoltBackend::GetMemoryStats(PtMemoryStats& Out)
 	{
-		// Module level: Jolt's heap use is not counted (no allocator hook), so the byte and allocation fields keep the Kit's
-		// -1 (unknown); the per-scene numbers come from GetMemoryStats(Scene) (the Jolt temp block).
-		Out.AllocatorKind = 2;
+		// Module level: Jolt's heap calls through the counting wrappers (process-wide); the byte fields keep the Kit's -1
+		// (unknown: the wrappers count calls, not sizes). The per-scene numbers come from GetMemoryStats(Scene).
+		Out.NumAllocs = GetJoltHeapAllocCount();
+		Out.NumFrees = GetJoltHeapFreeCount();
+		Out.AllocatorKind = 0;   // CRT malloc / _aligned_malloc behind JPH::Allocate
 		return PT_OK;
 	}
 }

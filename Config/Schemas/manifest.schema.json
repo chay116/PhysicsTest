@@ -1,0 +1,1265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://physicstest.local/schemas/manifest.schema.json",
+  "title": "PhysicsTest bench run manifest (physicstest.run/2)",
+  "description": "manifest.json of one PhysicsTestBench run (docs/ResultsSchema.md, 02_Architecture 12.3, 03_WorkPlan M7). Every run that initialised its backend writes one, refused runs included: a run refused by the engine-option preflight has no scene (scene.built false), so its scene-derived fields are null; every other run satisfies the stricter rules in allOf. Groups may gain fields (additional properties are allowed); the fields listed as required are what M8 analysis and the M7 criteria rely on. M10 fields (comparability_key, conformance_stamp, clock.tsc_hz, threads.census_*, summary.cpu_eff) are null until M10.",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "exit_code",
+    "timing_valid_for_headline",
+    "timing_invalid_reasons",
+    "unofficial",
+    "timing_label",
+    "comparability_key",
+    "conformance_stamp",
+    "run_id",
+    "session",
+    "utc",
+    "command_line",
+    "harness",
+    "build",
+    "backend",
+    "profile",
+    "effective",
+    "missing_effective_keys",
+    "scene",
+    "run",
+    "threads",
+    "platform",
+    "clock",
+    "order",
+    "phases_ns",
+    "memory",
+    "alloc",
+    "summary",
+    "determinism",
+    "gates",
+    "outputs",
+    "wall_time_s"
+  ],
+  "properties": {
+    "schema": {
+      "const": "physicstest.run/2"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "preflight_failed",
+        "engine_error",
+        "capacity_exceeded",
+        "contaminated_host"
+      ]
+    },
+    "exit_code": {
+      "enum": [
+        0,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    "timing_valid_for_headline": {
+      "type": "boolean"
+    },
+    "timing_invalid_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unofficial": {
+      "const": true
+    },
+    "timing_label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "comparability_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "conformance_stamp": {
+      "type": [
+        "object",
+        "string",
+        "null"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "session": {
+      "type": "string"
+    },
+    "utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "command_line": {
+      "type": "string"
+    },
+    "preflight_error": {
+      "type": "string"
+    },
+    "harness": {
+      "type": "object",
+      "required": [
+        "git_sha",
+        "dirty",
+        "git_sha_source",
+        "exe",
+        "exe_sha256",
+        "preset"
+      ],
+      "properties": {
+        "git_sha": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "git_sha_source": {
+          "enum": [
+            "build",
+            "cmake_configure"
+          ]
+        },
+        "exe": {
+          "type": "string"
+        },
+        "exe_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preset": {
+          "type": "string"
+        },
+        "do_check": {
+          "type": "boolean"
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": [
+        "flag_profile",
+        "configuration",
+        "msvc",
+        "cmake",
+        "crt",
+        "lto",
+        "flags_json_sha256",
+        "flags_json_violations"
+      ],
+      "properties": {
+        "flag_profile": {
+          "enum": [
+            "Shipped",
+            "MatchedAVX2"
+          ]
+        },
+        "configuration": {
+          "enum": [
+            "Debug",
+            "Release"
+          ]
+        },
+        "crt": {
+          "enum": [
+            "MD",
+            "MDd",
+            "MT",
+            "MTd"
+          ]
+        },
+        "lto": {
+          "type": "boolean"
+        },
+        "flags_json_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "flags_json_tu_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "flags_json_violations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "required": [
+        "name",
+        "variant",
+        "label",
+        "sdk_version",
+        "sdk_sha",
+        "abi_version",
+        "capabilities",
+        "module_flags",
+        "module_sha256",
+        "fidelity_notes",
+        "tu_self_report"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "abi_version": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+$"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "module_flags": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "module_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fidelity_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": [
+        "physics",
+        "mass_rule",
+        "physics_sha256",
+        "variant_sha256",
+        "resolved"
+      ],
+      "properties": {
+        "physics": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mass_rule": {
+          "type": "string"
+        },
+        "physics_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "variant_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "const": ""
+            }
+          ]
+        },
+        "resolved": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "key",
+              "value",
+              "origin"
+            ]
+          }
+        }
+      }
+    },
+    "effective": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/effective"
+      }
+    },
+    "effective_module": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/effective"
+      }
+    },
+    "missing_effective_keys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bodies_sampled": {
+      "type": "array"
+    },
+    "scene": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "kind",
+        "params",
+        "seed",
+        "scene_sha256",
+        "built",
+        "desc_sha256",
+        "desc_sha256_scope",
+        "options_sha256",
+        "num_bodies",
+        "windows"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][0-9A-Za-z]*\\.[A-Za-z0-9]+$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "enum": [
+            "Gate",
+            "Overhead",
+            "Behavior",
+            "Perf",
+            "Extended"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "scene_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "desc_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "num_bodies": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "first",
+              "last"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "first": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "last": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "built": {
+          "type": "boolean",
+          "description": "false: the engine-option preflight refused the variant before the scene was built"
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "mode",
+        "instrumentation",
+        "instrument_flags",
+        "frames",
+        "frames_run",
+        "dt_s",
+        "dt_engine_s",
+        "tick_mode",
+        "clamp_rule",
+        "frame_driver",
+        "sync_policy",
+        "hash_every",
+        "states_every",
+        "counters_every",
+        "capture_every",
+        "pre_roll_s",
+        "async_interpolated",
+        "test_injections"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "Bench",
+            "Behavior",
+            "Viz"
+          ]
+        },
+        "instrumentation": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "counters",
+              "phases",
+              "alloc",
+              "contacts",
+              "native_debug_draw"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "instrument_flags": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31
+        },
+        "frames": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "frames_run": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dt_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "dt_engine_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "tick_mode": {
+          "enum": [
+            "FixedStep",
+            "Sync",
+            "Substepping",
+            "AsyncFixed"
+          ]
+        },
+        "frame_driver": {
+          "enum": [
+            "Harness",
+            "Native",
+            null
+          ]
+        },
+        "sync_policy": {
+          "enum": [
+            "push_per_step+pull_active_only_per_frame",
+            "push_per_frame+pull_active_only_per_frame",
+            null
+          ]
+        },
+        "hash_every": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "states_every": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counters_every": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capture_every": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pre_roll_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "async_interpolated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "test_injections": {
+          "type": "object"
+        }
+      }
+    },
+    "threads": {
+      "type": "object",
+      "required": [
+        "T",
+        "affinity_mask",
+        "affinity_applied",
+        "logical_cpus",
+        "series",
+        "cores",
+        "engine_native",
+        "engine_thread_settings",
+        "scaling_note",
+        "census_init",
+        "census_window",
+        "foreign_cycles_fraction"
+      ],
+      "properties": {
+        "T": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "affinity_mask": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]+$"
+        },
+        "affinity_applied": {
+          "type": "boolean"
+        },
+        "logical_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 63
+          },
+          "minItems": 1
+        },
+        "engine_native": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "workers",
+                "native",
+                "source"
+              ],
+              "properties": {
+                "workers": {
+                  "type": [
+                    "integer",
+                    "number",
+                    "null"
+                  ]
+                },
+                "native": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "engine_thread_settings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "scaling_note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "census_init": {
+          "type": "null"
+        },
+        "census_window": {
+          "type": "null"
+        },
+        "foreign_cycles_fraction": {
+          "type": "null"
+        },
+        "series": {
+          "enum": [
+            "p_cores_one_lp",
+            "p_cores_smt",
+            "with_e_cores"
+          ],
+          "description": "02 9.6: one logical CPU per P-core (the default T series), an SMT pair in the mask (HT series), an E-core in the mask"
+        },
+        "cores": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "required": [
+        "cpu",
+        "logical_processors",
+        "p_cores",
+        "os_build",
+        "priority_class",
+        "priority_set",
+        "throttling",
+        "timer_resolution",
+        "power_scheme",
+        "power_scheme_guid",
+        "power_scheme_high_performance",
+        "qpc_hz",
+        "cpu_mhz",
+        "system_busy_other_pct",
+        "host_load"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logical_processors": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "p_cores": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 1
+        },
+        "os_build": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "priority_class": {
+          "type": "string"
+        },
+        "priority_set": {
+          "type": "boolean"
+        },
+        "throttling": {
+          "type": "object",
+          "required": [
+            "opt_out_applied"
+          ],
+          "properties": {
+            "opt_out_applied": {
+              "type": "boolean"
+            }
+          }
+        },
+        "timer_resolution": {
+          "type": "object",
+          "required": [
+            "requested_ms",
+            "applied",
+            "after"
+          ]
+        },
+        "power_scheme": {
+          "type": "string",
+          "minLength": 1
+        },
+        "power_scheme_guid": {
+          "type": "string",
+          "pattern": "^\\{[0-9A-Fa-f-]{36}\\}$"
+        },
+        "power_scheme_high_performance": {
+          "type": "boolean"
+        },
+        "qpc_hz": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cpu_mhz": {
+          "type": "array"
+        },
+        "system_busy_other_pct": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "host_load": {
+          "type": "object",
+          "required": [
+            "valid",
+            "core_mask",
+            "cores",
+            "core_busy_other_pct",
+            "mask_busy_other_pct",
+            "smt_sibling_busy_pct",
+            "system_busy_other_pct",
+            "own_process_pct",
+            "policy",
+            "threshold_pct",
+            "threshold_total_pct",
+            "contaminated"
+          ],
+          "properties": {
+            "valid": {
+              "type": "boolean"
+            },
+            "mask_busy_other_pct": {
+              "type": "number",
+              "minimum": 0
+            },
+            "policy": {
+              "enum": [
+                "enforce",
+                "record"
+              ]
+            },
+            "threshold_pct": {
+              "type": "number",
+              "minimum": 0
+            },
+            "contaminated": {
+              "type": "boolean"
+            },
+            "core_mask": {
+              "type": "string",
+              "pattern": "^0x[0-9a-f]+$"
+            },
+            "cores": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "core_busy_other_pct": {
+              "type": "number",
+              "minimum": 0
+            },
+            "threshold_total_pct": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "required": [
+        "source",
+        "qpc_hz",
+        "read_overhead_ns",
+        "tsc_hz"
+      ],
+      "properties": {
+        "qpc_hz": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "read_overhead_ns": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "tsc_hz": {
+          "type": "null"
+        }
+      }
+    },
+    "order": {
+      "type": "object",
+      "required": [
+        "repeat_index",
+        "order_index",
+        "block_seed"
+      ],
+      "properties": {
+        "repeat_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "order_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "block_seed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "phases_ns": {
+      "type": "object",
+      "required": [
+        "backend_init",
+        "option_preflight",
+        "scene_create",
+        "preflight",
+        "prepare",
+        "pre_roll",
+        "frame0",
+        "loop_after_frame0",
+        "teardown"
+      ]
+    },
+    "memory": {
+      "type": "object",
+      "required": [
+        "process",
+        "backend_scene"
+      ]
+    },
+    "alloc": {
+      "type": "object",
+      "required": [
+        "hook_installed",
+        "hook_scope",
+        "tick_new_calls",
+        "frame0_new_calls",
+        "loop_new_calls",
+        "backend_allocs_in_loop",
+        "backend_allocs_frame0",
+        "backend_allocs_after_frame0"
+      ],
+      "properties": {
+        "hook_installed": {
+          "type": "boolean"
+        },
+        "tick_new_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "loop_new_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "backend_allocs_in_loop": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hook_scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "backend_allocs_frame0": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "backend_allocs_after_frame0": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "unit",
+        "frame0_frame_ns",
+        "windows",
+        "cpu_eff"
+      ],
+      "properties": {
+        "unit": {
+          "const": "ns"
+        },
+        "windows": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/window"
+          }
+        },
+        "cpu_eff": {
+          "type": "null"
+        },
+        "frame0_frame_ns": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "determinism": {
+      "type": "object",
+      "required": [
+        "h_native",
+        "h_native_frame",
+        "h_quantized",
+        "h_state",
+        "engine_error_bits",
+        "capacity_error_bits_declared",
+        "capacity_error_bits",
+        "other_error_bits"
+      ],
+      "properties": {
+        "h_native": {
+          "type": "string",
+          "pattern": "^(0x[0-9a-f]{16})?$"
+        },
+        "h_quantized": {
+          "type": "string",
+          "pattern": "^(0x[0-9a-f]{16})?$"
+        },
+        "h_state": {
+          "type": "string",
+          "pattern": "^(0x[0-9a-f]{16})?$"
+        },
+        "engine_error_bits": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "result",
+          "checks",
+          "failures",
+          "notes"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "G0",
+              "G9",
+              "G10a"
+            ]
+          },
+          "result": {
+            "enum": [
+              "Pass",
+              "Fail",
+              "Skip"
+            ]
+          },
+          "checks": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "contains": {
+        "const": "manifest.json"
+      }
+    },
+    "deferred_fields": {
+      "type": "object"
+    },
+    "wall_time_s": {
+      "type": "number",
+      "minimum": 0
+    },
+    "step_stats_final": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "recorders": {
+      "type": "object",
+      "required": [
+        "hashes",
+        "states",
+        "contacts",
+        "phases"
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "effective": {
+      "type": "object",
+      "required": [
+        "key",
+        "native",
+        "native_unit",
+        "canonical",
+        "unit",
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "READBACK",
+            "SET_ONLY",
+            "COMPILE_TIME",
+            "ENGINE_DEFAULT"
+          ]
+        },
+        "canonical": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "required": [
+        "count",
+        "mean",
+        "median",
+        "p95",
+        "p99",
+        "min",
+        "max"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": [
+        "first",
+        "last",
+        "declared_last",
+        "clipped",
+        "count",
+        "frame_ns",
+        "step_ns",
+        "push_ns",
+        "pull_ns"
+      ],
+      "properties": {
+        "first": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "the last frame of the window this run covered (min(declared_last, frames_run - 1)); null when none"
+        },
+        "declared_last": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clipped": {
+          "type": "boolean",
+          "description": "the run ended before declared_last"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frame_ns": {
+          "$ref": "#/$defs/stats_or_null"
+        },
+        "step_ns": {
+          "$ref": "#/$defs/stats_or_null"
+        },
+        "push_ns": {
+          "$ref": "#/$defs/stats_or_null"
+        },
+        "pull_ns": {
+          "$ref": "#/$defs/stats_or_null"
+        }
+      },
+      "if": {
+        "properties": {
+          "count": {
+            "const": 0
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "last": {
+            "type": "null"
+          },
+          "frame_ns": {
+            "type": "null"
+          },
+          "step_ns": {
+            "type": "null"
+          },
+          "push_ns": {
+            "type": "null"
+          },
+          "pull_ns": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "last": {
+            "type": "integer"
+          },
+          "frame_ns": {
+            "$ref": "#/$defs/stats"
+          },
+          "step_ns": {
+            "$ref": "#/$defs/stats"
+          },
+          "push_ns": {
+            "$ref": "#/$defs/stats"
+          },
+          "pull_ns": {
+            "$ref": "#/$defs/stats"
+          }
+        }
+      }
+    },
+    "stats_or_null": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/stats"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scene": {
+            "properties": {
+              "built": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scene": {
+            "properties": {
+              "desc_sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "options_sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "num_bodies": {
+                "type": "integer"
+              }
+            }
+          },
+          "run": {
+            "properties": {
+              "frame_driver": {
+                "enum": [
+                  "Harness",
+                  "Native"
+                ]
+              },
+              "sync_policy": {
+                "type": "string"
+              },
+              "async_interpolated": {
+                "type": "boolean"
+              }
+            }
+          },
+          "step_stats_final": {
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "status": {
+            "const": "preflight_failed"
+          },
+          "exit_code": {
+            "const": 2
+          },
+          "preflight_error": {
+            "type": "string",
+            "pattern": "^engine options: "
+          }
+        },
+        "required": [
+          "preflight_error"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 0
+          }
+        }
+      }
+    }
+  ]
+}

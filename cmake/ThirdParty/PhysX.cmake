@@ -63,3 +63,10 @@ foreach(_t IN LISTS _pt_physx_libs)
 		set_property(TARGET ${_t} PROPERTY FOLDER "ThirdParty/PhysX")
 	endif()
 endforeach()
+
+# MatchedAVX2 (M7, test-avx2): /arch on every PhysX target, PUBLIC like Jolt's, so the PhysX adapter (PT::Backend::PhysX,
+# linked PRIVATE) and the smoke program compile PhysX's inline code with the same ISA as the libraries; nothing above the
+# adapter sees it (PTFlagProfiles.cmake). Shipped: PT_ARCH_PHYSX is empty and PhysX keeps its vendor default (SSE2).
+if(PT_ARCH_PHYSX)
+	pt_apply_arch(ARCH ${PT_ARCH_PHYSX} SCOPE PUBLIC DIRECTORIES "${PT_PHYSX_SOURCE_DIR}/physx")
+endif()

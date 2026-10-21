@@ -1892,6 +1892,9 @@ namespace PhysicsTest::PhysXBackend
 			Wrapping.LocalTransform, Wrapping.OffsetCom, Wrapping.AxisRemap);
 		Out.AppendEffective("shape.wrapping", Text, "shapes", static_cast<double>(Wrapping.Total()), "shapes", "READBACK");
 		const bool bListener = Scene->getSimulationEventCallback() != nullptr;
+		// M7 (M6 review): the narrow-phase pose of the snapshot contact points, declared (optional key; G3 checks it against
+		// the points): 0 = the start-of-step pose (docs/Abi.md 9.1 decision 3).
+		Out.AppendEffective("contact.point_pose", "0 (start of step: the narrow phase collides the poses the step began with)", "", 0.0, "", "COMPILE_TIME");
 		Out.AppendEffective("listeners.installed", bListener ? "1 (FPhysXSimEventCallback: viz / PT_INSTR_CONTACTS)" : "0", "listeners", bListener ? 1.0 : 0.0,
 			"listeners", "READBACK");
 

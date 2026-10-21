@@ -15,7 +15,7 @@ option(PT_DO_CHECK    "Compile check()/verify()/ensure() bodies in harness code 
 option(PT_PHYSX_USE_BOOTSTRAP "Build PhysX through PhysXBootstrap.cmake (VS generators, or fallback for 03 M0 criterion 4)" OFF)
 
 set(PT_PRESET "custom" CACHE STRING "Configure preset name (recorded in PTBuildInfo.h and BuildFlags.json)")
-set(PT_FLAG_PROFILE "Shipped" CACHE STRING "Build flag profile: Shipped (MVP) | MatchedAVX2 (M7, test-avx2)")
+set(PT_FLAG_PROFILE "Shipped" CACHE STRING "Build flag profile: Shipped (MVP) | MatchedAVX2 (M7, test-avx2: SDKs and adapters /arch:AVX2, harness none)")
 set_property(CACHE PT_FLAG_PROFILE PROPERTY STRINGS Shipped MatchedAVX2)
 
 # --- SDK pins (full commit SHAs, verified against D:\PhysicsRefs) ----------------------------------------------

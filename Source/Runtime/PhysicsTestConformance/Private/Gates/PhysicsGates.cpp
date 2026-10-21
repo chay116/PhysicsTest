@@ -670,6 +670,26 @@ namespace PhysicsTest::Gates
 				const bool bPredictedPose = WorstPredicted < WorstStart;
 				Report.Note(Format("narrow-phase pose of step 1: %s (worst PointOn0 off the body %.2g cm at the start-of-step pose, %.2g cm at the predicted pose "
 					"X0 + (v0 + g dt) dt)", bPredictedPose ? "the predicted pose (Chaos convention)" : "the start-of-step pose", WorstStart, WorstPredicted));
+				// M7 (M6 review): the pose is declared, not only inferred. The optional effective key contact.point_pose (0 = the
+				// start-of-step pose, 1 = the predicted pose; COMPILE_TIME) tells contacts.ptcn readers, the viewer and the M9
+				// analysis which convention the points follow; when a backend declares it, the inferred pose must agree. Optional
+				// because a generic required key added after the v1.0 freeze would fail A7 for a v1.0 module (docs/Abi.md 5.14).
+				{
+					const std::vector<FEffectiveSetting> Settings = ReadEffective(*Run->Scene, Report);
+					const FEffectiveSetting* Declared = FindSetting(Settings, "contact.point_pose");
+					if (Declared == nullptr)
+					{
+						Report.Note("contact.point_pose: not declared (optional key; the inferred pose above is the only record)");
+					}
+					else if (Report.Check(Declared->bHasCanonical && (Declared->Canonical == 0.0 || Declared->Canonical == 1.0),
+						"contact.point_pose must be 0 (start-of-step) or 1 (predicted): '" + Declared->Native + "'"))
+					{
+						const bool bDeclaredPredicted = Declared->Canonical == 1.0;
+						Report.Check(bDeclaredPredicted == bPredictedPose, Format("contact.point_pose declares the %s pose, the points follow the %s pose",
+							bDeclaredPredicted ? "predicted" : "start-of-step", bPredictedPose ? "predicted" : "start-of-step"));
+						Report.Note(Format("contact.point_pose declared %d (%s), matches the points", bDeclaredPredicted ? 1 : 0, bDeclaredPredicted ? "predicted" : "start-of-step"));
+					}
+				}
 				for (const uint32 Body : { BoxBody, SphereBody, CapsuleBody })
 				{
 					const FPairStats& Pair = Pairs[Body];
@@ -1282,7 +1302,7 @@ namespace PhysicsTest::Gates
 		}
 
 		// The resolved value an expectation names. False + OutWhy when it cannot be computed.
-		bool ResolveExpectation(const std::string& Expect, const FGateTarget& Target, const FGateScene& Run, double& OutValue, std::string& OutWhy)
+		bool ResolveExpectation(const std::string& Expect, const FGateTarget& Target, const FReadbackContext& Run, double& OutValue, std::string& OutWhy)
 		{
 			const FResolvedPhysicsConfig& Config = *Run.Config;
 			bool bOk = false;
@@ -1318,7 +1338,7 @@ namespace PhysicsTest::Gates
 			}
 			if (Expect.rfind("capacity:", 0) == 0)
 			{
-				const FScenarioCapacity Capacity = Run.Scenario->GetCapacity(Run.Params);
+				const FScenarioCapacity Capacity = Run.Scenario->GetCapacity(*Run.Params);
 				const std::string What = Expect.substr(9);
 				OutValue = What == "bodies" ? Capacity.MaxBodies : (What == "pairs" ? Capacity.MaxBodyPairs : Capacity.MaxContactConstraints);
 				return true;
@@ -1340,6 +1360,9 @@ namespace PhysicsTest::Gates
 				if (Name == "sleep_enabled") { OutValue = Config.TestSettings.bAllowSleeping ? 1.0 : 0.0; return true; }
 				if (Name == "sleep_disabled") { OutValue = Config.TestSettings.bAllowSleeping ? 0.0 : 1.0; return true; }
 				if (Name == "workers") { OutValue = static_cast<double>(std::max(Config.TestSettings.NumThreads, 1) - 1); return true; }
+				// M7: the PhysX dispatcher for T >= 2 is PxDefaultCpuDispatcherCreate(T) - T worker threads, the caller waits in
+				// fetchResults (02 9.6; ExtDefaultCpuDispatcher.cpp:51-73 [V]); T = 1 is the inline / single-thread dispatcher.
+				if (Name == "dispatcher_workers") { OutValue = Config.TestSettings.NumThreads > 1 ? static_cast<double>(Config.TestSettings.NumThreads) : 0.0; return true; }
 				if (Name == "enhanced_determinism") { OutValue = Config.Settings.bEnableEnhancedDeterminism ? 1.0 : 0.0; return true; }
 				if (Name == "restitution_threshold")
 				{
@@ -1359,7 +1382,7 @@ namespace PhysicsTest::Gates
 			return false;
 		}
 
-		void CheckReadbackRule(const FGateTarget& Target, const FGateScene& Run, const FEffectiveSetting& Setting, const FReadbackRule& Rule, FGateReport& Report,
+		void CheckReadbackRule(const FGateTarget& Target, const FReadbackContext& Run, const FEffectiveSetting& Setting, const FReadbackRule& Rule, FGateReport& Report,
 			int32& OutCompared, int32& OutUnchecked)
 		{
 			const std::string Where = "G9 " + Setting.Key + " (native '" + Setting.Native.substr(0, 160) + "')";
@@ -1431,37 +1454,8 @@ namespace PhysicsTest::Gates
 				FGateReport Report;
 				std::unique_ptr<FGateScene> Run = MakeGateScene(Target, "M3.BoxPile", { { "N", "1000" } });
 				const std::vector<FEffectiveSetting> Settings = ReadEffective(*Run->Scene, Report);
-				int32 NumReadback = 0;
-				int32 Compared = 0;
-				int32 Unchecked = 0;
-				std::vector<std::string> UncheckedKeys;
-				for (const FEffectiveSetting& Setting : Settings)
-				{
-					if (Setting.Source != "READBACK")
-					{
-						continue;
-					}
-					++NumReadback;
-					const FReadbackRule* Rule = Target.Tolerances->FindReadbackRule(Target.Backend, Target.Variant, Setting.Key);
-					if (!Report.Check(Rule != nullptr, "G9 " + Setting.Key + ": READBACK key without a registered expectation (tolerances.json gates.G9.readback)"))
-					{
-						continue;
-					}
-					const int32 Before = Unchecked;
-					CheckReadbackRule(Target, *Run, Setting, *Rule, Report, Compared, Unchecked);
-					if (Unchecked != Before)
-					{
-						UncheckedKeys.push_back(Setting.Key + " (" + Rule->Unchecked + ")");
-					}
-				}
-				const FEffectiveSetting* Wrapping = FindSetting(Settings, "shape.wrapping");
-				Report.Check(Wrapping != nullptr && Wrapping->bHasCanonical && Wrapping->Canonical == 0.0,
-					"M3.BoxPile 1k: shape.wrapping must be 0 (" + (Wrapping != nullptr ? Wrapping->Native : std::string("missing")) + ")");
-				Report.Note(Format("M3.BoxPile 1k: %d READBACK keys, %d compared with the resolved value, %d registered as not profile-derived", NumReadback, Compared, Unchecked));
-				for (const std::string& Key : UncheckedKeys)
-				{
-					Report.Note("not profile-derived: " + Key);
-				}
+				const FReadbackContext Context{ Run->Config.get(), Run->Scenario, &Run->Params, Run->DtEngine };
+				CheckEffectiveReadback(Target, Context, Settings, {}, true, "M3.BoxPile 1k", Report);
 				FinishGateScene(*Run, State);
 				return Report;
 			}
@@ -1543,6 +1537,99 @@ namespace PhysicsTest::Gates
 	std::string FGateTarget::GetLabel() const
 	{
 		return GetEngineLabel() + " / " + Profile;
+	}
+
+	void CheckEffectiveReadback(const FGateTarget& Target, const FReadbackContext& Context, const std::vector<FEffectiveSetting>& Settings,
+		const std::vector<std::string>& SkipKeys, const bool bRequireNoWrapping, const std::string& SceneLabel, FGateReport& Report)
+	{
+		int32 NumReadback = 0;
+		int32 Compared = 0;
+		int32 Unchecked = 0;
+		int32 Skipped = 0;
+		int32 SceneBound = 0;
+		int32 ScenePinned = 0;
+		int32 NoBodyKeys = 0;
+		std::vector<std::string> UncheckedKeys;
+		std::vector<std::string> SceneBoundKeys;
+		std::vector<std::string> ScenePinnedKeys;
+		for (const FEffectiveSetting& Setting : Settings)
+		{
+			if (Setting.Source != "READBACK")
+			{
+				continue;
+			}
+			if (std::find(SkipKeys.begin(), SkipKeys.end(), Setting.Key) != SkipKeys.end())
+			{
+				++Skipped;
+				continue;
+			}
+			++NumReadback;
+			const std::string SceneName = Context.Scenario != nullptr ? Context.Scenario->GetName() : "";
+			const FReadbackRule* Rule = Target.Tolerances->FindReadbackRule(Target.Backend, Target.Variant, Setting.Key, SceneName);
+			if (!Report.Check(Rule != nullptr, "G9 " + Setting.Key + ": READBACK key without a registered expectation (tolerances.json gates.G9.readback)"))
+			{
+				continue;
+			}
+			if (!Rule->Scenes.empty() && Context.Scenario != nullptr && std::find(Rule->Scenes.begin(), Rule->Scenes.end(), SceneName) == Rule->Scenes.end())
+			{
+				++SceneBound;
+				SceneBoundKeys.push_back(Setting.Key);
+				continue;
+			}
+			const bool bBodyTemplateRule = Rule->Expect == "profile:linear_damping" || Rule->Expect == "profile:max_angular_velocity"
+				|| Rule->Expect == "profile:gyroscopic" || Rule->Expect == "profile:ccd";
+			if (bBodyTemplateRule && !Context.bSceneUsesProfileBodyDefaults)
+			{
+				++ScenePinned;
+				ScenePinnedKeys.push_back(Setting.Key);
+				continue;
+			}
+			if (Context.NumDynamicBodies == 0 && !Setting.bHasCanonical && Rule->Unchecked.empty())
+			{
+				++NoBodyKeys;
+				continue;
+			}
+			const int32 Before = Unchecked;
+			CheckReadbackRule(Target, Context, Setting, *Rule, Report, Compared, Unchecked);
+			if (Unchecked != Before)
+			{
+				UncheckedKeys.push_back(Setting.Key + " (" + Rule->Unchecked + ")");
+			}
+		}
+		if (bRequireNoWrapping)
+		{
+			const FEffectiveSetting* Wrapping = FindSetting(Settings, "shape.wrapping");
+			Report.Check(Wrapping != nullptr && Wrapping->bHasCanonical && Wrapping->Canonical == 0.0,
+				SceneLabel + ": shape.wrapping must be 0 (" + (Wrapping != nullptr ? Wrapping->Native : std::string("missing")) + ")");
+		}
+		Report.Note(Format("%s: %d READBACK keys, %d compared with the resolved value, %d registered as not profile-derived%s", SceneLabel.c_str(), NumReadback,
+			Compared, Unchecked, Skipped > 0 ? Format(", %d left to another gate", Skipped).c_str() : ""));
+		for (const std::string& Key : UncheckedKeys)
+		{
+			Report.Note("not profile-derived: " + Key);
+		}
+		if (SceneBound > 0)
+		{
+			std::string Keys;
+			for (const std::string& Key : SceneBoundKeys)
+			{
+				Keys += (Keys.empty() ? "" : ", ") + Key;
+			}
+			Report.Note(Format("%d READBACK key(s) with a geometry-bound rule (tolerances.json \"scene\") not checked on %s: %s", SceneBound, SceneLabel.c_str(), Keys.c_str()));
+		}
+		if (ScenePinned > 0)
+		{
+			std::string Keys;
+			for (const std::string& Key : ScenePinnedKeys)
+			{
+				Keys += (Keys.empty() ? "" : ", ") + Key;
+			}
+			Report.Note(Format("%d READBACK key(s) with a body-template rule not checked: %s pins its bodies' values itself (%s)", ScenePinned, SceneLabel.c_str(), Keys.c_str()));
+		}
+		if (NoBodyKeys > 0)
+		{
+			Report.Note(Format("%d READBACK key(s) aggregate over dynamic bodies and read back no value: %s has none", NoBodyKeys, SceneLabel.c_str()));
+		}
 	}
 
 	const std::vector<IConformanceGate*>& GetPhysicsGates()

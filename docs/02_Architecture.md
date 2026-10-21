@@ -142,7 +142,7 @@ D:\PhysicsTest\
   .gitignore  .gitattributes  README.md  THIRD_PARTY_NOTICES.md
   cmake/
     PTOptions.cmake   PTToolchain.cmake   PTFlagProfiles.cmake   PTModules.cmake
-    PTBuildInfo.h.in  PTBackendRegistry.cpp.in  DumpBuildFlags.cmake
+    PTBuildInfo.h.in  PTBackendRegistry.cpp.in  DumpBuildFlags.cmake  GitInfo.cmake (build-step git SHA -> PTGitInfo.h, M7)
     ThirdParty/  Jolt.cmake  PtBullet.cmake  PhysX.cmake  PhysXBootstrap.cmake (VS only)  ImGui.cmake  SmallDeps.cmake
                  PtFetch.cmake (pinned FetchContent helpers + SHA guard, M0)
     Chaos/       PtChaosUbt.cmake
@@ -153,7 +153,7 @@ D:\PhysicsTest\
                        Jolt.Default (M3)  Jolt.SharpBoxes  Bullet.Default  Bullet.StaticAabbOff  Chaos.Game  Chaos.Evolution  (.ini)
     Matrices/  smoke headline sensitivity-avx2 scaling overhead behavior determinism (.json)
     Golden/    tolerances.json  scene_hashes.json  native_hashes.json
-    Schemas/   manifest / session / matrix / stamp (.schema.json)
+    Schemas/   manifest.schema.json  exit.schema.json (M7)  session / matrix (M8)  stamp (M10) (.schema.json)
   Source/
     Runtime/
       Core/                Math, LogMacros, AssertionMacros, CommandLine/Parse, ConfigCacheIni, IConsoleManager,
@@ -180,13 +180,15 @@ D:\PhysicsTest\
       PhysicsTestScenarios/    Public/PhysicsTestScenario.h (registry, IMPLEMENT_PHYSICS_TEST_SCENARIO, M3)
                                Public/Fixtures/FreeFallFixture.h (M2 fixture, moved from Conformance in M3)
                                Private/Scenarios/ScenarioHelpers.h  Gates/S00_FreeFall  Behavior/M1_SingleBoxDrop  Perf/M3_BoxPile (M3)
+                               Private/Scenarios/Gates/S01..S08 (M6)  Perf/P0_EmptyStep P1_SmallScene M2b_Pyramid1240 (M7)
                                Private/Scenarios/{Overhead,Extended} (later)
-      PhysicsTestBenchCore/    BenchCore.h (M3: clock buckets, window statistics, ULID run id, file SHA-256, read-only host facts)
-                               HostEnvironment ProcessSpawner (M7)  ThreadCensus (M10)
+      PhysicsTestBenchCore/    Public/BenchCore.h (M3: clock buckets, window statistics, ULID run id, file SHA-256, read-only host
+                               facts; M7: processor topology, FHostEnvironment, FHostLoadMonitor, FProcessSpawner, FAllocationCounters)
+                               Private/BenchCore.cpp (M3)  HostEnvironment.cpp (M7)  ThreadCensus (M10)
       PhysicsTestConformance/  Public/ConformanceGate.h  Public/Abi/AbiGates.h (A0-A7, A10; M2)
                                Private/Abi/AbiGates.cpp  AbiFrameModelGate.cpp  Gates/G0..G12 (M6)  FConformanceSuite (M6)
-      PhysicsTestBenchmark/    Public/BenchmarkRunner.h  Private/BenchConfig.cpp BenchmarkRunner.cpp (M3 minimal)
-                               RunManifest Recorders Preflight (M7)
+      PhysicsTestBenchmark/    Public/BenchmarkRunner.h  Private/BenchConfig.cpp BenchmarkRunner.cpp (M3 minimal, M7 full: FBenchRun)
+                               Public/BenchRecorders.h  Private/BenchRecorders.cpp BenchPreflight.* BenchMultiRun.cpp RunManifest.h (M7)
     Backends/
       CMakeLists.txt (backends + the generated PT::BackendRegistry, M2)
       NullBackend/   Private/ NullBackend.h NullBackend.cpp (static entry) NullBackendDll.cpp (-> PtBackend_Null.dll, DLL path)
@@ -200,7 +202,8 @@ D:\PhysicsTest\
                               PhysXBodyInstance.cpp PhysXConstraint.cpp PhysXSceneConfig.* PhysXCompat.h
     Editor/PhysicsTestEditor/  PhysicsViewportClient ViewportCameraController ViewerSession PhysicsTestEditor (M4)  ReplaySource (M12)
                                Private/Panels/{Engines,Inspector,Stats,Console}Panel.cpp (M4)  (+ Profiler, OutputLog: M12)
-    Programs/  PhysicsTestBench/ (M3: Private/PhysicsTestBenchMain.cpp, RunBenchMatrix.cmake)
+    Programs/  PhysicsTestBench/ (M3: Private/PhysicsTestBenchMain.cpp, RunBenchMatrix.cmake; M6: RunConformanceMatrix.cmake;
+                                  M7: Private/AllocationHook.cpp, Run{Contaminated,GateMatrix,ManifestSchema,PreflightSweep,ThreadMatrix}.cmake)
                PhysicsTestViewer/ (M4: Private/PhysicsTestViewerApp.*, PhysicsTestViewerMain.cpp; Tests/ -> PhysicsTestViewerTests.exe)
                PhysicsTestAutomation/  PtBackendServer/ (M14, conditional)
     Tests/     SdkSmoke/ (PtSmoke{Jolt,Bullet,PhysX}.exe, M0)  Probes/ (CTest probes: includes, flag leak, BuildFlags,
@@ -216,13 +219,13 @@ D:\PhysicsTest\
     Source/PhysicsTestChaos/Private/  PtChaosModule.cpp PtChaosBackend.* PtChaosScene.* PtChaosBodyFactory.cpp
                                       PtChaosSnapshot.cpp PtChaosDebugDraw.cpp PtChaosEvolutionScene.cpp PtChaosDefaults.h
   Tools/  cmake.cmd ctest.cmd vcenv.cmd (vcvars64)  check_physx_isolation.cmd + CompareBuildFlags.cmake (M0)
-          check_modules.py  Chaos/build_chaos.cmd
+          check_modules.py  validate_manifest.py (M7)  Chaos/build_chaos.cmd
           ptbench/ (runner, envcheck, analysis/{load,validate,perf,behavior,determinism,report}, analytic)
           ptbench/requirements.lock  wheelhouse/ (offline only, ignored)
   .venv/  (ignored, repository root; Tools/ptbench analysis packages)
   docs/   01_Feasibility.md  02_Architecture.md  03_WorkPlan.md  04_DecisionLog.md  appendix/A_HeaderSketches.md
-          Abi.md (M2 draft)  Scenes.md (M3)  Progress.md
-          (planned) TimingContract.md  Profiles.md  ResultsSchema.md  ChaosBackendGuide.md  ChaosSpike.md  Checkpoints.md
+          Abi.md (M2 draft)  Scenes.md (M3)  ChaosBackendGuide.md (M6)  TimingContract.md  ResultsSchema.md (M7)  Progress.md
+          (planned) Profiles.md  ChaosSpike.md  Checkpoints.md
   out/<preset>/   (ignored, short root)
   Saved/          (ignored) Logs/ Results/<session>/<run_id>/ Conformance/ Screenshots/
 ```
@@ -367,6 +370,11 @@ PhysicsTestChaos_UBT_{Development,Test}   custom target (PT_WITH_CHAOS=ON, not i
    - Bullet: `BT_BULLET_VERSION`, `BT_USE_SSE`, 재수출된 `BT_THREADSAFE`
 3. **판정:** 두 출처가 겹치는 사실(ISA, FP 모드, CRT, 컴파일러 버전)이 서로 다르거나 플래그 프로필 기대값과 다르면 분석 단계가 그 run을 거부한다.
 4. **Chaos [확장 M13]:** UBT가 만든 `Unreal/ChaosBridgeHost/Intermediate` 아래의 `.rsp` 파일을 `check_modules.py`가 파싱해 BuildFlags 출처로 쓴다.
+
+**M7 구현 메모 [V]**
+- **test-avx2 프리셋:** `test`를 상속하고 `PT_FLAG_PROFILE=MatchedAVX2`만 바꾼다 (`CMakePresets.json`, 사용자 예시 `test-avx2-local`). MatchedAVX2는 `PT_ARCH_JOLT`, `PT_ARCH_PHYSX`, `PT_ARCH_BULLET`을 AVX2로 둔다 (`cmake/PTFlagProfiles.cmake`). PhysX는 `physx` 소스 디렉터리의 모든 타깃에, Bullet은 세 라이브러리 타깃에 `/arch:AVX2`를 **PUBLIC**으로 건다. 그래서 그 SDK를 링크하는 어댑터 TU도 같은 ISA로 컴파일된다. 하네스 TU에는 어느 프로필에서도 `/arch`가 없다 (`PhysicsTest.Probe.HarnessSdkIsolation`이 모든 프로필에서 확인한다. 전에는 Shipped만).
+- **G0 판정 (preflight):** `DumpBuildFlags.cmake`가 대상별 G0 사실(어댑터 TU의 `/arch`, FP 모드, CRT, 컴파일러 버전)을 `BuildFlagsSha.h`의 `PT_BUILD_FLAGS_G0_JSON`으로 exe에 넣는다. 벤치 preflight가 이 값, 어댑터 자기보고(`PtBackendInfo.BuildFlagsJson`), 플래그 프로필 기대값(Jolt는 두 프로필 모두 AVX2, PhysX·Bullet은 MatchedAVX2에서만 AVX2) 셋을 대조하고, 하나라도 다르면 종료 코드 2다 (`BenchPreflight::RunG0`, CTest `PhysicsTest.Bench.PreflightG0Injected`).
+- **git SHA:** `PTGitInfo.h`를 빌드 단계의 custom command(`cmake/GitInfo.cmake`)가 만든다. `.git/HEAD`, `.git/index`, `.git/logs/HEAD`에 의존하고 내용이 바뀔 때만 다시 쓴다. 그래서 manifest `harness.git_sha_source`는 `build`이고, 아무것도 바뀌지 않은 두 번째 빌드는 "no work to do"다. 커밋 뒤 첫 빌드는 이 헤더를 쓰는 TU만 다시 컴파일한다.
 
 ### 4.7 환경 준비 [MVP M0]
 
@@ -1081,6 +1089,7 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
   - 읽기 오버헤드를 측정해 기록한다 (< 30 ns 예상).
 
 **루프 제약:** 타이밍 루프 안에서는 할당, I/O, 로그를 하지 않는다. `test` 빌드의 카운팅 훅으로 검증한다 [확장 M7].
+- **M7 구현 [V]:** 벤치 exe가 전역 `operator new`/`delete`(모든 형)를 바꿔 원자 카운터에 센다 (`PhysicsTestBench/Private/AllocationHook.cpp`). manifest `alloc.tick_new_calls`는 `Tick`(타이밍 버킷) 안에서 일어난 `operator new` 호출 수다. 하네스, Kit, 정적 어댑터, SDK의 `operator new`가 모두 이 훅을 지난다. SDK가 자기 할당자로 하는 할당(Jolt `JPH::Allocate`, Bullet `btAlignedAlloc`, PhysX `PxAllocatorCallback`은 `malloc` 계열)은 이 훅에 보이지 않으므로, 백엔드가 셀 수 있으면 `PtMemoryStats.NumAllocs`의 루프 전후 차이를 `alloc.backend_allocs_in_loop`로 따로 적는다 (PhysX·Null. Jolt·Bullet은 null). `tick_new_calls` > 0이면 헤드라인 자격이 없다. `backend_allocs_in_loop`는 엔진 거동이라 자격에 넣지 않고 기록만 한다. 클럭 읽기 오버헤드는 시작할 때 QPC를 20000번 읽어 `clock.read_overhead_ns`로 기록한다 ([TimingContract.md](TimingContract.md) §2.1).
 
 ### 9.4 엔진별 타이밍 구간 [MVP M3·M5, Chaos 행은 확장 M13]
 
@@ -1128,6 +1137,12 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 
 - 엔진 고유의 스레드 설정값을 T 옆에 함께 기록한다.
 - HT(12)와 E코어 포함(20) 시리즈는 별도로 플래그를 단다.
+
+**M7 구현 메모 [V]**
+- 마스크는 고정 상수가 아니라 `GetLogicalProcessorInformationEx`로 읽은 토폴로지에서 만든다 (`FProcessorTopology::MakeThreadMask`: 효율 등급이 가장 높은 코어마다 첫 논리 CPU를 T개). 이 PC에서는 위 표의 마스크와 같다 (CTest `PhysicsTest.Unit.Bench`의 `ThreadMasksFromTopology`). `-Affinity=`를 주면 그 마스크의 비트 수가 T와 같아야 한다 (다르면 종료 코드 2).
+- PhysX T ≥ 2는 `PxDefaultCpuDispatcherCreate(T)` 그대로다 (워커 T개). effective `threads.workers`와 `physx.cpu_dispatcher`는 T = 1이면 0, T ≥ 2면 T이고, G9 규칙 `profile:dispatcher_workers`가 비교한다. Bullet에 T ≥ 2를 주면 종료 코드 2다 (`PhysicsTest.Bench.ExitBulletThreads`).
+- manifest `threads`에 `T`, `affinity_mask`, `logical_cpus`, `engine_native`(백엔드의 스레드 키), `scaling_note` "cpu_eff 미검증 (M10)"을 적는다. T = 1..6 스케일링 수치는 모두 비공식이다.
+- 시리즈 플래그 (M7 수정 라운드 0): `threads.series`가 마스크의 모양을 토폴로지에서 적는다. `p_cores_one_lp`(P코어마다 논리 CPU 하나, 기본 T 시리즈), `p_cores_smt`(한 코어의 SMT 쌍이 마스크에 있음: HT 시리즈), `with_e_cores`(E코어가 마스크에 있음). `threads.cores`, `smt_pair_cores`, `e_cores`도 함께 쓴다. `-Affinity=`로 HT·E코어 시리즈를 돌려도 M8이 마스크를 다시 풀지 않는다.
 
 ### 9.7 Chaos 보고 수준 (수준 간 비교는 하지 않음) [확장 M13]
 
@@ -1351,6 +1366,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **[MVP M6]:** `-Conformance`가 게이트 스위트를 돌려 `conformance.json`을 쓴다. 스탬프 키 검증은 M10에 더한다.
 - **[확장 M7] 전체판:** 나머지 인자, 호스트 제어, recorder, preflight, 종료 코드.
 - `-HashEvery=0`은 "마지막 프레임 뒤에만"이라는 뜻이며 bench 모드의 기본이다 (§9.1).
+- **M7에서 더한 인자 [V]:** `-Affinity`, `-RunMode=Bench|Viz`, `-Instrument=`(counters, phases, alloc, contacts, native_debug_draw), `-HashEvery`, `-StatesEvery`, `-CountersEvery`, `-CaptureEvery`, `-Repeat`, `-Order`, `-BlockSeed`, `-PreRoll=`(초, 기본 0.5), `-HostCheck=enforce|record`, `-ContaminationPct=`(기본 5), `-Gate=G8|G11`(여러 프로세스 게이트, `-Runs=`), 시험 전용 `-InjectPreflightFault=`, `-InjectSceneInstrumentFlags=`, `-InjectFatal`, `-BusyHelper=<초>`. 인자 표와 기본값은 [TimingContract.md](TimingContract.md)와 [ResultsSchema.md](ResultsSchema.md)에 있다. M3의 `-Repeat`은 run 수가 아니라 manifest `order.repeat_index`다 (fresh process 반복은 러너 M8과 `-Gate=G8`의 몫).
 
 ### 12.2 실행 순서 (1 run = 1 process)
 
@@ -1371,7 +1387,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 10. frame 0, 이어서 측정 루프.
 11. 스레드 센서스 #2로 외부 스레드 cycle을 구한다 [확장 M10].
 12. 결과를 모두 쓰고 flush한다. 마지막으로 의도한 종료 코드를 담은 `exit.json`을 쓴다.
-13. teardown: `TermGamePhys`. UE_RUNTIME 모듈이면 그 직후 `TerminateProcess(GetCurrentProcess(), code)`로 끝낸다 [확장 M7]. 실행 모드만이 아니라 UE_RUNTIME 모듈을 로드한 모든 모드(`-Conformance`, `-Describe`, `-SceneHashes`)가 이 경로를 쓴다. M6의 벤치는 아직 모든 모드에서 `wmain`으로 돌아온다 (M6 수정 라운드 1에서 M7 후속으로 적었다).
+13. teardown: `TermGamePhys`. UE_RUNTIME 모듈이면 그 직후 `TerminateProcess(GetCurrentProcess(), code)`로 끝낸다 [확장 M7]. 실행 모드만이 아니라 UE_RUNTIME 모듈을 로드한 모든 모드(`-Conformance`, `-Describe`, `-SceneHashes`, `-Gate=`)가 이 경로를 쓴다. **M7에서 구현했다 [V]:** run은 `exit.json` 다음에 `TermGamePhys`와 `teardown.json`을 쓰고 끝나며, 다른 모드는 `wmain` 끝에서 `FBenchmarkRunner::HasUeRuntimeModule()`이면 같은 경로로 끝난다. `PT_NULL_DLL_UE_RUNTIME=1`인 Null DLL이 `DLL_PROCESS_DETACH`를 받지 않는 것으로 확인한다 (CTest `PhysicsTest.Bench.UeRuntimeTerminate`, 대조군 `UeRuntimeControl`, `UeRuntimeDescribe`).
     - 이유: UE DLL은 언로드하지 않으므로 UE 싱글턴(정적 소멸자, TaskGraph 스레드, GMalloc)은 CRT process detach 때 정리된다. 결과를 다 쓴 뒤 이 단계에서 크래시나 hang이 나면 종료 코드를 잘못 읽게 된다.
 
 **종료 코드** (러너는 프로세스 종료 코드보다 `exit.json`을 신뢰한다. `exit.json`이 없을 때만 프로세스 종료 코드와 타임아웃을 쓴다)
@@ -1381,9 +1397,15 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 | 0 | ok |
 | 2 | gate/preflight 실패 (M3 최소 벤치에서는 명령줄·프로필·씬·파라미터·엔진 키 같은 설정 오류도 2다. §12.3 M3 메모) |
 | 3 | 엔진 오류 |
-| 4 | 오염된 호스트 (다른 프로세스 바쁨 > 코어 1개의 5%) |
+| 4 | 오염된 호스트 (다른 프로세스 바쁨 > 코어 1개의 5%). M7은 시스템 전체가 아니라 run의 코어에서 잰다: 마스크 CPU와 그 SMT 형제의 바쁜 cycle에서 이 프로세스의 cycle을 뺀 값(`platform.host_load.core_busy_other_pct`)을 "코어당 5% × run의 코어 수"와 비교한다 (M7 수정 라운드 0, [TimingContract.md](TimingContract.md) §5.1) |
 | 5 | 용량 초과 |
 | 6 | 백엔드 없음 (Chaos 미빌드) |
+
+**M7 구현 메모 [V]**
+- 여러 원인이 겹치면 2 > 3 > 5 > 4 순서로 하나를 고른다 (설정·preflight 오류가 먼저이고, 엔진 오류는 용량 초과를 덮으며, 오염은 run이 끝까지 돈 경우에만 남는다).
+- `exit.json`(schema `physicstest.exit/1`: `exit_code`, `status`, `category`, `reason`, `run_id`, `terminate_process`, `outputs`)은 언제나 마지막 출력이고 임시 파일 + `MoveFileExW`로 원자적으로 쓴다. 명령줄 해석 실패도 `-Out`을 읽을 수 있었으면 `exit.json`을 남긴다. Fatal(`UE_LOG(..., Fatal)`, `check`)은 Core의 Fatal 콜백(`FPlatformMisc::SetFatalExitCallback`)으로 그 run의 `exit.json`(코드 3, `status: fatal`, `category: engine`, 사유는 Fatal 메시지)을 쓴 뒤 `_Exit`한다.
+- **M7 수정 라운드 0:** Fatal 훅은 run의 마지막 `exit.json`을 쓰기 전까지만 `exit.json`을 쓴다. 그 뒤(teardown)의 Fatal은 `teardown.json`의 `fatal`에 남고, 프로세스는 run의 종료 코드로 `TerminateProcess`된다 (DL52: teardown은 판정을 바꾸지 않는다, CTest `PhysicsTest.Bench.ExitTeardownFatal`). UE_RUNTIME 모듈이 로드된 프로세스의 Fatal도 `exit.json`(`terminate_process: true`)을 쓴 뒤 `TerminateProcess`로 끝난다 (`PhysicsTest.Bench.UeRuntimeFatal`). 백엔드를 로드한 뒤 끝나는 모든 경로의 `exit.json`이 `terminate_process`를 바르게 적는다.
+- `-Conformance`도 `exit.json`을 쓴다. run 디렉터리를 먼저 만들므로 게이트 전에 멈춘 경우(백엔드 없음, 설정·허용치 오류)도 `exit.json`이 남는다 (`PhysicsTest.Bench.ConformanceBackendUnavailable`). CTest `PhysicsTest.Bench.Exit*`가 모든 코드의 `exit.json`을 확인한다 ([Progress.md](Progress.md) M7 §2, §7).
 
 ### 12.3 출력 `Saved/Results/<session>/<run_id>/` (ULID)
 
@@ -1400,7 +1422,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 
 - UEParity에서 엔진마다 다른 restitution threshold 매핑은 `options_sha256`에 들어간다. 그래서 UEParity 표도 `desc_sha256` 동일성 검사를 통과한다.
 
-**`manifest.json`** (schema `physicstest.run/1`). 기본 필드는 [MVP M3], 나머지는 표시한 마일스톤에 더한다.
+**`manifest.json`** (schema `physicstest.run/1`, M7부터 `physicstest.run/2`: [ResultsSchema.md](ResultsSchema.md) §2, `Config/Schemas/manifest.schema.json`). 기본 필드는 [MVP M3], 나머지는 표시한 마일스톤에 더한다.
 
 | 필드 그룹 | 내용 |
 |---|---|
@@ -1426,8 +1448,8 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
   - 프레임 레코드: {u32 frame, u32 step, f64 sim_time}.
   - 바디 레코드: 13×f64 (actor 원점 위치, quat, 선속도 cm/s(dynamic은 COM, kinematic은 actor 원점: `PtBodyState`, §5.2 #48. M4에서 정정), 각속도 rad/s) + u8 state + pad.
   - numpy 로딩용 `states.dtype.json`을 함께 둔다.
-- **`hashes.csv`** [확장 M7]: `frame, h_native, h_quantized`. h_quantized는 위치 1e-4 cm, quat는 w≥0으로 정규화 후 1e-6. 엔진 간이나 빌드 간에는 절대 비교하지 않는다.
-- **`contacts.ptcn`** [확장 M7]: `PTCN` 헤더 + 프레임별 {u32 frame, u32 count} + `PtContactPoint[count]`.
+- **`hashes.csv`** [확장 M7]: `frame, h_native, h_quantized`. h_quantized는 위치 1e-4 cm, quat는 w≥0으로 정규화 후 1e-6. 엔진 간이나 빌드 간에는 절대 비교하지 않는다. M7은 `h_state`(`states.ptst` 바디 레코드 앞 105 B의 FNV-1a 64, 비트 단위 상태 해시) 열을 더했다. G11은 이 값을 프레임마다 비교한다.
+- **`contacts.ptcn`** [확장 M7]: `PTCN` 헤더(32 B) + 프레임별 {u32 frame, u32 count} + `PtContactPoint[count]`.
 - **그 외:** `effective_settings.jsonl` [MVP M3], `scene.json` (정규 JSON, %.17g), `build_flags.json`, `backend.log`, `exit.json` [확장 M7].
 - M3 최소 벤치는 마지막 프레임의 `h_native`를 manifest의 determinism 필드에만 남긴다.
 
@@ -1436,12 +1458,18 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **순서:** §12.2의 1, 3, 4, 6, 7(필수 effective 키만 확인), 8, 10, 12, 13을 한다. 호스트 제어(2)와 pre-roll(9)은 M7이다. 전원 계획은 PowrProf로 읽어 manifest `platform.power_scheme`에 기록만 한다. 결과 파일을 모두 쓴 뒤 씬과 모듈(`TermGamePhys`)을 내린다.
 - **종료 코드:** 0, 2(명령줄 형식 오류, 없는 프로필·씬·파라미터, 잘못된 파라미터 값(예: `Seed=abc`), `HashEvery`/`CountersEvery` > 0(프레임별 해시·카운터는 M7 recorder라 M3 러너는 거부한다. 전에는 받아서 manifest에 적기만 했다, M3 수정 라운드 1), 백엔드가 거부한 변형의 엔진 키, 필수 effective 키 누락. 뒤의 둘은 `manifest.json`을 `status = preflight_failed`로 쓰고 Prepare와 프레임 루프를 건너뛴다), 3(용량 bit 밖의 엔진 오류 bit. preflight 뒤의 ABI 실패는 Fatal로 3), 5(용량 bit만: 백엔드가 effective 키 `errors.capacity_bits`로 알린 bit. Jolt는 0x107 = ManifoldCacheFull | BodyPairCacheFull | ContactConstraintsFull | temp fallback. 키가 없는 백엔드는 용량 bit가 없다), 6(레지스트리에 없거나 쓸 수 없는 백엔드). 4는 M7이다. 용량 bit와 다른 오류 bit가 한 run에 함께 있으면 3이다 (용량을 늘려 다시 돌려도 엔진 오류는 남는다). manifest `determinism`에 `capacity_error_bits_declared`, `capacity_error_bits`, `other_error_bits`를 따로 적어 어느 쪽도 숨기지 않는다 (M3 수정 라운드 1). 엔진 키 검사는 씬 생성 전에 그 키만 담은 빈 시험 씬을 `CreateScene`으로 만들어 본다 (M3 수정 라운드 0. 전에는 `FPhysScene`의 Fatal로 3이었고 출력이 없었다). CTest `PhysicsTest.Bench.Exit*`가 2(명령줄, 씬, 파라미터, seed, `HashEvery`, 엔진 키, 필수 키), 3(시험 전용 `-InjectEngineErrorBits`로 넣은 0x200, 용량 bit와 함께일 때 포함), 5, 6을 확인한다.
 - **출력:** `timings.csv`, `manifest.json`, `effective_settings.jsonl`(Prepare 전, §12.2의 7), `effective_settings_after.jsonl`(마지막 프레임 뒤. temp allocator peak 같은 READBACK 값), `scene.json`. 카운터는 `CountersEvery = 0`이라 -1, `solver_ns`는 비운다. 명령이 없는 프레임의 `push_ns`는 0이다 (호출이 없다, §9.3).
-- **manifest:** `schema = physicstest.run/1`, `status`, `exit_code`, `unofficial = true`, `timing_label`(비공식 사유 문장), `timing_valid_for_headline = false`, harness(git SHA, dirty, `git_sha_source = cmake_configure`: 마지막 configure 시점 값이라 그 뒤의 커밋·수정은 반영되지 않는다, exe SHA-256, preset), build(`crt`는 하네스 TU의 `_DLL`/`_DEBUG`로 정한다: dbg는 `MDd`. `lto`는 `CMAKE_INTERPROCEDURAL_OPTIMIZATION`), backend, profile(`physics_sha256`, `variant_sha256`, fidelity notes), `effective[]`, `effective_module[]`, `missing_effective_keys`, `bodies_sampled`(질량 상대 오차와 관성 텐서 R·diag·Rᵀ의 상대 오차. 엔진의 주축 순서는 하네스와 다를 수 있다), scene(`scene_sha256`, `desc_sha256`, `desc_sha256_scope`, `options_sha256`, windows), run(`frames`, `frames_run`, `sync_policy` = `push_per_step+pull_active_only_per_frame`(Harness driver) 또는 `push_per_frame+pull_active_only_per_frame`(Native driver)), threads(`T`, `engine_native` = 백엔드의 `threads.workers` READBACK), platform, memory(프로세스 peak commit·WS와 현재 값, 백엔드 씬 `GetMemoryStats`), `phases_ns`(`option_preflight` 포함), summary(윈도별 mean/median/p95/p99/min/max, frame 0 별도), determinism(`h_native`, `engine_error_bits`, `capacity_error_bits_declared`·`capacity_error_bits`·`other_error_bits`), 시험 전용 `run.injected_engine_error_bits`(`-InjectEngineErrorBits`를 줬을 때만), `deferred_fields`(M7/M10이 채울 §12.3 필드 목록), outputs. preflight 실패는 앞부분(status, harness, build, backend, profile)과 `preflight_error`만 쓴다 (M3 수정 라운드 0).
+- **manifest:** `schema = physicstest.run/1`, `status`, `exit_code`, `unofficial = true`, `timing_label`(비공식 사유 문장), `timing_valid_for_headline = false`, harness(git SHA, dirty, `git_sha_source = cmake_configure`: 마지막 configure 시점 값이라 그 뒤의 커밋·수정은 반영되지 않는다, exe SHA-256, preset), build(`crt`는 하네스 TU의 `_DLL`/`_DEBUG`로 정한다: dbg는 `MDd`. `lto`는 `CMAKE_INTERPROCEDURAL_OPTIMIZATION`), backend, profile(`physics_sha256`, `variant_sha256`, fidelity notes), `effective[]`, `effective_module[]`, `missing_effective_keys`, `bodies_sampled`(질량 상대 오차와 관성 텐서 R·diag·Rᵀ의 상대 오차. 엔진의 주축 순서는 하네스와 다를 수 있다), scene(`scene_sha256`, `desc_sha256`, `desc_sha256_scope`, `options_sha256`, windows), run(`frames`, `frames_run`, `sync_policy` = `push_per_step+pull_active_only_per_frame`(Harness driver) 또는 `push_per_frame+pull_active_only_per_frame`(Native driver)), threads(`T`, `engine_native` = 백엔드의 `threads.workers` READBACK), platform, memory(프로세스 peak commit·WS와 현재 값, 백엔드 씬 `GetMemoryStats`), `phases_ns`(`option_preflight` 포함), summary(윈도별 mean/median/p95/p99/min/max, frame 0 별도), determinism(`h_native`, `engine_error_bits`, `capacity_error_bits_declared`·`capacity_error_bits`·`other_error_bits`), 시험 전용 `run.injected_engine_error_bits`(`-InjectEngineErrorBits`를 줬을 때만), `deferred_fields`(M7/M10이 채울 §12.3 필드 목록), outputs. preflight 실패는 앞부분(status, harness, build, backend, profile)과 `preflight_error`만 쓴다 (M3 수정 라운드 0). **M7에서 바뀌었다:** run/2는 preflight 실패(엔진 옵션 거부 포함)에도 모든 그룹을 쓰고(닿지 못한 값은 null), 시험 주입은 `run.test_injections`에 있다 ([ResultsSchema.md](ResultsSchema.md) §2, M7 수정 라운드 0).
 - **비공식:** M3의 모든 타이밍은 비공식이다. 측정 프로토콜(M7), 전원 계획 확인(M8 러너), 적합성 스탬프(M10)가 없다.
+
+**M7 구현 메모 [V]** (형식의 정본은 [ResultsSchema.md](ResultsSchema.md), 타이밍 규약은 [TimingContract.md](TimingContract.md))
+- `FRunManifest`(`physicstest.run/2`)가 위 표의 그룹을 모두 쓴다. M3과 다른 점: `timing_valid_for_headline`이 10개 조건으로 계산되고 거짓이면 `timing_invalid_reasons`가 붙는다. `unofficial`은 M10 전까지 언제나 참이다. `harness.git_sha_source`는 `build`. `platform`에 우선순위, throttling, 타이머 해상도, 전원 계획 GUID와 고성능 여부, CPU MHz, `host_load`. `clock`(`qpc_hz`, `read_overhead_ns`). `order`, `alloc`, `recorders`, `gates`(G0, G9, G10a의 preflight 결과), `determinism.h_state`. `deferred_fields`에는 M10 필드만 남는다.
+- recorder 작업은 프레임 사이(타이밍 버킷 밖)에서 한다: 타이밍·해시 행은 미리 잡은 메모리에 모았다가 run 끝에 쓰고, `states.ptst`와 `contacts.ptcn`은 4 MiB stdio 버퍼로 이어 쓴다 ([TimingContract.md](TimingContract.md) §4.2). "N마다"는 (f + 1) % N == 0인 프레임과 마지막 프레임이다.
+- `teardown.json`(`TermGamePhys` 시간과 결과)은 `exit.json` 뒤에 쓰는 유일한 파일이다. 러너는 이 파일이 없어도 run을 받는다.
+- 여러 프로세스 게이트(`-Gate=G8`, `-Gate=G11`)는 자식 run을 job object(`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)로 띄우고 `gate_g8.json`/`gate_g11.json`(`physicstest.gate/1`)을 쓴다 (`FProcessSpawner`).
 
 **M4 메모 [V]** (M3 검토 경미 지적)
 - `scene_sha256`의 정규 JSON에 seed(정수, `GetSeed`)를 언제나 넣는다: `{"name","params","seed","version"}`. 전에는 `Seed` 파라미터를 선언한 씬(`M3.BoxPile`)만 seed가 들어갔다. 값이 바뀌었으므로 M3 세션의 `scene_sha256`과는 비교하지 않는다.
-- manifest `run.headline_eligible`, `run.headline_ineligible_reasons`: 틱 모드가 FixedStep이 아니거나, `RunMode`가 Bench가 아니거나, `InstrumentFlags`가 0이 아니면 거짓과 사유(경고 로그도 낸다). run은 그대로 돌고 종료 코드도 바뀌지 않는다 (M7 분석이 거른다). 벤치 루프는 언제나 명목 dt의 FixedStep 프레임을 넣는다. 비공식 표시(`timing_valid_for_headline = false`)는 그대로다.
+- (M7에서 최상위 `timing_valid_for_headline`·`timing_invalid_reasons`로 바뀌었다, [ResultsSchema.md](ResultsSchema.md) §2) manifest `run.headline_eligible`, `run.headline_ineligible_reasons`: 틱 모드가 FixedStep이 아니거나, `RunMode`가 Bench가 아니거나, `InstrumentFlags`가 0이 아니면 거짓과 사유(경고 로그도 낸다). run은 그대로 돌고 종료 코드도 바뀌지 않는다 (M7 분석이 거른다). 벤치 루프는 언제나 명목 dt의 FixedStep 프레임을 넣는다. 비공식 표시(`timing_valid_for_headline = false`)는 그대로다.
 
 ### 12.4 적합성 스탬프 [확장 M10]
 

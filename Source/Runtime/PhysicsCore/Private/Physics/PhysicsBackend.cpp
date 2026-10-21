@@ -570,6 +570,18 @@ namespace PhysicsTest
 		return NumTerminated;
 	}
 
+	bool FPhysicsBackendRegistry::AnyLoadedModuleHas(const uint32 ModuleFlags) const
+	{
+		for (const std::unique_ptr<FPhysicsBackendModule>& Module : Modules)
+		{
+			if ((Module->GetInfo().ModuleFlags & ModuleFlags) != 0)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	// ---- FMarshalledActorBatch / FPhysicsBackendScene ----------------------------------------------------------------
 	PtActorBatch FMarshalledActorBatch::MakeBatch() const
 	{

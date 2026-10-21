@@ -14,7 +14,7 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | Jolt | 5.6.0 (`e77f1755`) | M3: 벤치·뷰어에서 사용 가능 |
 | Chaos | UE 5.8.3, UBT Program DLL + C ABI | 나중에 직접 구현 |
 
-> **현재 상태 (2026-10-21):** M6(물리 게이트 + 게이트 씬 + **ABI 핵심 v1.0 동결** + ChaosBackendGuide 초안)까지 마쳤습니다. Jolt, Bullet, PhysX 변형 4종이 UEParity·Normalized에서 물리 게이트 G1~G7, G9, G12를 ABI로 통과하고 (`PhysicsTest.Gates.*`, `PhysicsTestBench -Conformance` → `conformance.json`), 엔진별 편차는 `Config/Golden/tolerances.json`에 사유와 함께 있습니다. C ABI는 v1.0(major 1)으로 동결했고 조인트·디버그 스냅샷·네이티브 드로만 M9까지 잠정입니다 ([docs/Abi.md](docs/Abi.md)). Chaos 브리지 작성 안내는 [docs/ChaosBackendGuide.md](docs/ChaosBackendGuide.md)입니다. 그 전에 M5(Bullet + PhysX 백엔드)와 **체크포인트 A**를 끝냈습니다 ([docs/Checkpoints.md](docs/Checkpoints.md)). UE 이름·기본값의 데이터 모델(M1)과 C ABI + Kit + Null 백엔드(M2) 위에 Jolt 5.6.0(M3), Bullet 3.25와 PhysX 5.11(UE4 방식 변형 3종 + SDK 기본값, M5)이 같은 ABI로 붙었습니다. 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)를 세 엔진이 같은 `desc_sha256`으로 돌리고, `PhysicsTestBench.exe`가 결과 파일을 씁니다. `PhysicsTestViewer.exe`(M4)는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서로 세 엔진을 보여 줍니다 (엔진 전환, PhysX SdkDefault ↔ UE4Compat은 "재시작 필요"). 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M7(벤치 러너 + 측정 프로토콜)입니다. 게이트를 통과했지만 타이밍은 측정 프로토콜(M7) 전까지 여전히 비공식입니다.
+> **현재 상태 (2026-10-22):** M7(벤치 러너 + 측정 프로토콜)까지 마쳤습니다. `PhysicsTestBench.exe`가 1 run = 1 process 실행 순서(호스트 제어 → preflight G0·G9·G10a → spin pre-roll → 측정 루프 → `exit.json`)를 따르고, 종료 코드 0/2/3/4/5/6을 모두 `exit.json`에 남기며, `manifest.json`(`physicstest.run/2`, `Config/Schemas/manifest.schema.json`), `hashes.csv`, `states.ptst`, `contacts.ptcn`을 씁니다. 결정성 1단계(G8, fresh process 3회)와 결과 중립 knob(G11, 접촉 캡처)이 모든 백엔드·변형에서 통과하고, 성능 씬 `P0.EmptyStep`, `P1.SmallScene`, `M2b.Pyramid1240`, 스레드 매핑 T = 1..6, `test-avx2` 프리셋이 생겼습니다. 측정 규약은 [docs/TimingContract.md](docs/TimingContract.md), 결과 형식은 [docs/ResultsSchema.md](docs/ResultsSchema.md)입니다. **타이밍은 여전히 비공식입니다** (적합성 스탬프와 cpu_eff는 M10). 리드가 확인할 것: 오염 판정의 문턱 규칙(코어당 5% × run의 코어 수, [docs/Progress.md](docs/Progress.md) M7 §7). 다음 단계는 M8(오케스트레이션 + 분석 기본)입니다. 그 전 단계 요약: M6(물리 게이트 + 게이트 씬 + **ABI 핵심 v1.0 동결** + ChaosBackendGuide 초안)까지 마쳤습니다. Jolt, Bullet, PhysX 변형 4종이 UEParity·Normalized에서 물리 게이트 G1~G7, G9, G12를 ABI로 통과하고 (`PhysicsTest.Gates.*`, `PhysicsTestBench -Conformance` → `conformance.json`), 엔진별 편차는 `Config/Golden/tolerances.json`에 사유와 함께 있습니다. C ABI는 v1.0(major 1)으로 동결했고 조인트·디버그 스냅샷·네이티브 드로만 M9까지 잠정입니다 ([docs/Abi.md](docs/Abi.md)). Chaos 브리지 작성 안내는 [docs/ChaosBackendGuide.md](docs/ChaosBackendGuide.md)입니다. 그 전에 M5(Bullet + PhysX 백엔드)와 **체크포인트 A**를 끝냈습니다 ([docs/Checkpoints.md](docs/Checkpoints.md)). UE 이름·기본값의 데이터 모델(M1)과 C ABI + Kit + Null 백엔드(M2) 위에 Jolt 5.6.0(M3), Bullet 3.25와 PhysX 5.11(UE4 방식 변형 3종 + SDK 기본값, M5)이 같은 ABI로 붙었습니다. 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)를 세 엔진이 같은 `desc_sha256`으로 돌리고, `PhysicsTestBench.exe`가 결과 파일을 씁니다. `PhysicsTestViewer.exe`(M4)는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서로 세 엔진을 보여 줍니다 (엔진 전환, PhysX SdkDefault ↔ UE4Compat은 "재시작 필요"). 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다.
 
 ![뷰어: M3.BoxPile 1k, Jolt UEParity, 섬 표시(잠든 섬은 Black)](docs/images/m4_viewer_boxpile1k_islands.png)
 
@@ -30,7 +30,9 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | [Progress.md](docs/Progress.md) | 마일스톤별 진행 기록: 만든 것, 완료 기준 결과, 설계와 다르게 한 점, 후속 작업 |
 | [Checkpoints.md](docs/Checkpoints.md) | 체크포인트 A (M4 + M5): 엔진별 시각 확인, S00·정지 접촉·질량 readback, 비공식 BoxPile 타이밍, 발견한 규약 버그와 처리 |
 | [Abi.md](docs/Abi.md) | C ABI v1.0 (핵심 동결판): 규칙과 함수 표, Kit, 게이트 A0~A10·G 게이트, 동결 때 정한 계약 |
-| [Scenes.md](docs/Scenes.md) | 씬 카탈로그: 씬 ID별 정의(바디, 배치, 프레임, 윈도, 판정, 측정값), M6 게이트 씬 9개 |
+| [Scenes.md](docs/Scenes.md) | 씬 카탈로그: 씬 ID별 정의(바디, 배치, 프레임, 윈도, 판정, 측정값), M6 게이트 씬 9개, M7 성능 씬 3개 |
+| [TimingContract.md](docs/TimingContract.md) | (M7) 측정 규약: 실행 순서, 클럭과 버킷, 엔진별 버킷 내용, 루프 위생과 계측 tier, 호스트 제어와 오염 판정(종료 코드 4), 헤드라인 자격, 스레드 매핑 |
+| [ResultsSchema.md](docs/ResultsSchema.md) | (M7) 결과 포맷: `manifest.json`(run/2), `exit.json`, `timings.csv`, `hashes.csv`, `states.ptst`, `contacts.ptcn`, `teardown.json`, 게이트 결과 |
 | [ChaosBackendGuide.md](docs/ChaosBackendGuide.md) | (초안, M6) Chaos 브리지 작성 안내: 빌드, 초기화 순서, 스레드, 바디 생성 순서, 질량·머티리얼·마진, 동기 모드, 종료 규칙, Null 백엔드를 템플릿으로 |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 빌드 때 받아 오는 의존성 9개와 라이선스·고지 의무 |
 
@@ -71,10 +73,11 @@ Tools\ctest.cmd --preset dev
 | `dbg` | Debug, `/MDd` | DebugGame | 켬 | 빌드 | 디버깅 |
 | `dev` | Release, `/MD` | Development | 켬 | 빌드 | 뷰어, 일상 확인 (헤드라인 아님) |
 | `test` | Release, `/MD` | Test | 끔 | 빌드 안 함 | 헤드라인 측정 (M7부터) |
+| `test-avx2` | Release, `/MD` | Test | 끔 | 빌드 안 함 | (M7) 플래그 프로필 MatchedAVX2: PhysX·Bullet SDK와 어댑터에도 `/arch:AVX2`, 하네스에는 없음. ISA 민감도 측정 |
 
 - 모든 프리셋은 Ninja 단일 구성이고 빌드 트리는 `out/<preset>`입니다. `RelWithDebInfo`/`MinSizeRel`은 configure에서 거부합니다.
 - 공통 플래그: 전 타깃 `/fp:fast`, `/MD`(dbg는 `/MDd`), `/Zi`, LTO 없음. `/arch:AVX2`는 Jolt와 Jolt를 쓰는 TU에만 붙습니다 (Shipped 프로필). 하네스 타깃은 C++20, `/W4 /WX /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor`입니다 (하네스 TU의 경고는 빌드 실패). 전역 `CMAKE_CXX_STANDARD`는 쓰지 않습니다 (PhysX `/std:c++14 /WX`가 깨짐).
-- `test-avx2`는 M7, `prof`·`test-<engine>`은 M10에서 추가합니다.
+- `prof`·`test-<engine>`은 M10에서 추가합니다. `test-avx2`의 `desc_sha256`은 `test`와 같습니다 (하네스 플래그가 같다, M7에서 확인).
 
 ### SDK 소스
 
@@ -111,7 +114,20 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Bench.ConformanceG12Injected` | (M6 수정 라운드 1) 시험 전용 `-InjectEngineErrorBits=0x1`을 `-Conformance -Gates=G12`에 주면 G12가 Fail, 종료 코드 2, `conformance.json`에 `injected_engine_error_bits` |
 | `PhysicsTest.Bench.ExitSceneNeedsSleeping` | (M6) sleep을 끈 프로필(Normalized)에서 `S08.StartAsleep`은 종료 코드 2 |
 | `PhysicsTest.Bench.ExitCapacityBullet` | (M5) Bullet manifold 풀을 64로 줄인 BoxPile 1k: heap fallback이 용량 bit 0x1(`errors.capacity_bits` 0x3)이 되어 종료 코드 5 |
-| `PhysicsTest.Bench.Exit{BackendUnavailable,BadCommandLine,UnknownScenario,UnknownParam,BadSeed,BadEngineOption,PreflightMissingKey,HashEvery,EngineError,Capacity,EngineErrorOverCapacity}` | 벤치 종료 코드 6, 2, 2, 2, 2, 2, 2, 2, 3, 5, 3. BadEngineOption(변형에 없는 Jolt 키)과 PreflightMissingKey(`-RequireEffectiveKey=no.such.key`)는 `manifest.json`의 `status = preflight_failed`도 확인한다 (PreflightMissingKey는 `frames_run` 0). HashEvery: `HashEvery=1`은 M7 recorder 몫이라 거부. EngineError: 시험용 `-InjectEngineErrorBits=0x200`(Null). Capacity: temp allocator를 1 MiB로 줄인 Jolt BoxPile 1k (manifest의 용량 bit 묶음 확인). EngineErrorOverCapacity: 둘 다 있으면 엔진 오류(3)가 이기고 manifest에 두 묶음이 남음 |
+| `PhysicsTest.Bench.Exit{BackendUnavailable,BadCommandLine,UnknownScenario,UnknownParam,BadSeed,BadEngineOption,PreflightMissingKey,EngineError,Fatal,Capacity,EngineErrorOverCapacity,BulletThreads}` | 벤치 종료 코드 6, 2, 2, 2, 2, 2, 2, 3, 3, 5, 3, 2. M7부터 모든 경로에서 `exit.json`의 코드와 `status`도 확인한다. BadEngineOption(변형에 없는 Jolt 키)과 PreflightMissingKey(`-RequireEffectiveKey=no.such.key`)는 `manifest.json`의 `status = preflight_failed`도 확인한다 (PreflightMissingKey는 `frames_run` 0). EngineError: 시험용 `-InjectEngineErrorBits=0x200`(Null). Fatal(M7): 시험용 `-InjectFatal`의 Fatal 뒤에도 `exit.json`이 3 (`status fatal`). Capacity: temp allocator를 1 MiB로 줄인 Jolt BoxPile 1k (manifest의 용량 bit 묶음 확인). EngineErrorOverCapacity: 둘 다 있으면 엔진 오류(3)가 이기고 manifest에 두 묶음이 남음. BulletThreads(M7): Bullet은 T = 1만. M3의 ExitHashEvery는 M7 recorder가 생겨 지웠다 |
+| `PhysicsTest.Bench.ExitContaminated{,Sibling}` | (M7, 직렬) 같은 CPU 0(Sibling: CPU 0의 SMT 형제)에 `-BusyHelper` 부하 프로세스를 띄운 측정 프로토콜 run(`-HostCheck=enforce`)이 종료 코드 4, `exit.json` `contaminated_host`. 오염은 run의 코어(마스크 CPU + SMT 형제)에서 잰다 |
+| `PhysicsTest.Bench.{ExitTeardownFatal,UeRuntimeFatal,ConformanceBackendUnavailable}` | (M7 수정 라운드 0) teardown 중 Fatal은 `exit.json`을 바꾸지 않고 `teardown.json`에 남음; UE_RUNTIME Null DLL의 Fatal도 `TerminateProcess`로 끝남(`DLL_PROCESS_DETACH` 없음); `-Conformance`도 게이트 전에 멈추면 `exit.json`을 남김 |
+| `PhysicsTest.Bench.InstrumentPhases` | (M7 수정 라운드 0) phases tier: phase timer를 선언하는 Null DLL 시험 대역(`PT_NULL_DLL_PHASE_TIMERS=1`)의 `solver_ns`가 매 프레임 채워짐 |
+| `PhysicsTest.Bench.{G8,G11}NegativeControl` | (M7 수정 라운드 0) 시험용 `-InjectGateFault=4`가 자식 하나만 흔들면 G8·G11이 차이를 찾아 종료 코드 2 |
+| `PhysicsTest.Bench.{InstrumentCounters,HeadlineIneligibleViz}` | (M7) 계측 tier(`-Instrument=counters`)나 viz run은 거부되지 않고 `timing_valid_for_headline = false`와 사유 |
+| `PhysicsTest.Bench.Recorders` | (M7) `-HashEvery=1`의 `hashes.csv`(`frame,h_native,h_quantized,h_state`, 프레임마다), `-StatesEvery=10`의 `states.ptst` + `states.dtype.json` |
+| `PhysicsTest.Bench.Preflight{G9Injected,G10aListenerInjected,G10aDrawerInjected,G0Injected,G10aRealListener,G10aBulletDrawerInjected}` | (M7) 시험용 `-InjectPreflightFault=`(G9 값, listener, drawer, G0 사실)와 백엔드에 몰래 준 `PT_INSTR_CONTACTS`(Jolt가 실제로 listener를 설치)를 preflight가 종료 코드 2로 거부 |
+| `PhysicsTest.Bench.PreflightSweep` | (M7) 등록된 모든 씬 × Null과 모든 SDK 엔진·변형 × UEParity·Normalized(2 프레임)의 preflight가 통과 (`S08`/Normalized는 설계대로 거부) |
+| `PhysicsTest.Bench.UeRuntime{Terminate,Control,Describe}` | (M7) `PT_NULL_DLL_UE_RUNTIME=1`인 Null DLL: run과 `-Describe`가 출력·`exit.json` 뒤 `TerminateProcess`로 끝나 DLL이 `DLL_PROCESS_DETACH`를 받지 않음. 대조군은 정상 종료 |
+| `PhysicsTest.Bench.{G8Det1,G11ContactCapture}` | (M7) `-Gate=G8`(fresh process 3회의 마지막 `h_native`가 같음)와 `-Gate=G11`(접촉 캡처 끔/켬의 프레임별 `h_native`·`h_state`가 같음)을 Null, NullDll, Jolt, Bullet, PhysX 변형 4종으로 (BoxPile 1k, 60 프레임. 600 프레임은 증거 run) |
+| `PhysicsTest.Bench.ThreadMatrix` | (M7, 직렬) Jolt·PhysX T = 1..6, Bullet T = 1: 마스크 0x1~0x555, 엔진 워커 수, "cpu_eff 미검증 (M10)" 표기 |
+| `PhysicsTest.Bench.ManifestSchema` | (M7) BoxPile 5k run과 거부된 run 둘(엔진 옵션 preflight, 빠진 필수 키)의 `manifest.json`·`exit.json`이 `Config/Schemas/*.schema.json`을 통과하고 (`Tools/validate_manifest.py`, `.venv` Python `-I`, jsonschema), 일부러 망가뜨린 사본 넷(mode, 전원 계획 이름, 전원 계획 GUID, 0 ns 빈 윈도)은 실패 |
+| `PhysicsTest.Bench.ManifestsValidate` | (M7 수정 라운드 0) 위 벤치 테스트들이 쓴 모든 `manifest.json`·`exit.json`(거부·실패·오염·계측 run, G8·G11 자식 포함)이 스키마를 통과. 다른 벤치 테스트 뒤에 돈다 (`DEPENDS`) |
 | `PhysicsTest.Smoke.{Jolt,Bullet,PhysX}` | SDK 스모크: SI, Z-up, g = 9.80, damping 0, sleep 끔. z(60) = 5.0183328 m ± 2e-5. Jolt는 설정 문자열(AVX2, Profile/Debug Renderer/FP Exceptions 없음)도 검사. `RunSmoke.cmake`가 `PT_SMOKE_JSON` 줄이 유효한 JSON인지도 확인 |
 | `PhysicsTest.Probe.ThirdPartyIncludes` | Core를 먼저 include한 TU가 래퍼 쌍을 거쳐 doctest·ImGui·ImPlot·nlohmann/json을 include하고 컴파일됨 |
 | `PhysicsTest.Probe.NegativeScaleFatal` | 음수 스케일 `FTransform` 합성이 모든 프리셋(`PT_DO_CHECK=0`인 test 포함)에서 Fatal로 끝남 (종료 코드 3) |
@@ -125,10 +141,9 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Probe.KitNamespaces` | `PhysicsTestAutomation.map`에서 Kit 심볼이 백엔드별 inline namespace(`Null`, `AbiTwin`, `Jolt`, `Bullet`, `PhysX`, `AutomationTest`)로 나뉘고 `PhysicsTest::Abi` 바로 아래에는 없음 (Jolt `/arch:AVX2`와 Bullet·PhysX가 한 exe에 있어도 COMDAT이 섞이지 않음) |
 | `PhysicsTest.Probe.BackendIsolation` | 백엔드 TU의 include 경로에 하네스 Core·PhysicsCore가 없고 `PT_BACKEND_NS`가 정의됨 |
 | `PhysicsTest.Probe.KitNeedsBackendNs` | `PT_BACKEND_NS` 없이 Kit를 include한 TU가 `#error`로 컴파일되지 않음 (`compile_commands.json`의 그 TU 컴파일 줄을 스크립트가 직접 실행한다. 빌드 트리를 다시 부르지 않는다) |
-| `PhysicsTest.Probe.HarnessSdkIsolation` | 하네스 TU(백엔드, SDK 스모크, JoltSeam 밖의 모든 `Source/` TU와 생성된 레지스트리)에 SDK include 경로와 `JPH_*`/`BT_*`/`PX_*` 정의가 없고, Shipped 프로필에서 `/arch`가 없음 |
+| `PhysicsTest.Probe.HarnessSdkIsolation` | 하네스 TU(백엔드, SDK 스모크, JoltSeam 밖의 모든 `Source/` TU와 생성된 레지스트리)에 SDK include 경로와 `JPH_*`/`BT_*`/`PX_*` 정의가 없고, 모든 플래그 프로필(M7부터 MatchedAVX2 포함)에서 `/arch`가 없음 |
 | `PhysicsTest.Probe.BenchNoRenderer` | `PhysicsTestBench.exe`가 d3d11.dll과 dxgi.dll을 import하지 않음 (`dumpbin /dependents`) |
 | `PhysicsTest.Probe.AutomationNoRenderer` | (M4) 디버그 드로를 링크한 `PhysicsTestAutomation.exe`도 d3d11·dxgi·d3dcompiler를 import하지 않음 |
-| `PhysicsTest.Bench.Headline{IneligibleViz,EligibleDefault}` | (M4) FixedStep·`RunMode=Bench`·계측 없음이 아닌 run은 manifest `run.headline_eligible = false`와 사유, 기본 run은 true |
 | `PhysicsTest.Probe.AdapterComdats` | Automation·Bench 링커 맵(`PT_WITH_VIEWER`: + Viewer, ViewerTests)에서 `/arch:AVX2` 어댑터(`PtBackendJolt`) 오브젝트가 내놓은 함수가 모두 백엔드 소유이고, Jolt lib 자신의 namespace 밖 함수는 알려진 목록뿐 (하네스가 어댑터의 AVX2 COMDAT을 실행하지 않음, Abi.md §5.13). Debug 프리셋은 보고만 한다 |
 | `PhysicsTest.Probe.AdapterComdats{Bullet,PhysX}` | (M5) 같은 맵에서 Bullet·PhysX 어댑터 오브젝트가 내놓은 함수도 모두 백엔드 소유 (Bullet은 `bt` 이름 포함) |
 | `PhysicsTest.Probe.AdapterComdatsNegative` | 같은 스크립트가 어댑터 `vector<uint32>::push_back` 줄을 넣은 고정 맵(`Source/Tests/Probes/Fixtures/AdapterComdatsNegative.map`)에서 실패함 |
@@ -158,9 +173,21 @@ Tools\ctest.cmd --preset dev
 
 `[/Script/PhysicsCore.PhysicsSettingsCore]` 섹션은 쓰지 않습니다 (UE 게임처럼 모든 물리 키가 Engine 섹션에 있습니다, docs/04 DL44). 하네스 프로그램은 `wmain`으로 들어오므로 한글 경로 같은 비 ASCII 인자도 UTF-8로 그대로 전달됩니다.
 
-### 벤치 exe (M3, 최소판)
+### 벤치 exe (M3 최소판, M7 완성)
 
-`out/<preset>/bin/PhysicsTestBench.exe`는 씬 하나를 백엔드 하나로 돌리고 결과 파일을 씁니다 (렌더러 없음, 1 run = 1 process).
+`out/<preset>/bin/PhysicsTestBench.exe`는 씬 하나를 백엔드 하나로 돌리고 결과 파일을 씁니다 (렌더러 없음, 1 run = 1 process). M7에서 측정 프로토콜을 갖췄습니다:
+
+```
+PhysicsTestBench.exe -Backend=PhysX -BackendProfile=UE4Compat -Scenario=M2b.Pyramid1240 -Threads=4 [-Affinity=0x55]
+                     [-RunMode=Bench|Viz] [-Instrument=counters,contacts,...] [-HashEvery=N] [-StatesEvery=N] [-CountersEvery=N]
+                     [-CaptureEvery=N] [-PreRoll=0.5] [-HostCheck=enforce|record] [-ContaminationPct=5] [-Repeat=i -Order=j -BlockSeed=s]
+PhysicsTestBench.exe -Gate=G8 -Runs=3 -Backend=Jolt -Scenario=M3.BoxPile -Param:N=1000
+PhysicsTestBench.exe -Gate=G11 -Backend=Bullet -Scenario=M3.BoxPile -Param:N=1000
+```
+
+- **실행 순서와 규약 (M7):** 호스트 제어(affinity, HIGH_PRIORITY_CLASS, power throttling opt-out, `timeBeginPeriod(1)`. 전원 계획은 읽기만) → 설정 → 백엔드 → 씬과 `desc_sha256` → effective 덤프와 preflight(필수 키, G0, G9, G10a) → Prepare → 0.5 s spin pre-roll → frame 0 → 측정 루프 → 출력 → `exit.json`(마지막) → teardown. 정의는 [docs/TimingContract.md](docs/TimingContract.md), 파일 형식은 [docs/ResultsSchema.md](docs/ResultsSchema.md)에 있습니다. 종료 코드: 0 ok, 2 명령줄·preflight·게이트 실패, 3 엔진 오류·Fatal, 4 오염된 호스트(run 마스크 CPU의 다른 프로세스 바쁨 > 코어 1개의 5%), 5 용량 초과, 6 백엔드 없음. 러너는 프로세스 종료 코드보다 `exit.json`을 믿습니다.
+- **헤드라인 자격:** `manifest.json`의 `timing_valid_for_headline`은 bench 모드·계측 tier 0·FixedStep·프레임별 recorder 없음·호스트 제어 적용·pre-roll 0.5 s 이상·오염 없음·타이밍 버킷 안 할당 0·`PT_DO_CHECK=0`(test 프리셋)·시험 주입 없음이 모두 참일 때만 참입니다. 참이어도 `"unofficial": true`입니다 (M10 전까지).
+- 아래는 M3~M6 설명입니다.
 
 ```
 PhysicsTestBench.exe -List
@@ -175,8 +202,8 @@ PhysicsTestBench.exe -SceneHashes=Config/Golden/scene_hashes.json
 - **적합성 (M6):** `-Conformance`는 물리 게이트(기본 G1~G7, G9, G12, `-Gates=`로 고름)나 ABI 게이트 하나(A0~A7, A10)를 그 프로세스의 백엔드로 돌려 `conformance.json`을 씁니다 (대상, exe SHA-256, ABI 버전, tolerances·프로필·변형 SHA-256, 게이트 씬 `scene_sha256`, 게이트별 결과와 노트). 실패한 게이트가 있으면 종료 코드 2입니다 (`conformance.json`은 남습니다). `PT_MODULE_NO_REINIT` 백엔드(Chaos)는 프로세스마다 ABI 게이트 하나 또는 물리 게이트를 돌고, 둘 이상의 ABI 게이트나 섞은 목록은 종료 코드 2로 거부됩니다. `-SceneHashes=`는 그 빌드 구성의 게이트 씬 해시를 `scene_hashes.json`에 씁니다. `-List`, `-Describe`, `-SceneHashes`의 로그는 stderr로 가고 stdout은 순수 JSON입니다.
 
 - **출력** (`Saved/Results/<session>/<ULID>/`, `-Out`으로 바꿀 수 있음): `timings.csv`(프레임마다 T_push/T_step/T_pull/T_frame와 QPC tick), `manifest.json`(빌드·백엔드·프로필·씬 해시·플랫폼·윈도별 통계·마지막 프레임 `h_native`), `effective_settings.jsonl`(Prepare 전), `effective_settings_after.jsonl`(마지막 프레임 뒤), `scene.json`.
-- **종료 코드:** 0 ok, 2 잘못된 명령줄·프로필·씬·파라미터, `HashEvery`/`CountersEvery` > 0(M7), 백엔드가 거부한 엔진 키 또는 필수 effective 키 누락, 3 엔진 오류, 5 용량 초과(백엔드가 effective 키 `errors.capacity_bits`로 알린 bit만 있을 때. 다른 오류 bit가 함께 있으면 3), 6 백엔드 없음.
-- **비공식:** M3의 타이밍은 모두 비공식입니다. 측정 프로토콜(affinity, 우선순위, 타이머 해상도, pre-roll)은 M7, 전원 계획 확인은 M8 러너, 적합성 스탬프는 M10에 생깁니다. manifest에 `"unofficial": true`, `"timing_valid_for_headline": false`로 남고, 전원 계획은 읽어서 기록만 합니다.
+- **종료 코드 (M3):** 0 ok, 2 잘못된 명령줄·프로필·씬·파라미터, 백엔드가 거부한 엔진 키 또는 필수 effective 키 누락, 3 엔진 오류, 5 용량 초과(백엔드가 effective 키 `errors.capacity_bits`로 알린 bit만 있을 때. 다른 오류 bit가 함께 있으면 3), 6 백엔드 없음. M7에서 4와 `exit.json`이 더해졌고 `HashEvery`/`CountersEvery` > 0은 더는 거부하지 않습니다 (위).
+- **비공식:** 모든 타이밍은 비공식입니다. 측정 프로토콜은 M7에 생겼고, 전원 계획 확인은 M8 러너, 적합성 스탬프는 M10에 생깁니다. manifest에 `"unofficial": true`가 남고, 전원 계획은 읽어서 기록만 합니다.
 - 씬 정의는 [docs/Scenes.md](docs/Scenes.md), 결과 형식은 [docs/02_Architecture.md](docs/02_Architecture.md) §12에 있습니다.
 
 ### 뷰어 (M4, 1단계)

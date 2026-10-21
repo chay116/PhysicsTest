@@ -93,6 +93,10 @@ namespace PhysicsTest
 		uint32 MaxBodiesHint = 0;
 		uint32 MaxBodyPairsHint = 0;
 		uint32 MaxContactConstraintsHint = 0;
+		// Test only (M7, PhysicsTestBench -InjectSceneInstrumentFlags): PT_INSTR_* bits OR-ed into the PtSceneDesc the backend
+		// receives, but not into the scene's test settings - a backend then installs, say, its contact listener while the
+		// run declares instrumentation tier 0, which the bench preflight (G10a) must refuse. 0 in every real run.
+		uint32 InjectedSceneInstrumentFlags = 0;
 	};
 
 	// UE delegate names (PhysScene_PhysX.h, PhysScene_Chaos.h); single-cast in the harness. PreTick and PostTick receive

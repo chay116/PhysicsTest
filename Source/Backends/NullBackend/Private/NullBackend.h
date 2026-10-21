@@ -154,6 +154,8 @@ namespace PhysicsTest::NullBackend
 		PtResult SetOption(::PhysicsTest::Abi::FStringRef Key, ::PhysicsTest::Abi::FStringRef Value) override;
 		PtResult DumpEffectiveSettings(::PhysicsTest::Abi::FTextWriter& Out) override;
 		PtResult GetMemoryStats(PtMemoryStats& Out) override;
+		// The phase-timer test double (M7 fix round 0): the steps of each frame are timed and reported as phase 0.
+		void SetPhaseTimers(bool bEnabled) { bPhaseTimers = bEnabled; }
 
 	private:
 		void Step(uint32 StepIndex);
@@ -174,12 +176,20 @@ namespace PhysicsTest::NullBackend
 		uint32 ExternalSteps = 0;   // FPhysicsSolverBase::ExternalSteps: frames with dt > 0 since the last push
 		uint32 StepsTakenThisFrame = 0;
 		uint64 TotalSteps = 0;
+		bool bPhaseTimers = false;
+		int64 LastStepsNs = 0;      // phase 0 ("null.steps"): the wall time of the last frame's steps
 	};
 
 	// The module flags a Null build declares: 0 for the static Null; the DLL (NullBackendDll.cpp) declares
 	// PT_MODULE_NO_REINIT when the process environment has PT_NULL_DLL_NO_REINIT=1 - the test double of a backend that
 	// cannot be initialised twice (the Chaos bridge), for the bench's one-gate-per-process paths (M6 round 1).
 	uint32 GetNullModuleFlags();
+	// The phase-timer test double (M7 fix round 0, the bench's phases tier): the DLL declares PT_CAP_PHASE_TIMERS with one
+	// timer ("null.steps") when the process environment has PT_NULL_DLL_PHASE_TIMERS=1, and times a scene's steps when the
+	// scene asks for PT_INSTR_PHASES; the static Null never does. GetNullClockNs: QueryPerformanceCounter in ns (KERNEL32
+	// only, gate A9; the static build returns 0).
+	bool GetNullPhaseTimersEnabled();
+	int64 GetNullClockNs();
 
 	class FNullBackend final : public ::PhysicsTest::Abi::IPhysicsBackend
 	{
@@ -200,5 +210,6 @@ namespace PhysicsTest::NullBackend
 		uint32 NumLiveScenes = 0;
 		uint32 MaxThreads = 1;
 		uint32 ModuleFlags = 0;   // GetNullModuleFlags(), once at construction (the Kit reads GetInfo once, too)
+		bool bPhaseTimers = false;   // GetNullPhaseTimersEnabled(), once at construction
 	};
 }

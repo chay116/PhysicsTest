@@ -661,7 +661,7 @@ Chaos 행까지:
 | 5 | 성능 씬, 스레드 매핑 T=1..6, DET1(G8), G11, test-avx2 프리셋 | 1.5 |
 
 작업별 세부:
-- **실행 순서:** 인자 파싱 → 호스트 제어 → ini 로드 → 백엔드 로드와 `InitGamePhys` → 씬 구성과 `desc_sha256` → effective 덤프와 preflight → Prepare → spin pre-roll 0.5 s → frame 0 → 측정 루프 → teardown → 기록. 스레드 센서스 단계는 M10에서 끼워 넣는다.
+- **실행 순서:** 인자 파싱 → 호스트 제어 → ini 로드 → 백엔드 로드와 `InitGamePhys` → 씬 구성과 `desc_sha256` → effective 덤프와 preflight → Prepare → spin pre-roll 0.5 s → frame 0 → 측정 루프 → 기록 → `exit.json` → teardown (02 §12.2 12·13단계, DL52: 결과와 `exit.json`을 먼저 쓰고 teardown은 판정을 바꾸지 않는다). 스레드 센서스 단계는 M10에서 끼워 넣는다.
 - **`exit.json`:** 모든 출력을 쓰고 flush한 뒤 의도한 종료 코드를 `exit.json`에 적는다. 모듈 플래그에 `UE_RUNTIME`이 있으면 `TerminateProcess(GetCurrentProcess(), code)`로 끝낸다. UE를 품은 DLL은 정적 소멸자 단계에서 크래시하거나 멈출 수 있기 때문이다. 러너(M8)는 원시 종료 코드보다 `exit.json`을 믿는다.
 - **호스트 제어:** SDK 초기화나 LoadLibrary보다 먼저 affinity, HIGH_PRIORITY_CLASS, power throttling opt-out, `timeBeginPeriod(1)`(UE DLL이 프로세스 전역으로 바꾸므로 모든 엔진에 똑같이, WindowsPlatformMisc.cpp:1076 [V]). 전원 계획, CPU MHz, 배경 부하는 읽어서 기록만 한다.
 - **Recorders:** 타이밍 루프 안에서는 할당, I/O, 로그를 하지 않는다. 헤드라인 run은 해시를 마지막 프레임에만 계산하고 `CountersEvery = 0`이다. 리스너가 필요 없는 `GetStepStats` 읽기는 헤드라인 run에서도 허용한다.
@@ -688,6 +688,14 @@ Chaos 행까지:
 - `PhysicsTestBench.exe`가 여전히 d3d11.dll을 import하지 않는다.
 
 **산출물:** `Source/Runtime/PhysicsTestBenchmark`(완성), BenchCore 확장, `Config/Schemas/manifest.schema.json`, 성능 씬, test-avx2 프리셋, `docs/Scenes.md` 갱신, `docs/TimingContract.md`(엔진별 타이밍 구간·버킷 정의), `docs/ResultsSchema.md`(manifest·timings·states·hashes 포맷).
+
+**M7 실행 메모 [V]** (자세한 결과와 이유는 [Progress.md](Progress.md) M7 §2, §3)
+- **종료 코드 4의 "다른 프로세스 바쁨":** 시스템 전체가 아니라 run의 코어에서 잰다. 사용 중인 데스크톱은 시스템 전체로 늘 코어 1개의 30~65%가 바빠 전체 기준이면 모든 run이 4가 된다. 수정 라운드 0에서 두 가지를 고쳤다: (1) run의 코어 = 마스크 CPU와 그 SMT 형제다 (형제의 부하도 같은 코어의 실행 자원을 나눠 쓴다. 마스크 CPU만 보던 첫 판은 형제가 100% 바빠도 0이었다), (2) 문턱은 "코어당 5% × run의 코어 수"다 (첫 판은 T개 CPU의 합을 코어 1개의 5%와 비교해 이 PC에서 PhysX T ≥ 2 run이 대부분 4로 끝났다). 리드가 다른 규칙을 정하면 `-ContaminationPct`(코어당 값)와 TimingContract §5.1을 바꾼다 ([Progress.md](Progress.md) M7 §7 D-2).
+- **G11 "상태가 비트 단위로 같다":** 매 프레임 `h_native`와 `h_state`(`states.ptst` 바디 레코드 바이트의 해시)를 비교한다. 상태 전체 파일 비교 대신 같은 바이트의 해시를 쓴다.
+- **"루프 안 할당 0":** 벤치 exe의 `operator new` 훅으로 잰다 (하네스, Kit, 정적 어댑터, SDK의 `operator new`). SDK가 자기 할당자로 하는 할당은 훅에 보이지 않으므로 세 SDK 모두 `PtMemoryStats.NumAllocs`로 따로 센다: PhysX는 `PxAllocatorCallback`, Jolt와 Bullet은 수정 라운드 0에서 어댑터가 SDK의 공개 훅(`JPH::Allocate` 계열 함수 포인터, `btAlignedAllocSetCustom`)에 세는 래퍼를 단다 (SDK 수정 없음). manifest `alloc.backend_allocs_in_loop`·`_frame0`·`_after_frame0`이 엔진 할당을 기록한다. 헤드라인 자격은 하네스가 책임지는 훅 값으로만 정한다 (엔진 할당은 엔진 거동).
+- **G9 preflight는 run마다 그 씬으로:** M6의 G9 규칙 일부는 상자 기하에서 나온 상수라, `tolerances.json` 규칙에 `"scene"`(이름 하나 또는 목록)을 더해 그 기하의 씬에만 건다. 수정 라운드 0에서 같은 상자로 만든 성능 씬(`P1.SmallScene`, `P0.EmptyStep`, 200 cm 상자의 `M2b.Pyramid1240`)으로 넓히고, 값이 다른 경우(Bullet `contact.speculative_distance`의 M2b 3.464 cm)는 규칙의 `"by_scene"`으로 준다. 이 기준의 주입 테스트는 그대로다.
+- **P0, P1의 배치 측정(02 §9.3):** 하지 않았다. 프레임별 QPC 값의 윈도 평균을 쓴다 (P0 프레임은 1~2 µs, QPC 눈금 100 ns). 배치나 TSC 측정은 M10이다.
+- **CTest의 run은 `-HostCheck=record -PreRoll=0`:** CTest를 `-j`로 돌리면 run들이 CPU 0을 함께 쓰기 때문이다. 측정 프로토콜 그대로의 run(`enforce`, pre-roll 0.5 s 이상)은 CTest에서는 `ExitContaminated`(직렬)뿐이고, 나머지는 증거 run으로 돌렸다 (Progress.md M7 §2).
 
 **선행:** M6.
 
@@ -782,7 +790,7 @@ Chaos 행까지:
 
 | # | 작업 | pd |
 |---|---|---|
-| 1 | TSC 클럭: rdtscp + lfence 버킷, run 전체 QPC 보정, 프레임별 QPC 원시값 유지, 읽기 오버헤드 기록, ABI 오버헤드 게이트 | 0.75 |
+| 1 | TSC 클럭: rdtscp + lfence 버킷, run 전체 QPC 보정, 프레임별 QPC 원시값 유지, 읽기 오버헤드 기록, ABI 오버헤드 게이트. P0·P1 배치 측정 (M7 D-6: 02 §9.3의 여러 프레임 묶음 측정을 M7에서 미룸) | 0.75 |
 | 2 | `FThreadCensus`(QueryThreadCycleTime, 센서스 #1/#2), cpu_eff, 외부 스레드 cycle, G10b | 1.0 |
 | 3 | ptbench CV 게이트와 sentinel | 0.5 |
 | 4 | 적합성 스탬프: M6 `-Conformance` 결과를 스탬프 키로 묶어 `Saved/Conformance/`에 쓰기, 러너의 실행 전 거부, 선택 `/Brepro` | 1.0 |

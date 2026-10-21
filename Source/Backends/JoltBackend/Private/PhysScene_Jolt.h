@@ -261,6 +261,11 @@ namespace PhysicsTest::JoltBackend
 
 	// The number of Jolt asserts this module has seen (JoltBackend.cpp; always 0 without JPH_ENABLE_ASSERTS).
 	uint32 GetNumJoltAsserts();
+	// Jolt's heap traffic since the process started (M7 fix round 0): the adapter registers counting wrappers around Jolt's
+	// default allocator (JPH::Allocate / Reallocate / AlignedAllocate count as allocations, Free / AlignedFree of a non-null
+	// block as frees). Process-wide, as PhysX's allocator callback: PtMemoryStats.NumAllocs / NumFrees.
+	int64 GetJoltHeapAllocCount();
+	int64 GetJoltHeapFreeCount();
 	// Harness test hook (runtime scene option GJoltTestRaiseAssertKey, M4): counts and logs one assert exactly as the dbg assert
 	// hook does, in every build, so the propagation of an assert outside PhysicsSystem::Update into the error bits is a unit
 	// test. CreateScene rejects the key (ApplySceneOption), so no profile or variant file can reach it.

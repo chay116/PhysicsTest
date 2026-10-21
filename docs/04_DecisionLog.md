@@ -263,6 +263,20 @@
 - DL38 / 리드 (e): PhysX UE4Compat 계열은 `PxRigidBodyFlag::eENABLE_GYROSCOPIC_FORCES`를 켜지 않는다 (`GyroscopicForces=Ignore` [M]: UE4의 PhysX 3.4에 이 항이 없고 5.1.0에 생겼다, CHANGELOG.md:1965, :2056). SdkDefault는 `FromBody`다.
 - Q6: ChaosBackendGuide 초안([ChaosBackendGuide.md](ChaosBackendGuide.md))에 T = 1 기본값(SingleThread + `p.Chaos.SingleWorkerPhysics=1` + `-corelimit=1`)과 의무사항을 UE file:line 근거와 함께 적었다.
 
+**M7 구현 메모 (DL11, DL13, DL19, DL29, DL49, DL52) [V]** ([Progress.md](Progress.md) M7, [TimingContract.md](TimingContract.md), [ResultsSchema.md](ResultsSchema.md))
+- DL11: 호스트 제어(affinity → HIGH_PRIORITY_CLASS → power throttling opt-out → `timeBeginPeriod(1)`)를 백엔드 로드 전에 프로세스 범위로만 건다. 전원 계획은 읽기만 한다 (이 PC는 Balanced, `power_scheme_high_performance` false로 기록). G10a는 preflight에서 listener·드로어·계측 tier·run mode를 확인한다. 오염된 호스트(종료 코드 4)는 시스템 전체가 아니라 run의 코어에서 잰다: 사용 중인 데스크톱은 시스템 전체로 늘 코어 1개의 30~65%가 바쁘다 (첫 판은 마스크 CPU만, 수정 라운드 0부터 마스크 CPU와 그 SMT 형제, 아래). G10b(cpu_eff)는 M10 그대로다.
+- DL13: `test-avx2` 프리셋을 더했다 (`test` + `PT_FLAG_PROFILE=MatchedAVX2`). PhysX·Bullet SDK 타깃에 `/arch:AVX2`를 PUBLIC으로 걸어 어댑터도 같은 ISA다. 하네스 TU는 두 프로필 모두 `/arch` 없음이고 `desc_sha256`이 `test`와 같다.
+- DL49: G0을 벤치 preflight에 넣었다. 어댑터 자기보고 = `BuildFlags.json`의 대상별 사실(exe에 `PT_BUILD_FLAGS_G0_JSON`으로 들어감) = 플래그 프로필 기대값. test·test-avx2에서 Jolt, Bullet, PhysX, Null, NullDll이 통과한다.
+- DL52: 모든 run의 마지막 출력이 `exit.json`이고(원자적 쓰기, Fatal 훅 포함), UE_RUNTIME 모듈을 로드한 프로세스는 run·`-Conformance`·`-Describe`·`-SceneHashes`·`-Gate=` 모두 `TerminateProcess`로 끝난다. Null DLL 시험 대역(`PT_NULL_DLL_UE_RUNTIME=1`)이 `DLL_PROCESS_DETACH`를 받지 않는 것으로 확인한다.
+- DL19: G9가 벤치 preflight에서 run마다 그 씬의 덤프로 돈다. `tolerances.json` 규칙에 선택 필드 `"scene"`을 더해 `M3.BoxPile`의 기하에서 나온 상수 규칙을 그 씬에만 건다. PhysX 스레드 키는 `profile:dispatcher_workers`(T ≥ 2면 T)와 비교한다.
+- DL29 (v1.0 append-only): ABI 레이아웃은 바꾸지 않았다. 입력 구조체의 Reserved 필드는 0이어야 한다는 규칙을 Kit 검사(`PT_E_INVALID_ARG`)와 A4 사례 7개로 넣었고, 선택 effective 키 `contact.point_pose`를 더했다 ([Abi.md](Abi.md) §2, §5.14). A4의 Reserved 사례는 M7 이후 Kit으로 빌드한 모듈에서만 통과한다 (적합성은 현재 Kit으로 다시 빌드한 모듈에 한다).
+
+**M7 수정 라운드 0 (독립 검사 반영) [V]** ([Progress.md](Progress.md) M7 §7)
+- DL11, 종료 코드 4 (Progress M7 D-1·D-2의 기본값, **리드 확인 대기**): 오염은 run의 코어 = 마스크 CPU와 그 SMT 형제에서 잰다 (`core_busy_other_pct`). 문턱은 "코어당 `-ContaminationPct`(기본 5%) × run의 코어 수"다. 형제 CPU의 부하는 같은 코어를 나눠 써 run을 느리게 하는데 첫 판은 이를 기록만 했고(형제 100%에도 헤드라인 자격 true), T개 CPU의 합을 코어 1개의 5%와 비교해 T ≥ 2 run이 대부분 4였다. 02 §12.2의 "코어 1개의 5%"를 코어마다 적용한 해석이다. 리드가 다른 규칙(예: T와 무관한 고정 문턱, M8이 T별로 `-ContaminationPct`를 줌)을 정하면 `-ContaminationPct`의 뜻과 [TimingContract.md](TimingContract.md) §5.1만 바꾼다.
+- DL52: Fatal 훅은 run의 마지막 `exit.json` 전까지만 `exit.json`을 쓴다. teardown 중 Fatal은 `teardown.json`에 남고 프로세스는 run의 종료 코드로 `TerminateProcess`된다 (teardown은 판정을 바꾸지 않는다). UE_RUNTIME 모듈이 로드된 프로세스의 Fatal도 `TerminateProcess`로 끝난다 (`_Exit`은 ExitProcess라 DLL detach를 부른다).
+- DL19: G9 규칙의 `"scene"`은 이름 하나나 목록이고, `"by_scene"`이 씬별 기대값을 준다. 상자 기하의 상수 규칙 8개가 같은 상자를 쓰는 성능 씬 전부(`M3.BoxPile`, `P1.SmallScene`, `P0.EmptyStep`, `M2b.Pyramid1240`)에 걸린다 (Bullet `contact.speculative_distance`만 M2b 3.464 cm를 `by_scene`으로). `GateSuiteVersion` 6, `tolerances.json` version 5.
+- 03 M7 "타이밍 루프 안 할당 0": 헤드라인 조건은 하네스 훅(`operator new`) 그대로다. 엔진 자기 할당자는 세 SDK 모두 `PtMemoryStats.NumAllocs`로 센다 (Jolt·Bullet은 어댑터가 SDK의 공개 할당자 훅에 다는 세는 래퍼, SDK 수정 없음). 첫 판의 "Jolt·Bullet 할당자 훅은 SDK 쪽 변경"이라는 이유는 틀렸다.
+
 ### 4.2 마일스톤별 요약
 
 | 마일스톤 | 차단하는 질문 | 확인을 권장하는 질문 |

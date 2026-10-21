@@ -54,6 +54,7 @@ pt_add_program(PhysicsTestAutomation
 		Private/PhysicsTestAutomationMain.cpp
 		Private/Tests/AbiGateTests.cpp
 		Private/Tests/BackendCommonTests.cpp
+		Private/Tests/BenchTests.cpp
 		Private/Tests/BodyUtilsTests.cpp
 		Private/Tests/CoreConfigTests.cpp
 		Private/Tests/CoreMathTests.cpp
@@ -85,7 +86,7 @@ set_tests_properties(PhysicsTest.Automation PROPERTIES LABELS "unit")
 
 # One CTest entry per test area (PhysicsTest.<Area>.*), so a failure names its area. doctest exits 0 when a filter
 # matches nothing, so each entry also requires a non-empty, all-passing summary line.
-foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw
+foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw Bench
 		${_pt_automation_backend_areas})
 	add_test(NAME PhysicsTest.Unit.${_area} COMMAND PhysicsTestAutomation "-tc=PhysicsTest.${_area}.*")
 	set_tests_properties(PhysicsTest.Unit.${_area} PROPERTIES

@@ -550,6 +550,13 @@ inline namespace PT_BACKEND_NS
 		{
 			return Error.Set(PT_E_INVALID_ARG, "NumOptions %u with Options == NULL", Desc.NumOptions);
 		}
+		// Reserved-field rule (v1.0, M7; docs/Abi.md 2): the host writes 0 into every Reserved field of an input struct, and
+		// the Kit refuses anything else, so a later v1.x meaning of such a field can never be ignored silently - a host may
+		// set it only for a module that declares the capability that gives it that meaning.
+		if (Desc.Reserved0 != 0 || Desc.Reserved1 != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "PtSceneDesc.Reserved0 / Reserved1 must be 0 (0x%x / 0x%x)", Desc.Reserved0, Desc.Reserved1);
+		}
 		for (uint32_t Index = 0; Index < Desc.NumOptions; ++Index)
 		{
 			if (Desc.Options[Index].Key == nullptr || Desc.Options[Index].Value == nullptr)
@@ -576,6 +583,10 @@ inline namespace PT_BACKEND_NS
 		{
 			return Error.Set(PT_E_INVALID_ARG, "material %u: combine mode %u / %u is unknown", Index, M.FrictionCombineMode, M.RestitutionCombineMode);
 		}
+		if (M.Reserved != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "material %u: Reserved must be 0 (0x%x)", Index, M.Reserved);
+		}
 		return PT_OK;
 	}
 
@@ -593,6 +604,10 @@ inline namespace PT_BACKEND_NS
 		if (!IsFinite(S.ContactOffset) || !IsFinite(S.RestOffset) || (S.Flags & ~PT_SHAPEF_ALL) != 0)
 		{
 			return Error.Set(PT_E_INVALID_ARG, "shape %u: offsets must be finite, flags 0x%x unknown", Index, S.Flags);
+		}
+		if (S.Reserved != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "shape %u: Reserved must be 0 (0x%x)", Index, S.Reserved);
 		}
 		switch (S.Type)
 		{
@@ -657,6 +672,10 @@ inline namespace PT_BACKEND_NS
 		{
 			return Error.Set(PT_E_INVALID_ARG, "actor %u: ObjectType %u is not below PT_NUM_COLLISION_CHANNELS", Index, A.ObjectType);
 		}
+		if (A.Reserved0 != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "actor %u: Reserved0 must be 0 (0x%x)", Index, A.Reserved0);
+		}
 		if (!IsValidTransform(A.ActorTransform) || !IsValidTransform(A.CenterOfMassLocal))
 		{
 			return Error.Set(PT_E_INVALID_ARG, "actor %u: ActorTransform / CenterOfMassLocal not finite or not a unit rotation", Index);
@@ -698,6 +717,10 @@ inline namespace PT_BACKEND_NS
 		if ((Cmd.Flags & ~PT_CMDF_ALL) != 0)
 		{
 			return Error.Set(PT_E_INVALID_ARG, "command %u: unknown flags 0x%x", Index, Cmd.Flags);
+		}
+		if (Cmd.Reserved != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "command %u: Reserved must be 0 (0x%x)", Index, Cmd.Reserved);
 		}
 		switch (Cmd.Type)
 		{
@@ -982,6 +1005,10 @@ inline namespace PT_BACKEND_NS
 				if (Params->NumOptions > 0 && Params->Options == nullptr)
 				{
 					return Kit.SetLastError(PT_E_INVALID_ARG, "InitGamePhys: NumOptions %u with Options == NULL", Params->NumOptions);
+				}
+				if (Params->Reserved != 0)
+				{
+					return Kit.SetLastError(PT_E_INVALID_ARG, "InitGamePhys: PtInitParams.Reserved must be 0 (0x%x)", Params->Reserved);
 				}
 				for (uint32_t Index = 0; Index < Params->NumOptions; ++Index)
 				{

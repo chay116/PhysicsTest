@@ -426,6 +426,7 @@ namespace PhysicsTest::NullBackend
 		// FChaosScene::StartFrame -> AdvanceAndDispatch_External: plan, push, then run the steps (single-threaded, inline).
 		FramePlan = FNullFramePlanner::Plan(FrameParams, AsyncDeltaTime, AccumulatedTime);
 		StepsTakenThisFrame = 0;
+		LastStepsNs = 0;
 		// ExternalSteps counts the frames with dt > 0 since the last push; a dt of 0 "has nothing to do with force"
 		// (PhysicsSolverBase.cpp:623-626 [V]).
 		if (FramePlan.FrameDeltaTime > 0.0)
@@ -449,11 +450,16 @@ namespace PhysicsTest::NullBackend
 			Body.LinearAccel = Scale(Body.LinearAccel, DynamicsWeight);
 			Body.AngularAccel = Scale(Body.AngularAccel, DynamicsWeight);
 		}
+		const int64 StepsBeginNs = bPhaseTimers ? GetNullClockNs() : 0;
 		for (uint32 StepIndex = 0; StepIndex < FramePlan.NumSteps; ++StepIndex)
 		{
 			Step(StepIndex);
 			++StepsTakenThisFrame;
 			++TotalSteps;
+		}
+		if (bPhaseTimers)
+		{
+			LastStepsNs = GetNullClockNs() - StepsBeginNs;
 		}
 		// The push consumed the forces (FSingleParticlePhysicsProxy::ClearAccumulatedData, SingleParticlePhysicsProxy.cpp:258-267
 		// [V]), also when no pushed step ran (dt <= MinDeltaTime). Impulses not integrated yet stay pending.
@@ -781,7 +787,11 @@ namespace PhysicsTest::NullBackend
 		Out.NumContactPoints = 0;
 		Out.NumIslands = -1;
 		Out.EngineErrorBits = 0;
-		Out.NumPhaseTimes = 0;
+		Out.NumPhaseTimes = bPhaseTimers ? 1u : 0u;
+		if (bPhaseTimers)
+		{
+			Out.PhaseTimeNs[0] = LastStepsNs;
+		}
 		return PT_OK;
 	}
 
@@ -905,10 +915,26 @@ namespace PhysicsTest::NullBackend
 	{
 		return 0;   // the static Null: re-initialisable (gate A0 re-initialises it), no environment switch
 	}
+
+	bool GetNullPhaseTimersEnabled()
+	{
+		return false;   // the static Null declares no phase timers
+	}
+
+	int64 GetNullClockNs()
+	{
+		return 0;
+	}
 #endif
+
+	namespace
+	{
+		const char* const GNullPhaseTimerNames[] = { "null.steps" };
+	}
 
 	FNullBackend::FNullBackend()
 		: ModuleFlags(GetNullModuleFlags())
+		, bPhaseTimers(GetNullPhaseTimersEnabled())
 	{
 	}
 
@@ -920,10 +946,11 @@ namespace PhysicsTest::NullBackend
 		Out.SourceCommit = "n/a";
 		Out.BuildConfig = GetBuildConfig();
 		Out.BuildFlagsJson = GNullBuildReport;
-		Out.Capabilities = PT_CAP_KINEMATIC | PT_CAP_NATIVE_FRAME_MODEL | PT_CAP_ACTIVE_LIST | PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH;
+		Out.Capabilities = PT_CAP_KINEMATIC | PT_CAP_NATIVE_FRAME_MODEL | PT_CAP_ACTIVE_LIST | PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH
+			| (bPhaseTimers ? PT_CAP_PHASE_TIMERS : 0ull);
 		Out.ModuleFlags = ModuleFlags;
-		Out.NumPhaseTimers = 0;
-		Out.PhaseTimerNames = nullptr;
+		Out.NumPhaseTimers = bPhaseTimers ? 1u : 0u;
+		Out.PhaseTimerNames = bPhaseTimers ? GNullPhaseTimerNames : nullptr;
 		Out.NumRequiredEffectiveKeys = 0;   // the generic set only (A.13)
 		Out.RequiredEffectiveKeys = nullptr;
 	}
@@ -955,6 +982,7 @@ namespace PhysicsTest::NullBackend
 		{
 			return GetKit().SetLastError(PT_E_OUT_OF_MEMORY, "Null: cannot allocate a scene");
 		}
+		Scene->SetPhaseTimers(bPhaseTimers && (Desc.InstrumentFlags & PT_INSTR_PHASES) != 0);
 		++NumLiveScenes;
 		OutScene = Scene;
 		return PT_OK;

@@ -20,7 +20,10 @@
      - batches are all-or-nothing: an invalid element rejects the whole call before anything changes (a backend must not
        fail a command it validated; if it does, the call returns PT_E_INTERNAL and the batch may be partially applied)
      - input structs carry StructSize; a value below this header's sizeof() is PT_E_INVALID_ARG (a larger one, from
-       a newer host, is accepted and the unknown tail ignored) */
+       a newer host, is accepted and the unknown tail ignored)
+     - every Reserved* field of an input struct is 0: the host writes 0 and a Kit-based module rejects anything else with
+       PT_E_INVALID_ARG (M7, docs/Abi.md 2), so a v1.x meaning of a Reserved field is written only for a module that
+       declares the capability giving it that meaning */
 #ifndef PT_BACKEND_ABI_H
 #define PT_BACKEND_ABI_H
 #include <stdint.h>

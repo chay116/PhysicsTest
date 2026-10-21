@@ -4,9 +4,11 @@
 
 #include <Windows.h>
 
+#include <atomic>
 #include <crtdbg.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace PhysicsTest
 {
@@ -83,10 +85,37 @@ namespace PhysicsTest
 		_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 	}
 
+	namespace
+	{
+		std::atomic<FPlatformMisc::FFatalExitCallback> GFatalExitCallback{ nullptr };
+		std::atomic<bool> GFatalExitInProgress{ false };
+		char GFatalMessage[1024] = {};
+	}
+
+	void FPlatformMisc::SetFatalExitCallback(const FFatalExitCallback Callback)
+	{
+		GFatalExitCallback.store(Callback);
+	}
+
+	void FPlatformMisc::SetFatalMessage(const char* Message)
+	{
+		strncpy_s(GFatalMessage, sizeof(GFatalMessage), Message != nullptr ? Message : "", _TRUNCATE);
+	}
+
 	void FPlatformMisc::RequestExitFatal(const int32 ExitCode)
 	{
 		std::fflush(stdout);
 		std::fflush(stderr);
+		// Once: a Fatal raised inside the callback (or on another thread meanwhile) exits without running it again.
+		if (!GFatalExitInProgress.exchange(true))
+		{
+			if (const FFatalExitCallback Callback = GFatalExitCallback.load())
+			{
+				Callback(ExitCode, GFatalMessage);
+				std::fflush(stdout);
+				std::fflush(stderr);
+			}
+		}
 		std::_Exit(ExitCode);
 	}
 }

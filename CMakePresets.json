@@ -36,16 +36,25 @@
       "displayName": "test - Release (UE Test), checks off, no renderer",
       "description": "Headline measurements (from M7). No viewer/renderer targets.",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PT_DO_CHECK": "OFF", "PT_WITH_VIEWER": "OFF" }
+    },
+    {
+      "name": "test-avx2",
+      "inherits": "test",
+      "displayName": "test-avx2 - as test, MatchedAVX2 flag profile",
+      "description": "ISA sensitivity (M7, 02 4.2): every SDK and adapter /arch:AVX2, harness none (same desc_sha256 as test).",
+      "cacheVariables": { "PT_FLAG_PROFILE": "MatchedAVX2" }
     }
   ],
   "buildPresets": [
     { "name": "dbg", "configurePreset": "dbg" },
     { "name": "dev", "configurePreset": "dev" },
-    { "name": "test", "configurePreset": "test" }
+    { "name": "test", "configurePreset": "test" },
+    { "name": "test-avx2", "configurePreset": "test-avx2" }
   ],
   "testPresets": [
     { "name": "dbg", "configurePreset": "dbg", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
-    { "name": "test", "configurePreset": "test", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+    { "name": "test", "configurePreset": "test", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "test-avx2", "configurePreset": "test-avx2", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
   ]
 }

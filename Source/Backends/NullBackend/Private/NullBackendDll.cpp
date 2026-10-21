@@ -6,19 +6,62 @@
 
 PT_IMPLEMENT_BACKEND_MODULE(PhysicsTest::NullBackend::FNullBackend)
 
-// The NO_REINIT test double (M6 round 1, docs/Abi.md 9.1 decision 7): PT_NULL_DLL_NO_REINIT=1 in the environment makes this
-// DLL declare PT_MODULE_NO_REINIT, and the Kit then refuses an InitGamePhys after TermGamePhys (PtBackendKit.h) as the
-// Chaos bridge must. PhysicsTest.Bench.Conformance runs every ABI gate and the physics gates on it, one process each.
-// Read once, when the host first asks for the table; KERNEL32 only (gate A9). Windows.h comes after the module macro so
-// its macros cannot touch the Kit's code (WIN32_LEAN_AND_MEAN and NOMINMAX come from the toolchain, PTToolchain.cmake).
+// Test doubles read from the environment once, when the host first asks for the table (KERNEL32 only, gate A9). Windows.h
+// comes after the module macro so its macros cannot touch the Kit's code (WIN32_LEAN_AND_MEAN and NOMINMAX come from the
+// toolchain, PTToolchain.cmake).
+//   PT_NULL_DLL_NO_REINIT=1   (M6 round 1, docs/Abi.md 9.1 decision 7) the DLL declares PT_MODULE_NO_REINIT and the Kit refuses
+//                             an InitGamePhys after TermGamePhys, as the Chaos bridge must. PhysicsTest.Bench.Conformance runs
+//                             every ABI gate and the physics gates on it, one process each.
+//   PT_NULL_DLL_UE_RUNTIME=1  (M7, 03 M7: "UE_RUNTIME 플래그를 켠 Null DLL 시험 빌드로 TerminateProcess 경로를 확인한다") the DLL
+//                             declares PT_MODULE_UE_RUNTIME: the bench writes every output and exit.json, then ends the
+//                             process with TerminateProcess (02 12.2 step 13), so this DLL never sees DLL_PROCESS_DETACH.
+//   PT_NULL_DLL_REPORT_DETACH=1  DllMain writes one line to stderr at DLL_PROCESS_DETACH during process exit: the CTest pair
+//                             PhysicsTest.Bench.UeRuntimeTerminate / UeRuntimeControl tells the two process ends apart with it.
+//   PT_NULL_DLL_PHASE_TIMERS=1  (M7 fix round 0) the DLL declares PT_CAP_PHASE_TIMERS with one timer ("null.steps", the wall
+//                             time of a frame's steps, QueryPerformanceCounter) for scenes created with PT_INSTR_PHASES: the
+//                             bench's phases tier fills timings.csv solver_ns from it (CTest PhysicsTest.Bench.InstrumentPhases).
 #include <Windows.h>
 
 namespace PhysicsTest::NullBackend
 {
+	namespace
+	{
+		bool IsEnvironmentFlagSet(const char* Name)
+		{
+			char Value[8] = {};
+			const DWORD Length = GetEnvironmentVariableA(Name, Value, static_cast<DWORD>(sizeof(Value)));
+			return Length == 1 && Value[0] == '1';
+		}
+	}
+
+	bool GetNullPhaseTimersEnabled()
+	{
+		return IsEnvironmentFlagSet("PT_NULL_DLL_PHASE_TIMERS");
+	}
+
+	int64 GetNullClockNs()
+	{
+		LARGE_INTEGER Frequency = {};
+		LARGE_INTEGER Counter = {};
+		QueryPerformanceFrequency(&Frequency);
+		QueryPerformanceCounter(&Counter);
+		return Frequency.QuadPart > 0 ? static_cast<int64>(static_cast<double>(Counter.QuadPart) * (1.0e9 / static_cast<double>(Frequency.QuadPart))) : 0;
+	}
+
 	uint32 GetNullModuleFlags()
 	{
-		char Value[8] = {};
-		const DWORD Length = GetEnvironmentVariableA("PT_NULL_DLL_NO_REINIT", Value, static_cast<DWORD>(sizeof(Value)));
-		return Length == 1 && Value[0] == '1' ? PT_MODULE_NO_REINIT : 0u;
+		return (IsEnvironmentFlagSet("PT_NULL_DLL_NO_REINIT") ? PT_MODULE_NO_REINIT : 0u) | (IsEnvironmentFlagSet("PT_NULL_DLL_UE_RUNTIME") ? PT_MODULE_UE_RUNTIME : 0u);
 	}
+}
+
+BOOL WINAPI DllMain(HINSTANCE /*Instance*/, const DWORD Reason, LPVOID Reserved)
+{
+	// Reserved != NULL at DLL_PROCESS_DETACH: the process is exiting (ExitProcess). TerminateProcess skips this call.
+	if (Reason == DLL_PROCESS_DETACH && Reserved != nullptr && PhysicsTest::NullBackend::IsEnvironmentFlagSet("PT_NULL_DLL_REPORT_DETACH"))
+	{
+		static const char Line[] = "PtBackend_Null.dll: DLL_PROCESS_DETACH at process exit (a normal ExitProcess, not TerminateProcess)\n";
+		DWORD Written = 0;
+		WriteFile(GetStdHandle(STD_ERROR_HANDLE), Line, static_cast<DWORD>(sizeof(Line) - 1), &Written, nullptr);
+	}
+	return TRUE;
 }

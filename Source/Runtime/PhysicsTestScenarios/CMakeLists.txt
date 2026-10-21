@@ -1,6 +1,7 @@
 # PT::Scenarios - scenarios and their static registry (02_Architecture 4.5, A.12, docs/Scenes.md). M3: S00.FreeFall,
 # M1.SingleBoxDrop, M3.BoxPile and the free-fall fixture (moved here from PT::Conformance so that Conformance -> Scenarios
-# has no cycle). M6 adds the gate scenes S00d and S01-S08 (Private/Scenarios/Gates, constants in Public/GateScenes.h).
+# has no cycle). M6 adds the gate scenes S00d and S01-S08 (Private/Scenarios/Gates, constants in Public/GateScenes.h). M7 adds
+# the performance scenes P0.EmptyStep, P1.SmallScene and M2b.Pyramid1240 (Private/Scenarios/Perf).
 # Programs link it with WHOLE_ARCHIVE (pt_link_scenarios): the IMPLEMENT_PHYSICS_TEST_SCENARIO registrars
 # are not referenced otherwise.
 pt_add_module(PtScenarios STATIC ALIAS PT::Scenarios
@@ -22,7 +23,10 @@ pt_add_module(PtScenarios STATIC ALIAS PT::Scenarios
 		Private/Scenarios/Gates/S07_ClampProbe.cpp
 		Private/Scenarios/Gates/S08_StartAsleep.cpp
 		Private/Scenarios/Behavior/M1_SingleBoxDrop.cpp
+		Private/Scenarios/Perf/M2b_Pyramid1240.cpp
 		Private/Scenarios/Perf/M3_BoxPile.cpp
+		Private/Scenarios/Perf/P0_EmptyStep.cpp
+		Private/Scenarios/Perf/P1_SmallScene.cpp
 	PUBLIC_DEPS PT::PhysicsCore)
 target_include_directories(PtScenarios PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private/Scenarios")
 

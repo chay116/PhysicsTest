@@ -1,6 +1,6 @@
 {
   "schema": "physicstest.tolerances/1",
-  "version": 4,
+  "version": 5,
   "description": "M6 physics gate tolerances, expected per-engine deviations and allowed skips (docs/03_WorkPlan.md M6, docs/02_Architecture.md 14.3, DL23). Every default is the 03 criterion or names the physics it bounds; every override and every allowed skip names the engine behaviour that causes it. 03 M6 asks for registration BEFORE the run: entries marked \"registered\": \"post-run\" were found on a run and registered only after their mechanism was verified in the engine source (docs/Progress.md M6 D-3, D-4, D-6); each carries \"sign_off\": \"pending\" until the lead accepts it, then who accepted it and when (the loader refuses a post-run entry without one). A gate never widens a value by itself, and an unregistered Skip is a Fail (Gates/PhysicsGates.h). Its SHA-256 goes into conformance.json (and into the M10 stamp, DL20).",
   "gates": {
     "G1": {
@@ -88,7 +88,7 @@
           { "engine": "Bullet", "value": 2, "reason": "DL16 (M5 correction) registered exception: above pi/4 per step (47.1 rad/s at 60 Hz) btTransformUtil::integrateTransform turns the body by 2 atan((|w| dt / (pi/4)) tan(pi/8)) instead of |w| dt (btTransformUtil.h:19, 44-72 [V]); the velocity itself is kept, so omega is checked as for every engine" } ] }
     },
     "G9": {
-      "description": "Every READBACK key of the M3.BoxPile 1k effective dump must match one rule here: compared with its resolved value (profile:, option:, init:, capacity:, const:, min:, text rules) or registered as 'unchecked' with the reason it has no resolved counterpart. A key whose backend checks each engine object against the host's rule reads back canonical = the number of objects that do NOT hold it (docs/Abi.md 5.14), compared with const:0. Rule lookup: '<Engine>.<Variant>', then '<Engine>', then '*'. An unregistered READBACK key fails G9.",
+      "description": "Every READBACK key of the M3.BoxPile 1k effective dump must match one rule here (M7: the bench preflight applies the same rules to the effective dump of the run's own scene; a rule with \"scene\" holds for that scene's geometry only and is skipped, with a note, on another scene): compared with its resolved value (profile:, option:, init:, capacity:, const:, min:, text rules) or registered as 'unchecked' with the reason it has no resolved counterpart. A key whose backend checks each engine object against the host's rule reads back canonical = the number of objects that do NOT hold it (docs/Abi.md 5.14), compared with const:0. Rule lookup: '<Engine>.<Variant>', then '<Engine>', then '*'. An unregistered READBACK key fails G9.",
       "readback": {
         "*": {
           "world.gravity": { "expect": "profile:gravity_z", "rel": 1e-6, "reason": "[/Script/Engine.PhysicsSettings] DefaultGravityZ" },
@@ -109,13 +109,13 @@
           "determinism.flag": { "expect": "profile:enhanced_determinism", "reason": "Null records the ABI flag (it is deterministic either way)" },
           "null.async_dt": { "expect": "const:-1", "reason": "sync scene: PT_ASYNC_DT_SYNC (FixedStep, DL40)" },
           "null.max_bodies_hint": { "expect": "capacity:bodies", "reason": "the scene's declared body count (02 9.4)" },
-          "null.start_asleep_skipped": { "expect": "const:0", "reason": "M3.BoxPile has no bStartAwake = false body" }
+          "null.start_asleep_skipped": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "const:0", "reason": "no performance scene has a bStartAwake = false body (the gate scene S08 has)" }
         },
         "NullDll": {
           "body.max_linear_velocity": { "expect": "const:0", "reason": "Null reads back the ABI value; <= 0 means unclamped" },
           "null.async_dt": { "expect": "const:-1", "reason": "sync scene" },
           "null.max_bodies_hint": { "expect": "capacity:bodies", "reason": "the scene's declared body count" },
-          "null.start_asleep_skipped": { "expect": "const:0", "reason": "no bStartAwake = false body" }
+          "null.start_asleep_skipped": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "const:0", "reason": "no performance scene has a bStartAwake = false body" }
         },
         "Jolt": {
           "solver.type": { "unchecked": "descriptive text (sequential impulse, step counts, island splitter); the counts are checked as solver.iterations" },
@@ -125,7 +125,7 @@
           "material.restitution_combine": { "expect": "const:0", "reason": "canonical = 0 when PhysicsSystem::GetCombineRestitution is the backend's UE combine callback, else 1" },
           "sleep.criteria": { "expect": "const:3", "rel": 1e-6, "reason": "Jolt's own PhysicsSettings::mPointVelocitySleepThreshold 0.03 m/s for mTimeBeforeSleep 0.5 s (PhysicsSettings.h:95, :102 [V]); UE material thresholds are mapped in M9" },
           "determinism.flag": { "expect": "option:DeterministicSimulation", "reason": "Jolt's own determinism switch PhysicsSettings::mDeterministicSimulation (Jolt.Default.ini, PhysicsSettings.h:105 [V]); it is not UE's bEnableEnhancedDeterminism and the backend does not map the ABI flag to it" },
-          "shape.box_margin": { "expect": "option:ConvexRadius", "rel": 1e-6, "reason": "Jolt.Default.ini ConvexRadius 5 cm, below every half extent of the 100 cm cubes" },
+          "shape.box_margin": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "option:ConvexRadius", "rel": 1e-6, "reason": "Jolt.Default.ini ConvexRadius 5 cm, below every half extent of the performance scenes' boxes (50 cm cubes of M3 / P1, 100 cm of M2b, the ground)" },
           "jolt.capacity": { "expect": "capacity:bodies", "reason": "PhysicsSystem::GetMaxBodies = the scene's declared body count (02 9.4)" },
           "jolt.penetration_slop": { "expect": "option:PenetrationSlop", "rel": 1e-6, "reason": "Jolt.Default.ini PenetrationSlop (cm)" },
           "jolt.baumgarte": { "expect": "option:Baumgarte", "rel": 1e-6, "reason": "Jolt.Default.ini Baumgarte" }
@@ -133,11 +133,12 @@
         "Bullet": {
           "solver.type": { "unchecked": "descriptive text (btSequentialImpulseConstraintSolver, mode, split impulse); the numbers are checked as solver.iterations and bullet.solver_mode" },
           "solver.iterations": { "expect": "option:NumIterations", "reason": "Bullet.Default.ini NumIterations" },
-          "contact.speculative_distance": { "expect": "const:1.7320508075688772", "rel": 1e-6, "reason": "Bullet's manifold breaking threshold = gContactBreakingThreshold 0.02 x the shape's angular motion disc (sqrt(3) x 50 cm for the 100 cm cube): 1.732 cm (btCollisionShape::getContactBreakingThreshold, M5 round 0)" },
+          "contact.speculative_distance": { "scene": [ "M3.BoxPile", "P1.SmallScene" ], "expect": "const:1.7320508075688772", "rel": 1e-6, "reason": "Bullet's manifold breaking threshold = gContactBreakingThreshold 0.02 x the shape's angular motion disc (sqrt(3) x 50 cm for the 100 cm cube): 1.732 cm (btCollisionShape::getContactBreakingThreshold, M5 round 0); P0 has no dynamic body (no value)",
+            "by_scene": { "M2b.Pyramid1240": { "expect": "const:3.4641016151377544", "rel": 1e-6, "reason": "the same rule for M2b's 200 cm cubes: 0.02 x sqrt(3) x 100 cm = 3.464 cm (M7 fix round 0)" } } },
           "material.friction_combine": { "expect": "const:0", "reason": "canonical = 0 when Bullet's global gCalculateCombinedFrictionCallback is the backend's UE combine callback, else 1 (read from the engine global)" },
           "material.restitution_combine": { "expect": "const:0", "reason": "canonical = 0 when gCalculateCombinedRestitutionCallback is the backend's UE combine callback, else 1" },
           "sleep.criteria": { "expect": "option:LinearSleepingThreshold", "rel": 1e-6, "reason": "Bullet.Default.ini LinearSleepingThreshold (cm/s); UE material thresholds are mapped in M9" },
-          "shape.box_margin": { "expect": "const:4", "rel": 1e-6, "reason": "btBoxShape setSafeMargin = min(0.04 m, 0.1 x 50 cm) for the 100 cm cube (btConvexInternalShape.h:66-81 [V], DL19)" },
+          "shape.box_margin": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "const:4", "rel": 1e-6, "reason": "btBoxShape setSafeMargin = min(0.04 m, 0.1 x smallest half extent) = 4 cm for the 100 cm cube (0.1 x 50 cm = 5), the 200 cm cube of M2b (10) and the ground (btConvexInternalShape.h:66-81 [V], DL19)" },
           "bullet.solver_mode": { "expect": "option:SolverMode", "reason": "Bullet.Default.ini SolverMode 0x104" },
           "bullet.erp2": { "expect": "option:Erp2", "rel": 1e-6, "reason": "Bullet.Default.ini Erp2" },
           "bullet.split_impulse_penetration_threshold": { "expect": "option:SplitImpulsePenetrationThreshold", "rel": 1e-6, "reason": "Bullet.Default.ini SplitImpulsePenetrationThreshold (cm)" },
@@ -145,25 +146,26 @@
           "bullet.warmstarting_factor": { "expect": "option:WarmstartingFactor", "rel": 1e-6, "reason": "Bullet.Default.ini WarmstartingFactor" },
           "bullet.deactivation_time": { "expect": "init:DeactivationTime:2.0", "rel": 1e-6, "reason": "module option DeactivationTime (Bullet.Default.ini sets none: Bullet's 2 s, btRigidBody.cpp:25 [V])" },
           "bullet.force_update_all_aabbs": { "expect": "option:ForceUpdateAllAabbs", "reason": "Bullet.Default.ini ForceUpdateAllAabbs" },
-          "bullet.pools": { "expect": "capacity:contacts", "reason": "the manifold pool is sized from the scene's declared contact count (MaxContactConstraintsHint, M5 B-10)" },
+          "bullet.pools": { "expect": "option:ManifoldPoolSize", "fallback": "capacity:contacts", "reason": "the manifold pool is the variant's ManifoldPoolSize when set (the exit-5 CTest sets 64), else sized from the scene's declared contact count (MaxContactConstraintsHint, M5 B-10)" },
           "bullet.debug_drawer": { "expect": "const:0", "reason": "no debug drawer in bench runs (it would override gDisableDeactivation, btDiscreteDynamicsWorld.cpp:418-421 [V])" }
         },
         "PhysX": {
+          "threads.workers": { "expect": "profile:dispatcher_workers", "reason": "02 9.6 thread mapping (M7): T = 1 is the inline / single-thread dispatcher (0 workers); T >= 2 is PxDefaultCpuDispatcherCreate(T), T worker threads while the caller waits in fetchResults (ExtDefaultCpuDispatcher.cpp:51-73)" },
           "body.gyroscopic": { "expect": "const:0", "reason": "UE4Compat family GyroscopicForces=Ignore: UE4 on PhysX 3.4 had no gyroscopic term, so no body carries eENABLE_GYROSCOPIC_FORCES whatever the profile asks (M6, lead (e); PhysXBackend.GyroscopicForcesPerVariant)" },
           "solver.type": { "expect": "text_contains_options", "options": [ "SolverType" ], "reason": "the variant's SolverType (PGS / TGS) as PxScene::getSolverType reports it" },
           "solver.iterations": { "expect": "option:PositionIterations", "reason": "the variant's PositionIterations for bodies without an override (M5 P-4)" },
           "broadphase.type": { "expect": "text_contains_options", "options": [ "BroadPhaseType" ], "reason": "the variant's BroadPhaseType as PxScene::getBroadPhaseType reports it" },
           "contact.restitution_threshold": { "expect": "profile:restitution_threshold", "fallback": "option:BounceThresholdVelocity", "rel": 1e-6, "reason": "Normalized 50 cm/s; UEParity: the variant's BounceThresholdVelocity (UE4 project 200 cm/s, SdkDefault 0.2 x speed = 200 cm/s)" },
           "contact.offset_rule": { "expect": "const:0", "reason": "canonical = PxShapes whose PxShape::getContactOffset does not hold the variant's contact offset rule (the backend compares every shape): 0" },
-          "contact.speculative_distance": { "expect": "const:4", "rel": 1e-6, "reason": "PhysX creates a contact once two shapes are closer than the sum of their contact offsets: 2 + 2 cm for every M3.BoxPile pair (UE4 clamp(0.02 x 50, 2, 8) cm; SdkDefault 0.02 m)" },
+          "contact.speculative_distance": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "const:4", "rel": 1e-6, "reason": "PhysX creates a contact once two shapes are closer than the sum of their contact offsets: 2 + 2 cm for every pair of the performance scenes (UE4 clamp(0.02 x half extent, 2, 8) cm: 0.02 x 50 and 0.02 x 100 both clamp to 2; SdkDefault 0.02 m)" },
           "material.friction_combine": { "expect": "const:0", "reason": "canonical = PxMaterials whose getFrictionCombineMode is not the host's friction combine mode: 0" },
           "material.restitution_combine": { "expect": "const:0", "reason": "canonical = PxMaterials whose getRestitutionCombineMode is not the host's mode: 0" },
           "material.static_friction_rule": { "expect": "const:0", "reason": "canonical = PxMaterials whose static / dynamic friction do not follow the variant's static-friction rule: 0" },
           "sleep.criteria": { "expect": "const:50", "rel": 1e-6, "reason": "PhysX's default sleep threshold 5e-5 x speed^2 = 50 cm^2/s^2 at both tolerance scales (PxvDynamics.h:132 [V]) x SleepFamily Normal" },
-          "physx.contact_offset_min": { "expect": "const:2", "rel": 1e-6, "reason": "UE4 clamp(0.02 x MinExtent, 2, 8) cm = 2 cm for 100 cm cubes and the ground; SdkDefault 0.02 x 1 m" },
-          "physx.contact_offset_max": { "expect": "const:2", "rel": 1e-6, "reason": "as physx.contact_offset_min (no larger element in M3.BoxPile)" },
+          "physx.contact_offset_min": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "const:2", "rel": 1e-6, "reason": "UE4 clamp(0.02 x smallest half extent, 2, 8) cm = 2 cm for the 100 cm and 200 cm cubes and the ground; SdkDefault 0.02 x 1 m" },
+          "physx.contact_offset_max": { "scene": [ "M3.BoxPile", "P1.SmallScene", "M2b.Pyramid1240", "P0.EmptyStep" ], "expect": "const:2", "rel": 1e-6, "reason": "as physx.contact_offset_min (no element of the performance scenes gets more than the 2 cm floor)" },
           "physx.rest_offset": { "expect": "const:0", "reason": "UE4 and the PhysX default rest offset 0" },
-          "physx.cpu_dispatcher": { "expect": "profile:workers", "reason": "T = 1: no worker thread (single-thread dispatcher or PxDefaultCpuDispatcherCreate(0))" },
+          "physx.cpu_dispatcher": { "expect": "profile:dispatcher_workers", "reason": "02 9.6 (M7): T = 1 has no worker thread (single-thread dispatcher or PxDefaultCpuDispatcherCreate(0)); T >= 2 is PxDefaultCpuDispatcherCreate(T), T workers" },
           "physx.dynamic_tree_rebuild_rate": { "expect": "option:DynamicTreeRebuildRateHint", "reason": "the variant's DynamicTreeRebuildRateHint" },
           "physx.filter_shader_rules": { "expect": "text_contains_options", "options": [ "NonBlockingPairFilter", "KinematicStaticPairFilter" ], "reason": "the [M] filter rules the variant sets, as the scene holds them (getFilterShaderData)" },
           "physx.friction_offset_threshold": { "expect": "const:4", "rel": 1e-6, "reason": "PhysX default 0.04 x tolerances length = 4 cm at both scales (PxSceneDesc.h [V])" },

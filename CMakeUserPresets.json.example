@@ -14,16 +14,19 @@
     },
     { "name": "dbg-local", "inherits": [ "local-base", "dbg" ], "displayName": "dbg (local SDK mirror)" },
     { "name": "dev-local", "inherits": [ "local-base", "dev" ], "displayName": "dev (local SDK mirror)" },
-    { "name": "test-local", "inherits": [ "local-base", "test" ], "displayName": "test (local SDK mirror)" }
+    { "name": "test-local", "inherits": [ "local-base", "test" ], "displayName": "test (local SDK mirror)" },
+    { "name": "test-avx2-local", "inherits": [ "local-base", "test-avx2" ], "displayName": "test-avx2 (local SDK mirror)" }
   ],
   "buildPresets": [
     { "name": "dbg-local", "configurePreset": "dbg-local" },
     { "name": "dev-local", "configurePreset": "dev-local" },
-    { "name": "test-local", "configurePreset": "test-local" }
+    { "name": "test-local", "configurePreset": "test-local" },
+    { "name": "test-avx2-local", "configurePreset": "test-avx2-local" }
   ],
   "testPresets": [
     { "name": "dbg-local", "configurePreset": "dbg-local", "output": { "outputOnFailure": true } },
     { "name": "dev-local", "configurePreset": "dev-local", "output": { "outputOnFailure": true } },
-    { "name": "test-local", "configurePreset": "test-local", "output": { "outputOnFailure": true } }
+    { "name": "test-local", "configurePreset": "test-local", "output": { "outputOnFailure": true } },
+    { "name": "test-avx2-local", "configurePreset": "test-avx2-local", "output": { "outputOnFailure": true } }
   ]
 }

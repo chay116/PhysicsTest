@@ -13,6 +13,7 @@
 #include "BulletMath.h"
 #include "PtBuildReport.h"
 
+#include <atomic>
 #include <math.h>
 #include <new>
 #include <stdio.h>
@@ -53,6 +54,36 @@ namespace PhysicsTest::BulletBackend
 
 		// The backend's required effective keys (A7 checks them with the generic set).
 		const char* const GRequiredEffectiveKeys[] = { "bullet.solver_mode", "bullet.angular_motion_threshold" };
+
+		// Counting wrappers for Bullet's heap (M7 fix round 0, docs/TimingContract.md 4.1). Every btAlignedAlloc /
+		// btAlignedFree (btAlignedObjectArray, BT_DECLARE_ALIGNED_ALLOCATOR's new / delete, the pools' fallbacks) goes to
+		// btAlignedAllocDefault, which takes its block from the unaligned hook (sAllocFunc) because this MSVC build leaves
+		// BT_HAS_ALIGNED_ALLOCATOR off (btScalar.h:92, btAlignedAllocator.cpp:63-92 [V]). btAlignedAllocSetCustom
+		// (btAlignedAllocator.h:58 [V], a public hook) replaces that unaligned hook: the wrappers do what btAllocDefault /
+		// btFreeDefault do (malloc + zero fill, free; btAlignedAllocator.cpp:25-35 [V]) plus a relaxed atomic count, so the
+		// engine's results do not change. Nothing in Bullet is modified.
+		std::atomic<int64> GBulletHeapAllocs{ 0 };
+		std::atomic<int64> GBulletHeapFrees{ 0 };
+
+		void* CountingBulletAlloc(const size_t Size)
+		{
+			GBulletHeapAllocs.fetch_add(1, std::memory_order_relaxed);
+			char* Data = static_cast<char*>(malloc(Size));
+			if (Data != nullptr)
+			{
+				memset(Data, 0, Size);   // as btAllocDefault ("keep msan happy")
+			}
+			return Data;
+		}
+
+		void CountingBulletFree(void* Block)
+		{
+			if (Block != nullptr)
+			{
+				GBulletHeapFrees.fetch_add(1, std::memory_order_relaxed);
+			}
+			free(Block);
+		}
 
 		const char* GetBuildConfig()
 		{
@@ -206,6 +237,7 @@ namespace PhysicsTest::BulletBackend
 		}
 		gDeactivationTime = btScalar(ModuleOptions.DeactivationTime);
 		gContactBreakingThreshold = btScalar(ModuleOptions.ContactBreakingThreshold);
+		btAlignedAllocSetCustom(&CountingBulletAlloc, &CountingBulletFree);   // the heap count (both sides are malloc / free)
 		bGlobalsInstalled = true;
 		GetKit().LogToHost(PT_LOG_LOG, "LogBulletBackend", "Bullet %d.%02d initialised (combine rule %s, deactivation time %g s, contact breaking threshold %g), "
 			"MaxThreads %u (Bullet runs single threaded)", BT_BULLET_VERSION / 100, BT_BULLET_VERSION % 100, ModuleOptions.CombineRule == ECombineRule::UE ? "UE" : "Bullet",
@@ -222,6 +254,7 @@ namespace PhysicsTest::BulletBackend
 			gCalculateCombinedRestitutionCallback = SavedRestitutionCallback;
 			gDeactivationTime = SavedDeactivationTime;
 			gContactBreakingThreshold = SavedContactBreakingThreshold;
+			btAlignedAllocSetCustom(nullptr, nullptr);   // Bullet's defaults again (malloc / free, as the wrappers)
 			bGlobalsInstalled = false;
 		}
 		return PT_OK;
@@ -289,10 +322,22 @@ namespace PhysicsTest::BulletBackend
 		return PT_OK;
 	}
 
+	int64 GetBulletHeapAllocCount()
+	{
+		return GBulletHeapAllocs.load(std::memory_order_relaxed);
+	}
+
+	int64 GetBulletHeapFreeCount()
+	{
+		return GBulletHeapFrees.load(std::memory_order_relaxed);
+	}
+
 	PtResult FBulletBackend::GetMemoryStats(PtMemoryStats& Out)
 	{
-		// Module level: Bullet's heap use is not counted (no allocator hook installed), so the Kit's -1 (unknown) stays; the
-		// per-scene numbers come from GetMemoryStats(Scene) (the collision configuration's pools).
+		// Module level: Bullet's heap calls through the counting wrappers (process-wide); the byte fields keep the Kit's -1
+		// (the wrappers count calls, not sizes). The per-scene numbers come from GetMemoryStats(Scene) (the pools).
+		Out.NumAllocs = GetBulletHeapAllocCount();
+		Out.NumFrees = GetBulletHeapFreeCount();
 		Out.AllocatorKind = 0;
 		return PT_OK;
 	}

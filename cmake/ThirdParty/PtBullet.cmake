@@ -91,6 +91,11 @@ foreach(_t IN LISTS _pt_bullet_targets)
 	endif()
 endforeach()
 set(PT_BULLET_HEADER_DEFINES "${_pt_bullet_header_defines}" CACHE INTERNAL "BT_* definitions shared by Bullet and PT::Bullet consumers")
+# MatchedAVX2 (M7, test-avx2): /arch on every Bullet target, PUBLIC like Jolt's, so the Bullet adapter and the smoke program
+# (PT::Bullet consumers) compile Bullet's inline code with the libraries' ISA; harness TUs never see it (PTFlagProfiles.cmake).
+if(PT_ARCH_BULLET)
+	pt_apply_arch(ARCH ${PT_ARCH_BULLET} SCOPE PUBLIC TARGETS ${_pt_bullet_targets})
+endif()
 
 add_library(pt_bullet INTERFACE)
 add_library(PT::Bullet ALIAS pt_bullet)

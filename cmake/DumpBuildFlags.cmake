@@ -78,10 +78,28 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
 			endif()
 		endif()
 		configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/PTBuildInfo.h.in" "${CMAKE_BINARY_DIR}/Generated/PTBuildInfo.h" @ONLY)
+		# M7: the harness commit at build time (Generated/PTGitInfo.h, cmake/GitInfo.cmake), re-generated when git's HEAD, index
+		# or HEAD log change; the bench manifest records it (the configure-time PT_BUILD_GIT_SHA above stays for the viewer).
+		set(_git_header "${CMAKE_BINARY_DIR}/Generated/PTGitInfo.h")
+		set(_git_depends "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/GitInfo.cmake")
+		foreach(_git_file HEAD index logs/HEAD)
+			if(EXISTS "${CMAKE_SOURCE_DIR}/.git/${_git_file}")
+				list(APPEND _git_depends "${CMAKE_SOURCE_DIR}/.git/${_git_file}")
+			endif()
+		endforeach()
+		add_custom_command(
+			OUTPUT "${_git_header}"
+			COMMAND "${CMAKE_COMMAND}" "-DPT_SOURCE_DIR=${CMAKE_SOURCE_DIR}" "-DPT_OUT_HEADER=${_git_header}" "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+				-P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/GitInfo.cmake"
+			DEPENDS ${_git_depends}
+			COMMENT "Recording the harness commit (PTGitInfo.h)"
+			VERBATIM)
+		add_custom_target(PtGitInfo ALL DEPENDS "${_git_header}")
+		set_property(TARGET PtGitInfo PROPERTY FOLDER "PhysicsTest/Build")
 		add_library(pt_build_info INTERFACE)
 		add_library(PT::BuildInfo ALIAS pt_build_info)
 		target_include_directories(pt_build_info INTERFACE "${CMAKE_BINARY_DIR}/Generated")
-		add_dependencies(pt_build_info PtBuildFlags)   # followed transitively by consumers (CMake >= 3.19)
+		add_dependencies(pt_build_info PtBuildFlags PtGitInfo)   # followed transitively by consumers (CMake >= 3.19)
 	endfunction()
 	return()
 endif()
@@ -136,6 +154,15 @@ foreach(_g IN LISTS _groups)
 endforeach()
 set(_tu_lines "")
 set(_violations "")
+# Targets whose facts the generated header carries for the bench's G0 preflight (M7): the backend adapters, the Null DLL and
+# the bench exe itself (a harness TU: never /arch).
+set(_g0_targets PtBackendNull PtBackend_Null PtBackendJolt PtBackendBullet PtBackendPhysX PhysicsTestBench)
+foreach(_t IN LISTS _g0_targets)
+	set(_g0_n_${_t} 0)
+	foreach(_k arch fp crt idl exp)
+		set(_g0_${_t}_${_k} "")
+	endforeach()
+endforeach()
 set(_physx_configs "")
 set(_jolt_defines "")
 set(_bullet_sdk_signatures "")
@@ -288,6 +315,10 @@ macro(_pt_process_tu)
 	else()
 		set(_links_jolt 0)
 	endif()
+	# PhysX / Bullet consumers (M7, MatchedAVX2): a harness-side TU compiled against PhysX or Bullet (the backend adapters, the
+	# SDK smoke programs) carries that SDK's /arch (PUBLIC on the SDK targets, PTFlagProfiles.cmake).
+	string(FIND "${_cmd}" "physx-src" _physx_pos)
+	string(FIND "${_cmd}" "bullet3-src" _bullet_pos)
 
 	# Normalised command hash: identical flags in two build trees (e.g. PhysX on/off) give identical hashes.
 	set(_norm "${_cmd}")
@@ -299,6 +330,10 @@ macro(_pt_process_tu)
 	# Expectations.
 	if(_group STREQUAL "harness" AND _links_jolt)
 		set(_exp_arch "${_exp_arch_jolt_consumer}")
+	elseif(_group STREQUAL "harness" AND _physx_pos GREATER -1)
+		set(_exp_arch "${_exp_arch_sdk_physx}")
+	elseif(_group STREQUAL "harness" AND _bullet_pos GREATER -1)
+		set(_exp_arch "${_exp_arch_sdk_bullet}")
 	else()
 		set(_exp_arch "${_exp_arch_${_group}}")
 	endif()
@@ -384,6 +419,28 @@ macro(_pt_process_tu)
 			list(APPEND _bullet_sdk_signatures "${_bt_signature}")
 		else()
 			list(APPEND _bullet_consumers "${_file_rel}|${_bt_signature}")
+		endif()
+	endif()
+
+	# G0 facts per target (M7): the bench's preflight compares a backend adapter's runtime self-report (PtBuildReport.h)
+	# with what compile_commands.json says about the same adapter target, and both with the flag profile.
+	if(_target IN_LIST _g0_targets)
+		math(EXPR _g0_n_${_target} "${_g0_n_${_target}} + 1")
+		foreach(_k arch fp crt idl)
+			set(_v "${_${_k}}")
+			if(_v STREQUAL "")
+				set(_v "none")
+			endif()
+			if(NOT _v IN_LIST _g0_${_target}_${_k})
+				list(APPEND _g0_${_target}_${_k} "${_v}")
+			endif()
+		endforeach()
+		set(_v "${_exp_arch}")
+		if(_v STREQUAL "")
+			set(_v "none")
+		endif()
+		if(NOT _v IN_LIST _g0_${_target}_exp)
+			list(APPEND _g0_${_target}_exp "${_v}")
 		endif()
 	endif()
 
@@ -553,12 +610,68 @@ ${_tu_lines}  ]
 ")
 _pt_write_if_different("${PT_OUT_JSON}" "${_json_text}")
 file(SHA256 "${PT_OUT_JSON}" _json_sha)
+
+# G0 facts (M7): one compact JSON object, embedded as a string literal so that the bench needs no file at run time.
+#   {"flag_profile":..,"configuration":..,"violations":n,"physx_config":[..],
+#    "groups":{"sdk.jolt":{"arch":[..],"fp":[..],"crt":[..],"idl":[..],"expect_arch":".."},..},
+#    "targets":{"PtBackendJolt":{"tu":n,"arch":[..],"fp":[..],"crt":[..],"idl":[..],"expect_arch":[..]},..}}
+set(_g0_groups "")
+foreach(_g sdk_jolt sdk_bullet sdk_physx harness)
+	if(_n_${_g} EQUAL 0)
+		continue()
+	endif()
+	string(REPLACE "_" "." _gname "${_g}")
+	set(_gjson "\"tu\":${_n_${_g}}")
+	foreach(_k arch fp crt idl)
+		set(_distinct ${_h_${_g}_${_k}})
+		list(REMOVE_DUPLICATES _distinct)
+		_pt_json_array(_arr ${_distinct})
+		string(APPEND _gjson ",\"${_k}\":${_arr}")
+	endforeach()
+	if(_g STREQUAL "harness")
+		set(_ea "${_exp_arch_harness}")
+	else()
+		set(_ea "${_exp_arch_${_g}}")
+	endif()
+	if(_ea STREQUAL "")
+		set(_ea "none")
+	endif()
+	string(APPEND _gjson ",\"expect_arch\":\"${_ea}\"")
+	if(_g0_groups)
+		string(APPEND _g0_groups ",")
+	endif()
+	string(APPEND _g0_groups "\"${_gname}\":{${_gjson}}")
+endforeach()
+set(_g0_target_json "")
+foreach(_t IN LISTS _g0_targets)
+	if(_g0_n_${_t} EQUAL 0)
+		continue()
+	endif()
+	set(_tj "\"tu\":${_g0_n_${_t}}")
+	foreach(_k arch fp crt idl)
+		_pt_json_array(_arr ${_g0_${_t}_${_k}})
+		string(APPEND _tj ",\"${_k}\":${_arr}")
+	endforeach()
+	_pt_json_array(_arr ${_g0_${_t}_exp})
+	string(APPEND _tj ",\"expect_arch\":${_arr}")
+	if(_g0_target_json)
+		string(APPEND _g0_target_json ",")
+	endif()
+	string(APPEND _g0_target_json "\"${_t}\":{${_tj}}")
+endforeach()
+set(_g0_json "{\"flag_profile\":\"${PT_FLAG_PROFILE}\",\"configuration\":\"${PT_BUILD_TYPE}\",\"violations\":${_violation_count},\"physx_config\":${_physx_json},\"jolt_public_defines\":${_jolt_json},\"groups\":{${_g0_groups}},\"targets\":{${_g0_target_json}}}")
+string(REPLACE "\\" "\\\\" _g0_literal "${_g0_json}")
+string(REPLACE "\"" "\\\"" _g0_literal "${_g0_literal}")
+
 set(_header_text
 "// BuildFlagsSha.h - GENERATED at build time by cmake/DumpBuildFlags.cmake. Do not edit.
 #pragma once
 #define PT_BUILD_FLAGS_SHA256      \"${_json_sha}\"
 #define PT_BUILD_FLAGS_TU_COUNT    ${_tu_count}
 #define PT_BUILD_FLAGS_VIOLATIONS  ${_violation_count}
+// G0 facts of this build tree (M7): per SDK group and per adapter target, the /arch, /fp, CRT and iterator debug level of
+// its TUs, and the flag profile's expectation. The bench's preflight compares them with the adapters' runtime self-report.
+#define PT_BUILD_FLAGS_G0_JSON     \"${_g0_literal}\"
 ")
 _pt_write_if_different("${PT_OUT_HEADER}" "${_header_text}")
 message(STATUS "BuildFlags.json: ${_tu_count} TUs, ${_violation_count} violation(s), PhysX config ${_physx_configs}, sha256 ${_json_sha}")

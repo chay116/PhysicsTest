@@ -153,6 +153,9 @@ namespace PhysicsTest
 		// A host's shutdown: TermGamePhys on every loaded module that is initialised and has no live scene, whoever
 		// initialised it (also a module whose InitGamePhys succeeded for an Open that failed later). Returns how many.
 		int32 TermIdleModules();
+		// True when a loaded module (initialised or not) declares any of ModuleFlags (M7: a process that loaded a
+		// PT_MODULE_UE_RUNTIME module ends with TerminateProcess, 02 12.2 step 13).
+		[[nodiscard]] bool AnyLoadedModuleHas(uint32 ModuleFlags) const;
 		// Chaos: -ChaosDll=<path> on the command line or PT_CHAOS_DLL in the environment, and the file exists (M2.5 / M13).
 		[[nodiscard]] static bool IsChaosAvailable(std::string& OutReason);
 		[[nodiscard]] static std::filesystem::path GetExecutableDirectory();

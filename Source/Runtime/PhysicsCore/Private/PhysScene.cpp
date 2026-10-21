@@ -599,7 +599,7 @@ namespace PhysicsTest
 		PtSceneDesc Desc = {};
 		Desc.StructSize = sizeof(PtSceneDesc);
 		Desc.RunMode = static_cast<uint32>(Impl->TestSettings.RunMode);   // Bench / Behavior / Viz = PT_RUN_*
-		Desc.InstrumentFlags = Impl->TestSettings.InstrumentFlags;
+		Desc.InstrumentFlags = Impl->TestSettings.InstrumentFlags | Params.InjectedSceneInstrumentFlags;
 		Desc.SimFlags = (Impl->TestSettings.bAllowSleeping ? PT_SIM_ALLOW_SLEEPING : 0u)
 			| (Impl->Settings.bEnableEnhancedDeterminism ? PT_SIM_ENHANCED_DETERMINISM : 0u);
 		Desc.DebugName = Impl->DebugName.c_str();

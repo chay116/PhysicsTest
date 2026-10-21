@@ -2,10 +2,11 @@
 # codes 2 / 5 / 6, M3).
 #   cmake -DPT_EXE=<exe> -DPT_EXPECT_RC=3 "-DPT_EXPECT_REGEX=<regex>" ["-DPT_ARGS=a|b|c"]
 #         [-DPT_EXPECT_FILE=<path> "-DPT_EXPECT_FILE_REGEX=<regex>"] [-DPT_EXPECT_FILE2=<path> "-DPT_EXPECT_FILE2_REGEX=<regex>"]
-#         -P CheckFatalExit.cmake
+#         [-DPT_EXPECT_FILE3=<path> "-DPT_EXPECT_FILE3_REGEX=<regex>"] ["-DPT_FORBID_REGEX=<regex>"] -P CheckFatalExit.cmake
 # PASS when the exit code equals PT_EXPECT_RC and stdout + stderr match PT_EXPECT_REGEX (and, when given, PT_EXPECT_FILE /
 # PT_EXPECT_FILE2 exist after the run and their text matches PT_EXPECT_FILE_REGEX / PT_EXPECT_FILE2_REGEX; the files are
-# removed before the run). PT_ARGS: arguments separated by '|' (a ';' list would be split by CTest).
+# removed before the run). PT_FORBID_REGEX (M7): stdout + stderr must NOT match it. PT_ARGS: arguments separated by '|' (a ';'
+# list would be split by CTest).
 foreach(_req PT_EXE PT_EXPECT_RC PT_EXPECT_REGEX)
 	if(NOT DEFINED ${_req})
 		message(FATAL_ERROR "CheckFatalExit.cmake: -D${_req}=... is required")
@@ -16,7 +17,7 @@ set(_args "")
 if(DEFINED PT_ARGS)
 	string(REPLACE "|" ";" _args "${PT_ARGS}")
 endif()
-foreach(_file_var PT_EXPECT_FILE PT_EXPECT_FILE2)
+foreach(_file_var PT_EXPECT_FILE PT_EXPECT_FILE2 PT_EXPECT_FILE3)
 	if(DEFINED ${_file_var})
 		file(REMOVE "${${_file_var}}")
 	endif()
@@ -29,7 +30,10 @@ endif()
 if(NOT "${_out}${_err}" MATCHES "${PT_EXPECT_REGEX}")
 	message(FATAL_ERROR "CheckFatalExit: output does not match /${PT_EXPECT_REGEX}/")
 endif()
-foreach(_file_var PT_EXPECT_FILE PT_EXPECT_FILE2)
+if(DEFINED PT_FORBID_REGEX AND "${_out}${_err}" MATCHES "${PT_FORBID_REGEX}")
+	message(FATAL_ERROR "CheckFatalExit: output matches the forbidden /${PT_FORBID_REGEX}/")
+endif()
+foreach(_file_var PT_EXPECT_FILE PT_EXPECT_FILE2 PT_EXPECT_FILE3)
 	if(NOT DEFINED ${_file_var})
 		continue()
 	endif()

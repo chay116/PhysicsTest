@@ -49,6 +49,8 @@
 #pragma once
 
 #include "ConformanceGate.h"
+#include "Physics/EffectiveSettings.h"
+#include "PhysicsTestScenario.h"
 
 #include <filesystem>
 #include <map>
@@ -69,7 +71,9 @@ namespace PhysicsTest
 		// 3: M6 round 1 (G6 nearly zero writes against command.nearly_zero_velocity_wakes; -InjectEngineErrorBits reaches G12).
 		// 4: M6 round 2 (G3 accepts the narrow phase at the start-of-step or the predicted pose; G3 ties ACTIVE and the normal
 		//    impulse one way only, G3.normal_impulse_eps; S05 version 2 with TouchGap; conformance.json post-run registrations).
-		inline constexpr int32 GateSuiteVersion = 4;
+		// 5: M7 (G3 checks the optional contact.point_pose declaration against the inferred pose; G9 reads PhysX threads.workers
+		//    as the dispatcher's T workers; the G9 comparison is shared with the bench preflight).
+		inline constexpr int32 GateSuiteVersion = 6;
 
 		// One override of a registered value: the most specific match wins (engine + variant + profile > engine + variant >
 		// engine + profile > engine > default). Engine is the registry backend name (Null, NullDll, Jolt, Bullet, PhysX).
@@ -117,6 +121,12 @@ namespace PhysicsTest
 			double Abs = 1e-9;
 			std::string Unchecked;   // the reason this READBACK key has no resolved counterpart
 			std::string Reason;      // why the expectation is what it is
+			// M7: the scenes whose geometry the expectation was derived for ("scene": one name or a list, e.g. the performance
+			// scenes built of the same 100 cm cubes: a margin or a contact distance). Empty = scene independent. The bench
+			// preflight skips such a rule on another scene (with a note); the G9 gate itself always runs on M3.BoxPile 1k. A
+			// rule's "by_scene": { "<scene>": { rule } } gives one more scene its own expectation (M7 fix round 0: M2b's 200 cm
+			// cubes); the loader stores it as the key "<key>@<scene>" of the same scope and FindReadbackRule prefers it.
+			std::vector<std::string> Scenes;
 		};
 
 		class FTolerances
@@ -137,8 +147,10 @@ namespace PhysicsTest
 			// key: what still waits for the lead's sign-off is visible in one list (ToleranceFileIsComplete prints it).
 			[[nodiscard]] std::vector<std::string> ListPostRunRegistrations() const;
 			[[nodiscard]] bool Has(std::string_view Gate, std::string_view Check) const;
-			// The G9 rule of Key for Engine / Variant: "<Engine>.<Variant>" first, then "<Engine>", then "*". nullptr = none.
-			[[nodiscard]] const FReadbackRule* FindReadbackRule(std::string_view Engine, std::string_view Variant, std::string_view Key) const;
+			// The G9 rule of Key for Engine / Variant: "<Engine>.<Variant>" first, then "<Engine>", then "*"; in each scope the
+			// rule of Scene ("<Key>@<Scene>", from "by_scene") before the plain one. nullptr = none.
+			[[nodiscard]] const FReadbackRule* FindReadbackRule(std::string_view Engine, std::string_view Variant, std::string_view Key,
+				std::string_view Scene = {}) const;
 			// The registered Skip of Gate for the target (most specific match), or nullptr: an unregistered Skip fails the gate.
 			[[nodiscard]] const FAllowedSkip* FindAllowedSkip(std::string_view Gate, std::string_view Engine, std::string_view Variant,
 				std::string_view Profile) const;
@@ -147,6 +159,8 @@ namespace PhysicsTest
 			[[nodiscard]] int32 GetVersion() const { return Version; }
 
 		private:
+			bool LoadTextChecked(std::string_view Text, const std::string& DisplayName, std::string& OutError);
+
 			std::map<std::string, FToleranceEntry, std::less<>> Entries;                                         // "G1.z60_abs_cm"
 			std::map<std::string, std::map<std::string, FReadbackRule, std::less<>>, std::less<>> ReadbackRules;   // scope -> key -> rule
 			std::map<std::string, std::vector<FAllowedSkip>, std::less<>> AllowedSkips;                          // gate -> skips
@@ -202,5 +216,31 @@ namespace PhysicsTest
 		// unavailable, module busy with other init options).
 		bool RunPhysicsGates(const FGateTarget& Target, const std::vector<std::string>& GateIds, std::vector<FGateReport>& OutReports,
 			std::string& OutError);
+
+		// What a G9 expectation is resolved against: the configuration of the run, its scenario and resolved parameters
+		// (capacity rules) and dt_engine (the "1000dt" restitution mapping).
+		struct FReadbackContext
+		{
+			const FResolvedPhysicsConfig* Config = nullptr;
+			const IPhysicsTestScenario* Scenario = nullptr;
+			const FScenarioParams* Params = nullptr;
+			double DtEngine = 0.0;
+			// M7 (the bench preflight on any scene): false when the scene pins body fields itself (the gate scenes pin damping 0,
+			// gravity off, ...) - the rules whose expectation is a body-template value of the profile (profile:linear_damping,
+			// profile:max_angular_velocity, profile:gyroscopic, profile:ccd) then have nothing to compare and are skipped with a
+			// note. True for the performance scenes, which author every body from the profile's template, and for G9's
+			// M3.BoxPile 1k.
+			bool bSceneUsesProfileBodyDefaults = true;
+			// The scene's dynamic bodies; 0 (P0.EmptyStep) skips the keys that aggregate over dynamic bodies and therefore read
+			// back no canonical value. -1 = unknown (G9's own scene).
+			int32 NumDynamicBodies = -1;
+		};
+
+		// The G9 comparison on effective settings the caller already holds (M7: the bench preflight runs it on the scene of
+		// the run itself, 02 12.2 step 7; G9 on M3.BoxPile 1k). Every READBACK key not in SkipKeys needs a registered rule
+		// (tolerances.json gates.G9.readback) and must equal its resolved value; bRequireNoWrapping adds shape.wrapping = 0.
+		// SkipKeys: keys another gate owns (the preflight leaves listeners.installed and the drawer keys to G10a).
+		void CheckEffectiveReadback(const FGateTarget& Target, const FReadbackContext& Context, const std::vector<FEffectiveSetting>& Settings,
+			const std::vector<std::string>& SkipKeys, bool bRequireNoWrapping, const std::string& SceneLabel, FGateReport& Report);
 	}
 }

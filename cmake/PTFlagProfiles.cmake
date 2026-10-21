@@ -1,9 +1,13 @@
 # PTFlagProfiles.cmake - build flag profiles (02_Architecture 4.2, DL12).
 #
-#   Profile      | Jolt SDK + Jolt consumers | PhysX / Bullet SDK + adapters | harness
-#   Shipped      | /arch:AVX2 (forced)       | vendor default (SSE2)         | no /arch
-#   MatchedAVX2  | /arch:AVX2                | /arch:AVX2 via pt_apply_arch  | no /arch     <- M7 (test-avx2 preset)
+#   Profile      | Jolt SDK + Jolt consumers | PhysX / Bullet SDK + their consumers (adapters) | harness
+#   Shipped      | /arch:AVX2 (forced)       | vendor default (SSE2)                         | no /arch
+#   MatchedAVX2  | /arch:AVX2                | /arch:AVX2 (PUBLIC on the SDK targets, M7)    | no /arch     <- test-avx2 preset
 #
+# MatchedAVX2 (M7, 02 4.2, DL12): every SDK and every TU that compiles against an SDK (the backend adapters, the SDK smoke
+# programs) is /arch:AVX2, exactly as Jolt is in both profiles; harness TUs never are, so desc_sha256 does not depend on
+# the profile. PhysX.cmake / PtBullet.cmake add the option PUBLIC on the SDK targets (like Jolt.cmake), so the adapters,
+# which link the SDK PRIVATE, get it and nothing above them does (CTest PhysicsTest.Probe.HarnessSdkIsolation).
 # The expectations below are consumed by DumpBuildFlags.cmake, which flags every TU that deviates.
 include_guard(GLOBAL)
 
@@ -12,7 +16,9 @@ if(PT_FLAG_PROFILE STREQUAL "Shipped")
 	set(PT_ARCH_PHYSX  "")
 	set(PT_ARCH_BULLET "")
 elseif(PT_FLAG_PROFILE STREQUAL "MatchedAVX2")
-	message(FATAL_ERROR "PT_FLAG_PROFILE=MatchedAVX2 arrives with the test-avx2 preset in M7 (docs/03_WorkPlan.md).")
+	set(PT_ARCH_JOLT   "AVX2")
+	set(PT_ARCH_PHYSX  "AVX2")
+	set(PT_ARCH_BULLET "AVX2")
 else()
 	message(FATAL_ERROR "Unknown PT_FLAG_PROFILE='${PT_FLAG_PROFILE}' (expected Shipped or MatchedAVX2)")
 endif()

@@ -1,8 +1,9 @@
-# PhysicsTestBench.exe - the minimal bench exe of M3 (02_Architecture 4.5, 12; 03_WorkPlan M3). Links PT::Benchmark, the
+# PhysicsTestBench.exe - the bench exe (02_Architecture 4.5, 12; 03_WorkPlan M3 minimal, M6 -Conformance, M7 full). Links PT::Benchmark, the
 # generated backend registry and every scenario (pt_link_scenarios: /WHOLEARCHIVE). Never a renderer: the CTest probe
 # PhysicsTest.Probe.BenchNoRenderer checks that the exe imports neither d3d11.dll nor dxgi.dll.
+# AllocationHook.cpp replaces the global operator new / delete of this exe (M7: the timed loop's allocation count).
 pt_add_program(PhysicsTestBench
-	SOURCES Private/PhysicsTestBenchMain.cpp
+	SOURCES Private/PhysicsTestBenchMain.cpp Private/AllocationHook.cpp
 	DEPS PT::Core PT::Benchmark PT::BackendRegistry PT::BuildInfo)
 pt_link_scenarios(PhysicsTestBench)
 # The linker map feeds PhysicsTest.Probe.AdapterComdats: the timing exe must not run an AVX2 adapter copy of a COMDAT the
@@ -49,102 +50,270 @@ pt_add_script_test(PhysicsTest.Bench.ConformanceG12Injected SCRIPT "${CMAKE_SOUR
 		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ConformanceG12Injected/conformance.json"
 		"-DPT_EXPECT_FILE_REGEX=.result.: .fail.,.*.injected_engine_error_bits.: 1,.*.id.: .G12.,.*.result.: .Fail."
 	LABELS "bench")
-# S08.StartAsleep means something only with sleeping allowed: the bench refuses it under Normalized (exit 2).
-pt_add_script_test(PhysicsTest.Bench.ExitSceneNeedsSleeping SCRIPT "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=needs a profile with sleeping allowed"
-		"-DPT_ARGS=-Backend=Null|-Scenario=S08.StartAsleep|-Profile=Normalized"
-	LABELS "bench")
-
-# Exit codes (02 12.2): 6 no backend, 2 an invalid command line / scenario / parameter / engine option (the last writes
-# manifest.json with status preflight_failed) or HashEvery / CountersEvery > 0 (M7 recorder), 5 a capacity overflow (the
-# Jolt temp block forced to 1 MiB overflows on M3.BoxPile 1k: the heap fallback becomes engine error bit 0x100), 3 an
-# engine error bit outside the backend's errors.capacity_bits (driven through the exe by the test-only
-# -InjectEngineErrorBits; it also wins over a capacity bit of the same run). An ABI failure after the preflight stops the
-# process through Fatal (3), whose exit code PhysicsTest.Probe.NegativeScaleFatal checks.
+# Exit codes (02 12.2, M7): every path leaves exit.json in the run directory with the code it intends (the M8 runner trusts
+# it over the process exit code). 6 no backend; 2 an invalid command line / scenario / parameter (category usage), an engine
+# option the backend rejects or a failed preflight gate (category preflight, manifest.json status preflight_failed); 5 a
+# capacity overflow (the Jolt temp block forced to 1 MiB overflows on M3.BoxPile 1k: the heap fallback becomes engine error
+# bit 0x100); 3 an engine error bit outside the backend's errors.capacity_bits (the test-only -InjectEngineErrorBits; it also
+# wins over a capacity bit of the same run) and a Fatal (the hook writes exit.json first: -InjectFatal); 4 a contaminated
+# host (PhysicsTest.Bench.ExitContaminated). Runs that reach the loop pass -HostCheck=record -PreRoll=0: parallel CTest
+# processes share CPU 0 (exit 4 is its own test) and timing is not what these tests check.
 set(_pt_exit_script "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake")
+set(_pt_bench_dir "${CMAKE_BINARY_DIR}/_bench")
+set(_pt_ctest_run_args "-HostCheck=record|-PreRoll=0")
 if(PT_WITH_JOLT)
 	set(_pt_bench_option_backend Jolt)
 else()
 	set(_pt_bench_option_backend Null)
 endif()
-pt_add_script_test(PhysicsTest.Bench.ExitBackendUnavailable SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=6 "-DPT_EXPECT_REGEX=is not available" "-DPT_ARGS=-Backend=NoSuchEngine|-Scenario=S00.FreeFall"
-	LABELS "bench")
-pt_add_script_test(PhysicsTest.Bench.ExitBadCommandLine SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=-Threads=4x must be an integer" "-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Threads=4x"
-	LABELS "bench")
-pt_add_script_test(PhysicsTest.Bench.ExitUnknownScenario SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=unknown scenario 'NoSuch.Scene'" "-DPT_ARGS=-Backend=Null|-Scenario=NoSuch.Scene"
-	LABELS "bench")
-pt_add_script_test(PhysicsTest.Bench.ExitUnknownParam SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=has no parameter 'Count'" "-DPT_ARGS=-Backend=Null|-Scenario=M3.BoxPile|-Param:Count=3"
-	LABELS "bench")
-pt_add_script_test(PhysicsTest.Bench.ExitBadSeed SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=Seed=abc is not a decimal 32-bit integer" "-DPT_ARGS=-Backend=Null|-Scenario=M3.BoxPile|-Param:Seed=abc"
-	LABELS "bench")
+
+# pt_add_bench_exit_test(<Name> <rc> <stdout regex> <exit.json status> <args...>): the bench with -Out=_bench/<Name> must exit
+# <rc>, print <regex> and leave exit.json with "exit_code": <rc> and "status": "<status>" (EXIT_REGEX: more of exit.json);
+# MANIFEST_REGEX checks manifest.json, TEARDOWN_REGEX teardown.json.
+function(pt_add_bench_exit_test Name Rc Regex Status)
+	cmake_parse_arguments(PARSE_ARGV 4 Arg "" "MANIFEST_REGEX;FORBID_REGEX;EXIT_REGEX;TEARDOWN_REGEX" "ARGS;ENVIRONMENT")
+	set(_dir "${_pt_bench_dir}/${Name}")
+	string(REPLACE ";" "|" _args "${Arg_ARGS}")
+	set(_exit_regex ".exit_code.: ${Rc},.*.status.: .${Status}.")
+	if(Arg_EXIT_REGEX)
+		string(APPEND _exit_regex ".*${Arg_EXIT_REGEX}")
+	endif()
+	set(_script_args "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_EXPECT_RC=${Rc}" "-DPT_EXPECT_REGEX=${Regex}" "-DPT_ARGS=${_args}|-Out=${_dir}"
+		"-DPT_EXPECT_FILE=${_dir}/exit.json" "-DPT_EXPECT_FILE_REGEX=${_exit_regex}")
+	if(Arg_MANIFEST_REGEX)
+		list(APPEND _script_args "-DPT_EXPECT_FILE2=${_dir}/manifest.json" "-DPT_EXPECT_FILE2_REGEX=${Arg_MANIFEST_REGEX}")
+	endif()
+	if(Arg_TEARDOWN_REGEX)
+		list(APPEND _script_args "-DPT_EXPECT_FILE3=${_dir}/teardown.json" "-DPT_EXPECT_FILE3_REGEX=${Arg_TEARDOWN_REGEX}")
+	endif()
+	if(Arg_FORBID_REGEX)
+		list(APPEND _script_args "-DPT_FORBID_REGEX=${Arg_FORBID_REGEX}")
+	endif()
+	pt_add_script_test(PhysicsTest.Bench.${Name} SCRIPT "${_pt_exit_script}" ARGS ${_script_args} LABELS "bench")
+	if(Arg_ENVIRONMENT)
+		set_tests_properties(PhysicsTest.Bench.${Name} PROPERTIES ENVIRONMENT "${Arg_ENVIRONMENT}")
+	endif()
+endfunction()
+
+# S08.StartAsleep means something only with sleeping allowed: the bench refuses it under Normalized (exit 2).
+pt_add_bench_exit_test(ExitSceneNeedsSleeping 2 "needs a profile with sleeping allowed" usage_error
+	ARGS -Backend=Null -Scenario=S08.StartAsleep -Profile=Normalized)
+pt_add_bench_exit_test(ExitBackendUnavailable 6 "is not available" backend_unavailable ARGS -Backend=NoSuchEngine -Scenario=S00.FreeFall)
+# A malformed switch is found before the run starts; exit.json still goes to -Out (main writes it, category usage).
+pt_add_bench_exit_test(ExitBadCommandLine 2 "-Threads=4x must be an integer" usage_error ARGS -Backend=Null -Scenario=S00.FreeFall -Threads=4x)
+pt_add_bench_exit_test(ExitUnknownScenario 2 "unknown scenario 'NoSuch.Scene'" usage_error ARGS -Backend=Null -Scenario=NoSuch.Scene)
+pt_add_bench_exit_test(ExitUnknownParam 2 "has no parameter 'Count'" usage_error ARGS -Backend=Null -Scenario=M3.BoxPile -Param:Count=3)
+pt_add_bench_exit_test(ExitBadSeed 2 "Seed=abc is not a decimal 32-bit integer" usage_error ARGS -Backend=Null -Scenario=M3.BoxPile -Param:Seed=abc)
 # An engine key the backend does not know is a configuration error: exit 2 and a manifest (status preflight_failed), not
-# FPhysScene's Fatal (3) without output.
-pt_add_script_test(PhysicsTest.Bench.ExitBadEngineOption SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=rejects the variant's engine options"
-		"-DPT_ARGS=-Backend=${_pt_bench_option_backend}|-Scenario=S00.FreeFall|-ini:PhysicsTest:[PhysicsTest.Backend.${_pt_bench_option_backend}]:NoSuchKey=1|-Out=${CMAKE_BINARY_DIR}/_bench/ExitBadEngineOption"
-		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitBadEngineOption/manifest.json" "-DPT_EXPECT_FILE_REGEX=.status.: .preflight_failed.*.preflight_error.: .engine options"
-	LABELS "bench")
+# FPhysScene's Fatal (3) without output. The manifest has every group (no scene: scene.built false, the scene-derived
+# fields null; M7 fix round 0) and the teardown still runs.
+pt_add_bench_exit_test(ExitBadEngineOption 2 "rejects the variant's engine options" preflight_failed
+	ARGS -Backend=${_pt_bench_option_backend} -Scenario=S00.FreeFall "-ini:PhysicsTest:[PhysicsTest.Backend.${_pt_bench_option_backend}]:NoSuchKey=1"
+	MANIFEST_REGEX ".status.: .preflight_failed.*.preflight_error.: .engine options.*.built.: false,.*.desc_sha256.: null.*.platform.: [{].*.alloc.: [{]"
+	TEARDOWN_REGEX ".term_game_phys.: .PT_OK.")
 # A missing required effective key is a preflight failure: exit 2, Prepare and the frame loop are skipped (no frame in
 # timings.csv), manifest.json says preflight_failed and frames_run 0.
-pt_add_script_test(PhysicsTest.Bench.ExitPreflightMissingKey SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=Prepare and the frame loop are skipped"
-		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-RequireEffectiveKey=no.such.key|-Out=${CMAKE_BINARY_DIR}/_bench/ExitPreflightMissingKey"
-		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitPreflightMissingKey/manifest.json"
-		"-DPT_EXPECT_FILE_REGEX=.status.: .preflight_failed.*.missing_effective_keys.: [[][^]]*no[.]such[.]key.*.frames_run.: 0,"
-	LABELS "bench")
-# Per-frame hashes / counters are the M7 recorder: the M3 runner refuses them instead of writing a manifest that claims them.
-pt_add_script_test(PhysicsTest.Bench.ExitHashEvery SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=need the M7 recorder"
-		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-ini:PhysicsTest:[/Script/PhysicsTest.PhysicsTestSettings]:HashEvery=1"
-	LABELS "bench")
-# Headline eligibility (M4): a run that is not FixedStep / RunMode=Bench / uninstrumented still runs (exit 0), but the
-# manifest says headline_eligible false with the reason; a default run is eligible.
-pt_add_script_test(PhysicsTest.Bench.HeadlineIneligibleViz SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=not headline-eligible: run mode Viz"
-		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Frames=2|-ini:PhysicsTest:[/Script/PhysicsTest.PhysicsTestSettings]:RunMode=Viz|-Out=${CMAKE_BINARY_DIR}/_bench/HeadlineIneligibleViz"
-		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/HeadlineIneligibleViz/manifest.json"
-		"-DPT_EXPECT_FILE_REGEX=.headline_eligible.: false,.*.headline_ineligible_reasons.: [[][^]]*run mode Viz: headline runs are RunMode=Bench"
-	LABELS "bench")
-pt_add_script_test(PhysicsTest.Bench.HeadlineEligibleDefault SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=status ok"
-		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Frames=2|-Out=${CMAKE_BINARY_DIR}/_bench/HeadlineEligibleDefault"
-		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/HeadlineEligibleDefault/manifest.json"
-		"-DPT_EXPECT_FILE_REGEX=.headline_eligible.: true,.*.headline_ineligible_reasons.: [[][]]"
-	LABELS "bench")
+pt_add_bench_exit_test(ExitPreflightMissingKey 2 "Prepare and the frame loop are skipped" preflight_failed
+	ARGS -Backend=Null -Scenario=S00.FreeFall -RequireEffectiveKey=no.such.key
+	MANIFEST_REGEX ".status.: .preflight_failed.*.missing_effective_keys.: [[][^]]*no[.]such[.]key.*.frames_run.: 0,")
 # An engine error bit the backend does not declare as a capacity bit: exit 3, manifest status engine_error.
-pt_add_script_test(PhysicsTest.Bench.ExitEngineError SCRIPT "${_pt_exit_script}"
-	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=3 "-DPT_EXPECT_REGEX=status engine_error"
-		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Frames=2|-InjectEngineErrorBits=0x200|-Out=${CMAKE_BINARY_DIR}/_bench/ExitEngineError"
-		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitEngineError/manifest.json"
-		"-DPT_EXPECT_FILE_REGEX=.status.: .engine_error.*.injected_engine_error_bits.: 512.*.capacity_error_bits.: 0,.*.other_error_bits.: 512"
-	LABELS "bench")
+pt_add_bench_exit_test(ExitEngineError 3 "status engine_error" engine_error
+	ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=2 -InjectEngineErrorBits=0x200 -HostCheck=record -PreRoll=0
+	MANIFEST_REGEX ".status.: .engine_error.*.test_injections.: [{][^}]*.engine_error_bits.: 512.*.capacity_error_bits.: 0,.*.other_error_bits.: 512")
+# M7: a Fatal after the preflight (-InjectFatal) ends the process with 3, and the Fatal hook has written exit.json first.
+pt_add_bench_exit_test(ExitFatal 3 "Fatal: test-only -InjectFatal" fatal ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=2 -InjectFatal -HostCheck=record -PreRoll=0)
+# M7 fix round 0: a Fatal in the teardown, after exit.json, never rewrites it (DL52, docs/TimingContract.md 1): teardown.json
+# records the Fatal and the process ends with the run's own code (0) through TerminateProcess.
+pt_add_bench_exit_test(ExitTeardownFatal 0 "TerminateProcess[(]GetCurrentProcess[(][)], 0[)]: a Fatal during the teardown" ok
+	ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=2 -InjectTeardownFatal ${_pt_ctest_run_args}
+	MANIFEST_REGEX ".status.: .ok."
+	TEARDOWN_REGEX ".fatal.: .LogPhysicsBench: Fatal: test-only -InjectTeardownFatal.*.terminate_process.: true")
+# M7 fix round 0: -Conformance leaves exit.json also when it stops before any gate (here: no such backend).
+pt_add_bench_exit_test(ConformanceBackendUnavailable 6 "is not available in this build" backend_unavailable ARGS -Conformance -Backend=NoSuchEngine)
 if(PT_WITH_JOLT)
-	pt_add_script_test(PhysicsTest.Bench.ExitCapacity SCRIPT "${_pt_exit_script}"
-		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=5 "-DPT_EXPECT_REGEX=status capacity_exceeded"
-			"-DPT_ARGS=-Backend=Jolt|-Scenario=M3.BoxPile|-Frames=5|-ini:PhysicsTest:[PhysicsTest.Backend.Jolt]:TempAllocatorBytes=1048576|-Out=${CMAKE_BINARY_DIR}/_bench/ExitCapacity"
-			"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitCapacity/manifest.json"
-			"-DPT_EXPECT_FILE_REGEX=.status.: .capacity_exceeded.*.capacity_error_bits_declared.: 263,.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 0"
-		LABELS "bench")
+	pt_add_bench_exit_test(ExitCapacity 5 "status capacity_exceeded" capacity_exceeded
+		ARGS -Backend=Jolt -Scenario=M3.BoxPile -Frames=5 "-ini:PhysicsTest:[PhysicsTest.Backend.Jolt]:TempAllocatorBytes=1048576" -HostCheck=record -PreRoll=0
+		MANIFEST_REGEX ".status.: .capacity_exceeded.*.capacity_error_bits_declared.: 263,.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 0")
 	# Both kinds in one run: the engine error wins (3) and the manifest keeps the capacity bits.
-	pt_add_script_test(PhysicsTest.Bench.ExitEngineErrorOverCapacity SCRIPT "${_pt_exit_script}"
-		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=3 "-DPT_EXPECT_REGEX=status engine_error"
-			"-DPT_ARGS=-Backend=Jolt|-Scenario=M3.BoxPile|-Frames=5|-ini:PhysicsTest:[PhysicsTest.Backend.Jolt]:TempAllocatorBytes=1048576|-InjectEngineErrorBits=0x200|-Out=${CMAKE_BINARY_DIR}/_bench/ExitEngineErrorOverCapacity"
-			"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitEngineErrorOverCapacity/manifest.json"
-			"-DPT_EXPECT_FILE_REGEX=.status.: .engine_error.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 512"
-		LABELS "bench")
+	pt_add_bench_exit_test(ExitEngineErrorOverCapacity 3 "status engine_error" engine_error
+		ARGS -Backend=Jolt -Scenario=M3.BoxPile -Frames=5 "-ini:PhysicsTest:[PhysicsTest.Backend.Jolt]:TempAllocatorBytes=1048576" -InjectEngineErrorBits=0x200
+			-HostCheck=record -PreRoll=0
+		MANIFEST_REGEX ".status.: .engine_error.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 512")
 endif()
 if(PT_WITH_BULLET)
 	# M5: a Bullet manifold pool below the pile's needs falls back to the heap: capacity bit 0x1 (errors.capacity_bits 0x3:
 	# manifold 0x1, collision algorithm 0x2) -> exit 5.
-	pt_add_script_test(PhysicsTest.Bench.ExitCapacityBullet SCRIPT "${_pt_exit_script}"
-		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=5 "-DPT_EXPECT_REGEX=status capacity_exceeded"
-			"-DPT_ARGS=-Backend=Bullet|-Scenario=M3.BoxPile|-Frames=60|-ini:PhysicsTest:[PhysicsTest.Backend.Bullet]:ManifoldPoolSize=64|-Out=${CMAKE_BINARY_DIR}/_bench/ExitCapacityBullet"
-			"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitCapacityBullet/manifest.json"
-			"-DPT_EXPECT_FILE_REGEX=.status.: .capacity_exceeded.*.capacity_error_bits_declared.: 3,.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 0"
+	pt_add_bench_exit_test(ExitCapacityBullet 5 "status capacity_exceeded" capacity_exceeded
+		ARGS -Backend=Bullet -Scenario=M3.BoxPile -Frames=60 "-ini:PhysicsTest:[PhysicsTest.Backend.Bullet]:ManifoldPoolSize=64" -HostCheck=record -PreRoll=0
+		MANIFEST_REGEX ".status.: .capacity_exceeded.*.capacity_error_bits_declared.: 3,.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 0")
+	# 02 9.6: Bullet runs T = 1 only (no PT_CAP_MULTITHREADED); T = 2 is a usage error.
+	pt_add_bench_exit_test(ExitBulletThreads 2 "runs single-threaded only" usage_error ARGS -Backend=Bullet -Scenario=M3.BoxPile -Frames=2 -Threads=2)
+endif()
+# M7: exit 4 - another process's load on the run's CPU (a busy helper pinned to CPU 0 next to a bench run on CPU 0).
+pt_add_script_test(PhysicsTest.Bench.ExitContaminated SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunContaminated.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ExitContaminated" -DPT_HELPER_SECONDS=4
+	LABELS "bench")
+# The busy helper and the contaminated run must not share CPU 0 with other CTest processes in a parallel run.
+set_tests_properties(PhysicsTest.Bench.ExitContaminated PROPERTIES RUN_SERIAL ON)
+# M7 fix round 0 (TimingContract 5.1): the load on CPU 0's SMT sibling counts too - the bench's core is shared.
+pt_add_script_test(PhysicsTest.Bench.ExitContaminatedSibling SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunContaminated.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ExitContaminatedSibling" -DPT_HELPER_SECONDS=4 -DPT_TARGET=sibling
+	LABELS "bench")
+set_tests_properties(PhysicsTest.Bench.ExitContaminatedSibling PROPERTIES RUN_SERIAL ON)
+
+# M7 headline eligibility (03 M7): a tier-0 bench run is headline-valid only when every protocol condition holds; an
+# instrumented run is never refused (G10a) but says timing_valid_for_headline false with the tier as the reason; a viz run
+# likewise. The test preset's default run (no injection, pre-roll, record-only host check) is valid except for the host check.
+pt_add_bench_exit_test(InstrumentCounters 0 "status ok" ok
+	ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=4 -Instrument=counters ${_pt_ctest_run_args}
+	MANIFEST_REGEX ".timing_valid_for_headline.: false,.*.timing_invalid_reasons.: [[][^]]*instrumentation tier counters.*.instrumentation.: [[][^]]*.counters.")
+# M7 fix round 0: the phases tier reads the backend's phase timers every frame (timings.csv solver_ns, 02 9.7) - the Null DLL's
+# test double declares PT_CAP_PHASE_TIMERS with PT_NULL_DLL_PHASE_TIMERS=1; the counter columns stay off (CountersEvery 0).
+pt_add_bench_exit_test(InstrumentPhases 0 "status ok" ok
+	ARGS -Backend=NullDll -Scenario=S00.FreeFall -Frames=4 -Instrument=phases ${_pt_ctest_run_args}
+	MANIFEST_REGEX ".timing_invalid_reasons.: [[][^]]*instrumentation tier phases.*.counters_every.: 0,.*.phases.: [{][^}]*.frames.: 4,[^}]*.null[.]steps."
+	ENVIRONMENT PT_NULL_DLL_PHASE_TIMERS=1)
+pt_add_bench_exit_test(HeadlineIneligibleViz 0 "status ok" ok
+	ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=2 -RunMode=Viz ${_pt_ctest_run_args}
+	MANIFEST_REGEX ".timing_valid_for_headline.: false,.*.timing_invalid_reasons.: [[][^]]*G10a: run mode Viz")
+# Per-frame recorders (M7): HashEvery=1 writes every frame's hashes, StatesEvery=10 states.ptst + states.dtype.json.
+pt_add_script_test(PhysicsTest.Bench.Recorders SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=status ok"
+		"-DPT_ARGS=-Backend=Null|-Scenario=M3.BoxPile|-Frames=20|-HashEvery=1|-StatesEvery=10|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/Recorders"
+		"-DPT_EXPECT_FILE=${_pt_bench_dir}/Recorders/hashes.csv" "-DPT_EXPECT_FILE_REGEX=^frame,h_native,h_quantized,h_state.0,0x[0-9a-f]+,0x[0-9a-f]+,0x[0-9a-f]+.*19,0x[0-9a-f]+,0x[0-9a-f]+,0x[0-9a-f]+"
+		"-DPT_EXPECT_FILE2=${_pt_bench_dir}/Recorders/states.dtype.json" "-DPT_EXPECT_FILE2_REGEX=.body_count.: 1001,.*.frame_count.: 2,"
+		"-DPT_EXPECT_FILE3=${_pt_bench_dir}/Recorders/manifest.json" "-DPT_EXPECT_FILE3_REGEX=.states.: [{][^}]*.frames.: 2,"
+	LABELS "bench")
+
+# G9 / G10a / G0 refusals (03 M7: "G9 불일치가 하나라도 있으면 preflight가 exit 2로 거부한다 (주입 테스트)", "계측 tier 0인 bench
+# 모드 run에 listener나 드로어가 붙어 있으면 preflight가 exit 2로 거부한다 (주입 테스트)"). -InjectPreflightFault corrupts the value a
+# gate reads; -InjectSceneInstrumentFlags=0x8 gives the backend PT_INSTR_CONTACTS behind the run's back, so Jolt / PhysX really
+# install their contact listener in a run that declares tier 0.
+pt_add_bench_exit_test(PreflightG9Injected 2 "preflight G9 .*: Fail" preflight_failed
+	ARGS -Backend=${_pt_bench_option_backend} -Scenario=M3.BoxPile -Frames=2 -InjectPreflightFault=g9:world.gravity
+	MANIFEST_REGEX ".status.: .preflight_failed.*.id.: .G9.,[^}]*.result.: .Fail.")
+pt_add_bench_exit_test(PreflightG10aListenerInjected 2 "a listener is installed in a tier-0 bench run" preflight_failed
+	ARGS -Backend=Null -Scenario=M3.BoxPile -Frames=2 -InjectPreflightFault=listener
+	MANIFEST_REGEX ".id.: .G10a.,[^}]*.result.: .Fail.")
+pt_add_bench_exit_test(PreflightG10aDrawerInjected 2 "a debug drawer is attached in a tier-0 bench run" preflight_failed
+	ARGS -Backend=Null -Scenario=M3.BoxPile -Frames=2 -InjectPreflightFault=drawer
+	MANIFEST_REGEX ".id.: .G10a.,[^}]*.result.: .Fail.")
+pt_add_bench_exit_test(PreflightG0Injected 2 "preflight G0 .*: Fail" preflight_failed
+	ARGS -Backend=Null -Scenario=S00.FreeFall -Frames=2 -InjectPreflightFault=g0
+	MANIFEST_REGEX ".id.: .G0.,[^}]*.result.: .Fail.")
+if(PT_WITH_JOLT)
+	pt_add_bench_exit_test(PreflightG10aRealListener 2 "a listener is installed in a tier-0 bench run" preflight_failed
+		ARGS -Backend=Jolt -Scenario=M3.BoxPile -Frames=2 -InjectSceneInstrumentFlags=0x8
+		MANIFEST_REGEX ".id.: .G10a.,[^}]*.result.: .Fail.")
+endif()
+if(PT_WITH_BULLET)
+	pt_add_bench_exit_test(PreflightG10aBulletDrawerInjected 2 "a debug drawer is attached in a tier-0 bench run: bullet.debug_drawer" preflight_failed
+		ARGS -Backend=Bullet -Scenario=M3.BoxPile -Frames=2 -InjectPreflightFault=drawer
+		MANIFEST_REGEX ".id.: .G10a.,[^}]*.result.: .Fail.")
+endif()
+
+# M7 UE_RUNTIME (02 12.2 step 13; 03 M7: "UE_RUNTIME 플래그를 켠 Null DLL 시험 빌드로 TerminateProcess 경로를 확인한다"): with
+# PT_NULL_DLL_UE_RUNTIME=1 the Null DLL declares PT_MODULE_UE_RUNTIME; the run writes its outputs and exit.json (terminate_process
+# true), then TerminateProcess ends the process, so the DLL never reaches DLL_PROCESS_DETACH (PT_NULL_DLL_REPORT_DETACH=1 prints a
+# line there). The control run without the flag ends normally and prints it.
+pt_add_bench_exit_test(UeRuntimeTerminate 0 "TerminateProcess[(]GetCurrentProcess[(][)], 0[)]" ok
+	ARGS -Backend=NullDll -Scenario=S00.FreeFall -Frames=5 ${_pt_ctest_run_args}
+	MANIFEST_REGEX ".status.: .ok."
+	FORBID_REGEX "DLL_PROCESS_DETACH"
+	ENVIRONMENT PT_NULL_DLL_UE_RUNTIME=1 PT_NULL_DLL_REPORT_DETACH=1)
+# M7 fix round 0: a Fatal with the UE_RUNTIME module loaded writes exit.json (3, terminate_process true) and ends with
+# TerminateProcess too - no DLL_PROCESS_DETACH after a Fatal either.
+pt_add_bench_exit_test(UeRuntimeFatal 3 "TerminateProcess[(]GetCurrentProcess[(][)], 3[)]: a Fatal with a PT_MODULE_UE_RUNTIME module loaded" fatal
+	ARGS -Backend=NullDll -Scenario=S00.FreeFall -Frames=5 -InjectFatal ${_pt_ctest_run_args}
+	EXIT_REGEX ".terminate_process.: true"
+	FORBID_REGEX "DLL_PROCESS_DETACH"
+	ENVIRONMENT PT_NULL_DLL_UE_RUNTIME=1 PT_NULL_DLL_REPORT_DETACH=1)
+pt_add_bench_exit_test(UeRuntimeControl 0 "DLL_PROCESS_DETACH at process exit" ok
+	ARGS -Backend=NullDll -Scenario=S00.FreeFall -Frames=5 ${_pt_ctest_run_args}
+	FORBID_REGEX "TerminateProcess[(]GetCurrentProcess"
+	ENVIRONMENT PT_NULL_DLL_REPORT_DETACH=1)
+pt_add_script_test(PhysicsTest.Bench.UeRuntimeDescribe SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=TerminateProcess[(]GetCurrentProcess[(][)], 0[)]"
+		"-DPT_ARGS=-Describe|-Backend=NullDll" "-DPT_FORBID_REGEX=DLL_PROCESS_DETACH"
+	LABELS "bench")
+set_tests_properties(PhysicsTest.Bench.UeRuntimeDescribe PROPERTIES ENVIRONMENT "PT_NULL_DLL_UE_RUNTIME=1;PT_NULL_DLL_REPORT_DETACH=1")
+
+# M7 multi-process gates on Null, the Null DLL and every SDK backend / variant (short runs; the 600-frame evidence is manual).
+pt_add_script_test(PhysicsTest.Bench.G8Det1 SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunGateMatrix.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/G8" -DPT_GATE=G8 "-DPT_BACKEND=${_pt_bench_backends}" -DPT_FRAMES=60
+	LABELS "bench")
+pt_add_script_test(PhysicsTest.Bench.G11ContactCapture SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunGateMatrix.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/G11" -DPT_GATE=G11 "-DPT_BACKEND=${_pt_bench_backends}" -DPT_FRAMES=60
+	LABELS "bench")
+# M7 fix round 0: the negative controls - -InjectGateFault=4 perturbs one child after frame 4 (G8: the last run, G11: contacts
+# on), so both comparators must report the difference and exit 2.
+pt_add_script_test(PhysicsTest.Bench.G8NegativeControl SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=G8 FAIL h_native differs"
+		"-DPT_ARGS=-Gate=G8|-Runs=2|-Backend=Null|-Scenario=M3.BoxPile|-Frames=10|-InjectGateFault=4|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G8NegativeControl"
+		"-DPT_EXPECT_FILE=${_pt_bench_dir}/G8NegativeControl/gate_g8.json" "-DPT_EXPECT_FILE_REGEX=.result.: .fail.,.*h_state differs.*.injected_gate_fault_frame.: 4"
+		"-DPT_EXPECT_FILE2=${_pt_bench_dir}/G8NegativeControl/exit.json" "-DPT_EXPECT_FILE2_REGEX=.exit_code.: 2,.*.status.: .gate_failed."
+	LABELS "bench")
+pt_add_script_test(PhysicsTest.Bench.G11NegativeControl SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=G11 FAIL hashes.csv differs at data row 6: off '5,"
+		"-DPT_ARGS=-Gate=G11|-Backend=Null|-Scenario=M3.BoxPile|-Frames=10|-InjectGateFault=4|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11NegativeControl"
+		"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11NegativeControl/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .fail.,.*.injected_gate_fault_frame.: 4"
+	LABELS "bench")
+# M7: the preflight passes on every registered scene x backend / variant x profile (S08 / Normalized refused by design).
+pt_add_script_test(PhysicsTest.Bench.PreflightSweep SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunPreflightSweep.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/PreflightSweep" "-DPT_BACKEND=${_pt_bench_backends}"
+	LABELS "bench")
+# M7 thread mapping (02 9.6): Jolt and PhysX T = 1..6 and Bullet T = 1 (T = 2 refused); the masks and engine workers recorded.
+set(_pt_thread_engines "")
+if(PT_WITH_JOLT)
+	list(APPEND _pt_thread_engines Jolt)
+endif()
+if(PT_WITH_PHYSX)
+	list(APPEND _pt_thread_engines PhysX)
+endif()
+string(REPLACE ";" "," _pt_thread_engines "${_pt_thread_engines}")
+if(_pt_thread_engines)
+	pt_add_script_test(PhysicsTest.Bench.ThreadMatrix SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunThreadMatrix.cmake"
+		ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ThreadMatrix" "-DPT_ENGINES=${_pt_thread_engines}"
+			-DPT_BULLET=${PT_WITH_BULLET} -DPT_FRAMES=10
 		LABELS "bench")
+	# Up to six pinned P-cores at HIGH priority: alone, so that it neither starves nor is starved by the other CTest processes.
+	set_tests_properties(PhysicsTest.Bench.ThreadMatrix PROPERTIES RUN_SERIAL ON)
+endif()
+
+# The repository .venv (python -I, jsonschema) for the schema test; the system interpreter otherwise (as Tests/Probes).
+if(EXISTS "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+	set(PT_PYTHON "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+else()
+	find_package(Python3 COMPONENTS Interpreter QUIET)
+	set(PT_PYTHON "${Python3_EXECUTABLE}")
+endif()
+# 03 M7: the manifest of an M3.BoxPile 5k run passes Config/Schemas/manifest.schema.json (jsonschema in the repository .venv,
+# python -I) with the criterion's fields filled; a broken copy must fail (the schema is not vacuous).
+if(PT_PYTHON)
+	set(_pt_schema_backend Null)
+	if(PT_WITH_JOLT)
+		set(_pt_schema_backend Jolt)
+	endif()
+	pt_add_script_test(PhysicsTest.Bench.ManifestSchema SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunManifestSchema.cmake"
+		ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ManifestSchema" "-DPT_PYTHON=${PT_PYTHON}"
+			"-DPT_VALIDATOR=${CMAKE_SOURCE_DIR}/Tools/validate_manifest.py" -DPT_BACKEND=${_pt_schema_backend}
+		LABELS "bench")
+endif()
+
+# M7 fix round 0 (docs/ResultsSchema.md 1): every manifest.json and exit.json the bench tests above wrote validates against
+# Config/Schemas - refused, failed, contaminated and instrumented runs included (the G8 / G11 children too). It runs after them
+# (DEPENDS on every test of this directory); a directory a run of this build did not write keeps its old content or is absent
+# (skipped), so run the whole label, not this test alone.
+if(PT_PYTHON)
+	get_property(_pt_bench_tests DIRECTORY PROPERTY TESTS)
+	set(_pt_manifest_dirs "${_pt_bench_dir}/G8" "${_pt_bench_dir}/G11")
+	foreach(_test IN LISTS _pt_bench_tests)
+		string(REGEX REPLACE "^PhysicsTest[.]Bench[.]" "" _name "${_test}")
+		list(APPEND _pt_manifest_dirs "${_pt_bench_dir}/${_name}")
+	endforeach()
+	string(REPLACE ";" "|" _pt_manifest_dirs_arg "${_pt_manifest_dirs}")
+	pt_add_script_test(PhysicsTest.Bench.ManifestsValidate SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunManifestSchema.cmake"
+		ARGS "-DPT_PYTHON=${PT_PYTHON}" "-DPT_VALIDATOR=${CMAKE_SOURCE_DIR}/Tools/validate_manifest.py" "-DPT_VALIDATE_DIRS=${_pt_manifest_dirs_arg}"
+		LABELS "bench")
+	set_tests_properties(PhysicsTest.Bench.ManifestsValidate PROPERTIES DEPENDS "${_pt_bench_tests}")
 endif()

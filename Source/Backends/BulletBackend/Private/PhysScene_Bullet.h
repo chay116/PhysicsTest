@@ -335,4 +335,10 @@ namespace PhysicsTest::BulletBackend
 	// ANGULAR_MOTION_THRESHOLD of btTransformUtil.h:19 [V]: above this angle per step integrateTransform under-rotates (see the
 	// header comment).
 	inline constexpr double GBulletAngularMotionThreshold = 0.5 * 1.5707963267948966;
+
+	// Bullet's heap traffic while the module is initialised (M7 fix round 0): InitGamePhys installs counting wrappers with
+	// btAlignedAllocSetCustom (every btAlignedAlloc / btAlignedFree goes through them), TermGamePhys restores Bullet's
+	// defaults. Process-wide counts, as PhysX's allocator callback: PtMemoryStats.NumAllocs / NumFrees.
+	int64 GetBulletHeapAllocCount();
+	int64 GetBulletHeapFreeCount();
 }

@@ -1,8 +1,8 @@
 # 씬 카탈로그 (Scenes)
 
-> **작성일:** 2026-10-21 (M3. M6에서 게이트 씬 9개와 §1 `scene_hashes.json`을 더했다)
-> **상태:** M3의 씬 3개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)와 M6의 게이트 씬 9개(`S00d`, `S01`~`S08`, §2.4~§2.12)를 정의한다. 성능 씬(P0, P1, `M2b.Pyramid1240`)은 M7, 거동 씬은 M9에 이 문서에 더한다.
-> **관련 문서:** [02_Architecture.md](02_Architecture.md) §6, §9.5, §12, §14.3 · [03_WorkPlan.md](03_WorkPlan.md) M3, M6, §5.2 · [04_DecisionLog.md](04_DecisionLog.md) DL23, DL34, DL42, DL43 · [Abi.md](Abi.md) · [Progress.md](Progress.md) M6 · `Config/Golden/tolerances.json`, `Config/Golden/scene_hashes.json`
+> **작성일:** 2026-10-21 (M3. M6에서 게이트 씬 9개와 §1 `scene_hashes.json`을, M7에서 성능 씬 3개를 더했다)
+> **상태:** M3의 씬 3개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`), M6의 게이트 씬 9개(`S00d`, `S01`~`S08`, §2.4~§2.12), M7의 성능 씬 3개(`P0.EmptyStep`, `P1.SmallScene`, `M2b.Pyramid1240`, §2.13~§2.15)를 정의한다. 거동 씬은 M9에 이 문서에 더한다.
+> **관련 문서:** [02_Architecture.md](02_Architecture.md) §6, §9.5, §12, §14.3 · [03_WorkPlan.md](03_WorkPlan.md) M3, M6, M7, §5.2 · [04_DecisionLog.md](04_DecisionLog.md) DL23, DL34, DL42, DL43 · [Abi.md](Abi.md) · [TimingContract.md](TimingContract.md) · [Progress.md](Progress.md) M6, M7 · `Config/Golden/tolerances.json`, `Config/Golden/scene_hashes.json`
 > **근거 표기:** **[V]** 직접 빌드·실행해 확인 · **[R]** 추정
 
 이 문서는 방법론 카탈로그의 씬 ID를 하네스가 구현한 정의로 고정한다. 씬 ID는 항상 `ID.Name`으로 적는다 (DL34). 마일스톤 번호와는 관계가 없다 (`M3.BoxPile`은 카탈로그 ID다). 하네스에서만 쓰는 씬은 "카탈로그 확장"으로 표시한다.
@@ -21,7 +21,7 @@
 | 난수 | `FRandomStream`(mt19937_64 + 하네스 [0,1) 매핑). 씬이 `Seed` 파라미터를 선언하면 그 값, 아니면 0x5EED(24301)로 시작한다. 그리기 순서는 씬마다 정의에 적는다 |
 | 파라미터 | `-Param:Name=Value`. 씬이 선언하지 않은 이름이나 허용하지 않은 값은 오류다 (벤치 종료 코드 2). 이름은 대소문자를 구분하지 않는다. 파라미터에는 형이 있다 (`EScenarioParamType`): `text`(허용 값 목록이 있으면 그중 하나)와 `int32`(`-`와 10진 숫자만, 32-bit 범위). `int32` 값은 정규형으로 저장한다 (`024301` → `24301`). 그래서 `Seed=abc`는 오류이고(전에는 `atoi`로 0이 됐다), 같은 seed를 다르게 적어도 `scene_sha256`이 같다. seed는 `IPhysicsTestScenario::GetSeed`로만 읽는다 (M3 수정 라운드 0) |
 | scene_sha256 | 정규 JSON `{"name","params"(모든 선언 파라미터, 정규형, 이름순),"seed","version"}`의 SHA-256 (02 §12.3). `seed`는 `GetSeed`의 값(정수)이라 `Seed` 파라미터가 없는 씬도 기본 seed가 바뀌면 해시가 바뀐다 (M4에서 더함, M3 검토 지적). `scene.json`으로도 쓴다 |
-| desc_sha256의 범위 | 엔진 독립이지만 **빌드 구성에는 독립이 아니다.** 하네스가 계산해 넣는 double(질량·관성, `FRotator` → `FQuat`)이 `/fp:fast`에서 `/Od`(dbg)와 `/O2`(dev, test)의 마지막 1~2 ulp가 다르다 [V]: 정적 바닥의 관성(`0x1.52f506ea62ff3p+51` 대 `…ff4p+51`), `FRotator(20, 0, 30).Quaternion()`, `FTransform(FRotator(0,0,0)).Rotator()`의 Roll 부호(+0 대 −0). 그래서 바닥이 있거나 회전한 바디가 있는 씬(`M1.SingleBoxDrop`, `M3.BoxPile`)은 dbg와 dev/test의 값이 다르다. `S00.FreeFall`(구 하나, 바닥 없음)은 같다. dev와 test는 같다 (같은 `/O2`). 비교는 한 빌드 구성 안에서만 한다 (manifest `scene.desc_sha256_scope`). M7의 "test와 test-avx2의 `desc_sha256`이 같다"는 하네스 플래그가 두 프리셋에서 같고(하네스에 `/arch` 없음) 하네스가 어댑터의 AVX2 COMDAT을 쓰지 않을 때(`PhysicsTest.Probe.AdapterComdats`)만 성립하므로, M7은 두 조건을 함께 확인한다. 정적 바디의 질량·관성을 해시에서 0으로 두는 안은 택하지 않았다: 회전한 바디의 쿼터니언도 다르므로 dbg 문제를 풀지 못하고, 엔진에 넘기는 바이트를 그대로 덮는다는 원칙만 깬다 |
+| desc_sha256의 범위 | 엔진 독립이지만 **빌드 구성에는 독립이 아니다.** 하네스가 계산해 넣는 double(질량·관성, `FRotator` → `FQuat`)이 `/fp:fast`에서 `/Od`(dbg)와 `/O2`(dev, test)의 마지막 1~2 ulp가 다르다 [V]: 정적 바닥의 관성(`0x1.52f506ea62ff3p+51` 대 `…ff4p+51`), `FRotator(20, 0, 30).Quaternion()`, `FTransform(FRotator(0,0,0)).Rotator()`의 Roll 부호(+0 대 −0). 그래서 바닥이 있거나 회전한 바디가 있는 씬(`M1.SingleBoxDrop`, `M3.BoxPile`)은 dbg와 dev/test의 값이 다르다. `S00.FreeFall`(구 하나, 바닥 없음)은 같다. dev와 test는 같다 (같은 `/O2`). 비교는 한 빌드 구성 안에서만 한다 (manifest `scene.desc_sha256_scope`). M7의 "test와 test-avx2의 `desc_sha256`이 같다"는 하네스 플래그가 두 프리셋에서 같고(하네스에 `/arch` 없음) 하네스가 어댑터의 AVX2 COMDAT을 쓰지 않을 때(`PhysicsTest.Probe.AdapterComdats`)만 성립하므로, M7은 두 조건을 함께 확인한다. **M7 [V]:** 두 조건이 test-avx2에서도 통과하고(`Probe.HarnessSdkIsolation`, `Probe.AdapterComdats`), 성능 씬 전부와 `M1.SingleBoxDrop` b(회전한 바디)의 `desc_sha256`이 test·test-avx2 × Null·Jolt·Bullet·PhysX 8 run에서 하나다 (씬·파라미터 8개 × 프로필 2, [Progress.md](Progress.md) M7 §2 기준 11). 정적 바디의 질량·관성을 해시에서 0으로 두는 안은 택하지 않았다: 회전한 바디의 쿼터니언도 다르므로 dbg 문제를 풀지 못하고, 엔진에 넘기는 바이트를 그대로 덮는다는 원칙만 깬다 |
 | 윈도 | 씬이 프레임 윈도를 선언한다 (02 §9.5). frame 0은 통계에서 빼고 따로 보고한다 |
 | 용량 힌트 | 씬이 바디·쌍·접촉 수를 선언하고, 그 값이 `FPhysSceneInitParams`의 힌트가 된다 (02 §9.4). Jolt는 이 값으로 `PhysicsSystem::Init`과 temp allocator 크기를 정한다 |
 | 게이트 씬 상수 | 게이트 씬의 고정값(치수, 질량, 속도, 바디 인덱스)은 `PhysicsTestScenarios/Public/GateScenes.h` 한 곳에 있고, 씬과 게이트(`PhysicsTestConformance/Private/Gates/PhysicsGates.cpp`)가 같은 상수를 쓴다. 그래서 해석 기준값과 씬이 따로 바뀌지 않는다. 게이트 씬은 기준값에 필요한 값(damping 0, 질량, 머티리얼)만 고정하고 나머지(각속도 한계, 반발 임계, sleep 스위치)는 프로필에 맡긴다 (`ScenarioHelpers::MakeGateBodyTemplate`) |
@@ -80,6 +80,8 @@
 | 용량 힌트 | 바디 N + 1, 쌍 16·N + 1024, 접촉 8·N + 1024 |
 | 판정 (03 M3) | `shape.wrapping` = 0 (G9의 전 단계). 1k/5k의 첫 타이밍은 manifest에 "비공식"으로 기록한다 |
 | 측정값 [V] | Jolt, test 프리셋, T = 1, 전원 계획 Balanced, **비공식**: [Progress.md](Progress.md) M3 §2. 600 프레임 동안 엔진 오류 bit 0, temp allocator fallback 0. 같은 exe를 fresh process로 세 번 돌려 마지막 프레임 `h_native`가 같았다 |
+| 배치 코드 (M7) | 배치와 흔들림은 `ScenarioHelpers::SpawnBoxPile(FBoxPileLayout{열, 행, 층})`에 있고 `P1.SmallScene`이 같은 함수를 쓴다. M7에서 옮겼고 `scene_sha256`·`desc_sha256`과 M3의 결정성 해시는 그대로다 |
+| 측정값 (M7) [V] | 10k, test 프리셋, T = 1, 측정 프로토콜(호스트 제어, pre-roll 0.5 s, `-HostCheck=enforce`), **비공식**: `T_frame` 평균 Jolt 12.04 ms, Bullet 24.20 ms, PhysX UE4Compat 8.02 ms, SdkDefault 7.57 ms (헤드라인 1-599). `timing_valid_for_headline` 참, 타이밍 버킷 안 할당 0 |
 
 ### 2.4 `S00d.FreeFallDamped` (카탈로그 확장, 게이트 G1b)
 
@@ -181,11 +183,49 @@
 | 판정 (G6) | 바디 1이 생성 직후와 60 프레임 뒤 모두 Sleeping이고 z가 변하지 않는다 (1e-6 cm). 바디 2는 100 cm 넘게 떨어진다. 그다음 ABI v1.0 결정 1: 60 프레임 잠든 바디 1에 `PT_CMDF_AUTO_WAKE` 없이 `SET_LINEAR_VELOCITY` (100, 0, 0), 0 벡터, `SET_ANGULAR_VELOCITY` (0, 0, 2) rad/s, `SET_BODY_STATE`(STATE_WRITE를 선언하면)를 각각 새 실행에서 쓰고, 다음 스텝에 Dynamic이며 그 속도(0 벡터는 한 스텝의 중력 −g·dt)로 움직인다 (속도 상대 1e-4, 변위 v·dt의 1%). G6의 Normalized 쪽은 `M1.SingleBoxDrop` a를 600 프레임 돌려 잠든 바디-프레임 0을 확인한다 |
 | 측정값 [V] | 모든 엔진: 바디 1 z 500.0000 cm (이동 0), Sleeping. 바디 2는 바닥에 닿는다. Normalized 600 프레임 잠든 바디 0. 속도 쓰기 (M6 수정 라운드 0): 모든 엔진·변형이 깨우고 v.x 100.000000, 0 벡터 v.z −16.333334 cm/s, w.z 2.000000 rad/s; 한 스텝 변위 1.6666 cm (PhysX TGS 1.666626), −0.27222 cm, 회전 0.033333 rad (Null 0.033330 = Chaos 1차 쿼터니언 모델) |
 
+### 2.13 `P0.EmptyStep` (카탈로그 확장, 성능)
+
+| 항목 | 값 |
+|---|---|
+| 종류 / 버전 | Perf / 1, 결정적 |
+| 바디 | 0: 바닥 (§1)뿐. 동적 바디 없음 |
+| 프레임 / 윈도 | 600 / headline 1-599 |
+| 용량 힌트 | `MakePileCapacity(0)`: 바디 1, 쌍 1024, 접촉 1024 |
+| 용도 | 할 일이 없는 프레임의 값: ABI 프레임 호출 4개, 엔진의 스텝당 고정 작업, 빈 상태 pull. M8이 P0, P1, `M3.BoxPile`로 맞추는 오버헤드 모델 t = a + b·N의 절편 a다 (02 §13) |
+| preflight | 동적 바디가 없어 값이 없는 바디 집계 effective 키는 G9가 건너뛴다 (Jolt `sleep.enabled`는 canonical null). [Abi.md](Abi.md) §5.14 M7 메모 |
+| 측정값 [V] | test, T = 1, 측정 프로토콜, **비공식**, `T_frame` 평균 / 중앙값: Null 0.2 / 0.1 µs, Jolt 1.1 / 1.0 µs, Bullet 0.4 / 0.3 µs, PhysX UE4Compat 2.2 / 2.2 µs, SdkDefault 2.1 / 2.0 µs. QPC 눈금이 100 ns라 프레임 값 하나는 눈금 몇 개다. 윈도 평균만 쓴다 (02 §9.3의 배치 측정은 M10 TSC와 함께, [Progress.md](Progress.md) M7 §3) |
+
+### 2.14 `P1.SmallScene(N)` (카탈로그 확장, 성능)
+
+| 항목 | 값 |
+|---|---|
+| 종류 / 버전 | Perf / 1, 혼돈계 |
+| 파라미터 | `N` = `10`(기본) / `100`, `Seed` = 24301 (`int32`) |
+| 배치 | `M3.BoxPile`의 규칙을 작은 N에 쓴다 (`ScenarioHelpers::SpawnBoxPile`): N = 10은 층마다 1 × 1(한 기둥), N = 100은 5 × 2, 10층. 정육면체·질량·간격·흔들림·seed가 `M3.BoxPile`과 같아 상자 하나가 하는 일이 같다 |
+| 바디 | 0: 바닥. 1..N: 한 변 100 cm 정육면체 1000 kg |
+| 프레임 / 윈도 | 600 / headline 1-599, impact 1-179, settled 300-599 |
+| 용량 힌트 | 바디 N + 1, 쌍 16·N + 1024, 접촉 8·N + 1024 |
+| 측정값 [V] | test, T = 1, 측정 프로토콜, **비공식**, `T_frame` 평균: N = 10 Null 0.6, Jolt 11.2, Bullet 14.0, PhysX UE4Compat 10.7, SdkDefault 9.5 µs. N = 100 Null 5.4, Jolt 91.1, Bullet 138.1, PhysX UE4Compat 58.9, SdkDefault 54.6 µs. Normalized에서는 600 프레임 뒤에도 모든 상자가 깨어 있다 (sleep 끔). 마지막 프레임 모양 (Normalized, `-StatesEvery`로 마지막 프레임만 기록): 모두 서 있으면 맨 위 상자 z = 950 cm, 평균 z = 500 cm다. N = 10은 모든 엔진에서 기둥이 선다 (맨 위 z 938.9~948.5 cm, 평균 493.0~499.1 cm. Jolt가 가장 낮은 것은 정지 접촉의 겹침을 허용하기 때문이다: 접촉마다 약 1 cm, 허용치 `mPenetrationSlop` 2 cm, §2.2). N = 100(기둥 10개)은 엔진마다 다르게 무너진다: 평균 z Jolt 493.9, PhysX UE4Compat 498.5, SdkDefault 458.1, Bullet 256.3 cm (혼돈계라 바디별 비교 대상이 아니다) |
+
+### 2.15 `M2b.Pyramid1240` (방법론 카탈로그 M2b, 성능)
+
+| 항목 | 값 |
+|---|---|
+| 종류 / 버전 | Perf / 1, 혼돈계 |
+| 출처 | Jolt PerformanceTest의 `PyramidScene`(JoltPhysics/PerformanceTest/PyramidScene.h:24-43 [V], MIT)을 cm, Z-up, 하네스 데이터 모델로 다시 썼다. 섬 하나가 아주 큰 씬이다 |
+| 배치 | 15층. i층(0 = 맨 아래)에 (15 − i)²개, 모두 1240개. 한 변 200 cm 정육면체, 수평 간격 200 cm(이웃이 면으로 닿는다), 홀수 층은 x·y로 100 cm 어긋난다. i층 중심 z = 100 + 250·i cm (층 사이 50 cm 틈, 맨 아래 층은 바닥 위). Jolt 루프의 (i, j, k) 상자는 x = 100·(−15 + 2j + (i 홀수 ? 1 : 0)), y = 100·(−15 + 2k + (i 홀수 ? 1 : 0)), z = 100·(1 + 2.5i) cm, j·k ∈ [i/2, 15 − (i+1)/2) |
+| 바디 | 0: 바닥. 1..1240: 8000 kg (`bOverrideMass`. Jolt 기본 밀도 1000 kg/m³ × 8 m³), 층 → j → k 순서 |
+| Jolt 씬과 다른 점 (의도) | 머티리얼은 프로필 기본값(`M3.BoxPile`과 같은 규칙), sleep은 프로필을 따른다 (Normalized는 끔 = Jolt `mAllowSleeping = false`와 같다), 박스 convex radius는 변형의 값이다 (Jolt 씬의 0은 M9 변형 `Jolt.SharpBoxes`) |
+| 프레임 / 윈도 | 500 (방법론의 500 스텝) / headline 1-499, impact 1-119, settled 300-499 |
+| 용량 힌트 | 바디 1241, 쌍 16·1240 + 1024, 접촉 8·1240 + 1024 |
+| preflight | 상자 기하의 G9 상수 규칙은 이 씬에도 걸린다 (M7 수정 라운드 0: `tolerances.json`의 `"scene"` 목록). 값이 같은 것: Bullet `shape.box_margin` 4 cm(min(4, 0.1 × 100)), Jolt `shape.box_margin`(ConvexRadius 5 cm < 100), PhysX `contact.speculative_distance` 4 cm와 `physx.contact_offset_min/max` 2 cm(UE4 clamp(0.02 × 100, 2, 8) = 2). 값이 다른 것: Bullet `contact.speculative_distance`는 200 cm 상자의 0.02 × √3 × 100 = 3.464 cm다 (`"by_scene"`). M7 첫 판은 `M3.BoxPile` 상수로 Bullet run을 거부했고, 다음 판은 이 규칙들을 건너뛰기만 했다 |
+| 측정값 [V] | test, T = 1, 측정 프로토콜, **비공식**, `T_frame` 평균: Null 65 µs(충돌 없음), Jolt 6.04 ms, Bullet 7.81 ms, PhysX UE4Compat 3.98 ms, SdkDefault 3.94 ms. 스레드 매핑 (120 프레임, 평균): Jolt T = 1..6 5.46 / 3.82 / 2.97 / 2.48 / 2.18 / 2.03 ms, PhysX 3.69 / 2.41 / 1.86 / 1.57 / 1.30 / 1.21 ms, Bullet T = 1 6.79 ms ("cpu_eff 미검증 (M10)"). 마지막 프레임 모양 (Normalized, 500 프레임): 층 사이 틈 50 cm × 14가 닫히면 맨 위 상자 z = 2900 cm다. 모든 엔진에서 피라미드가 선다: 맨 위 상자 z Jolt 2893.9, Bullet 2899.2, PhysX UE4Compat 2898.5, SdkDefault 2897.0 cm (시작 3600), 맨 아래 층 평균 z 99.90~100.00 cm |
+
 ---
 
 ## 3. 이후 마일스톤에서 더할 씬
 
 | 씬 | 마일스톤 | 메모 |
 |---|---|---|
-| `P0.EmptyStep`, `P1.SmallScene`, `M2b.Pyramid1240` | M7 | 성능 씬 |
+| ~~`P0.EmptyStep`, `P1.SmallScene`, `M2b.Pyramid1240`~~ | M7 | 성능 씬. M7에서 더했다 (§2.13~§2.15) |
 | `M4.InclineFriction`, `M5.BouncingBalls`, `M6a.Pendulum`, `M7.UEDefaults` 등 | M9 | 거동 씬 |

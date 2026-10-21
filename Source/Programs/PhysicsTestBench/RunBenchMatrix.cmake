@@ -3,6 +3,11 @@
 # same for Null and every SDK backend / variant (M5: "desc_sha256이 jolt, bullet, physx 변형 4종에서 씬·프로필마다 같다");
 # shape.wrapping is 0; the timings are marked unofficial. Short runs (PT_FRAMES frames) keep the CTest fast in every
 # preset; the full-length runs are a manual step (docs/Progress.md M3, M5).
+# M7: every run also writes exit.json (exit_code 0, written last), hashes.csv with exactly the final frame (a bench-mode run
+# hashes nothing else, 02 9.1), the manifest schema physicstest.run/2 with the preflight gates G0, G9 and G10a passed and no
+# allocation inside the timed buckets (alloc.tick_new_calls 0, 03 M7). The CTest runs pass -HostCheck=record -PreRoll=0:
+# parallel CTest processes share CPU 0 and would contaminate each other (exit 4); timing is not what this test checks, so
+# their manifests say timing_valid_for_headline false with the reasons.
 #   cmake -DPT_BENCH_EXE=<exe> -DPT_OUT_DIR=<dir> "-DPT_BACKEND=Jolt,Bullet,PhysX/UE4Compat" -DPT_FRAMES=30 -P RunBenchMatrix.cmake
 # PT_BACKEND: a comma list of <Backend> or <Backend>/<Variant> (-BackendProfile=<Variant>); empty = Null only.
 cmake_minimum_required(VERSION 3.25)
@@ -45,7 +50,7 @@ foreach(_profile UEParity Normalized)
 			endif()
 			set(_dir "${PT_OUT_DIR}/${_entry_tag}_${_profile}_${_scene}_${_tag}")
 			execute_process(COMMAND "${PT_BENCH_EXE}" "-Backend=${_backend}" ${_variant_args} "-Profile=${_profile}" "-Scenario=${_scene}" "-Param:${_param}"
-					"-Frames=${PT_FRAMES}" "-Out=${_dir}"
+					"-Frames=${PT_FRAMES}" "-Out=${_dir}" -HostCheck=record -PreRoll=0
 				RESULT_VARIABLE _rc OUTPUT_VARIABLE _stdout ERROR_VARIABLE _stderr)
 			math(EXPR _runs "${_runs} + 1")
 			set(_label "${_entry} ${_profile} ${_scene} ${_param}")
@@ -53,7 +58,7 @@ foreach(_profile UEParity Normalized)
 				list(APPEND _failures "${_label}: exit code ${_rc}\n${_stdout}${_stderr}")
 				continue()
 			endif()
-			foreach(_file timings.csv manifest.json effective_settings.jsonl)
+			foreach(_file timings.csv manifest.json effective_settings.jsonl exit.json hashes.csv teardown.json)
 				if(NOT EXISTS "${_dir}/${_file}")
 					list(APPEND _failures "${_label}: ${_file} missing")
 				endif()
@@ -73,8 +78,51 @@ foreach(_profile UEParity Normalized)
 			_pt_json_get(_headline "${_manifest}" timing_valid_for_headline)
 			_pt_json_get(_desc "${_manifest}" scene desc_sha256)
 			_pt_json_get(_name "${_manifest}" backend name)
-			if(NOT _status STREQUAL "ok" OR NOT _unofficial STREQUAL "ON" OR NOT _headline STREQUAL "OFF")
-				list(APPEND _failures "${_label}: status '${_status}', unofficial '${_unofficial}', timing_valid_for_headline '${_headline}'")
+			_pt_json_get(_schema "${_manifest}" schema)
+			_pt_json_get(_reasons "${_manifest}" timing_invalid_reasons)
+			if(NOT _status STREQUAL "ok" OR NOT _unofficial STREQUAL "ON" OR NOT _headline STREQUAL "OFF" OR NOT _schema STREQUAL "physicstest.run/2"
+					OR NOT _reasons MATCHES "pre-roll shorter")
+				list(APPEND _failures "${_label}: status '${_status}', unofficial '${_unofficial}', timing_valid_for_headline '${_headline}', schema '${_schema}', reasons ${_reasons}")
+			endif()
+			# M7: exit.json (the runner trusts it), the preflight gates, the final-frame hash and the allocation-free timed buckets.
+			if(EXISTS "${_dir}/exit.json")
+				file(READ "${_dir}/exit.json" _exit)
+				_pt_json_get(_exit_code "${_exit}" exit_code)
+				if(NOT _exit_code EQUAL 0)
+					list(APPEND _failures "${_label}: exit.json exit_code '${_exit_code}'")
+				endif()
+			endif()
+			string(JSON _num_gates ERROR_VARIABLE _gates_error LENGTH "${_manifest}" gates)
+			if(_gates_error OR NOT _num_gates EQUAL 3)
+				list(APPEND _failures "${_label}: manifest gates: ${_num_gates} ${_gates_error}")
+			else()
+				foreach(_gate_index RANGE 0 2)
+					_pt_json_get(_gate_id "${_manifest}" gates ${_gate_index} id)
+					_pt_json_get(_gate_result "${_manifest}" gates ${_gate_index} result)
+					if(NOT _gate_result STREQUAL "Pass")
+						list(APPEND _failures "${_label}: preflight ${_gate_id} ${_gate_result}")
+					endif()
+				endforeach()
+			endif()
+			_pt_json_get(_tick_new "${_manifest}" alloc tick_new_calls)
+			_pt_json_get(_hook "${_manifest}" alloc hook_installed)
+			if(NOT _tick_new EQUAL 0 OR NOT _hook STREQUAL "ON")
+				list(APPEND _failures "${_label}: ${_tick_new} allocation(s) inside the timed buckets (hook installed: ${_hook})")
+			endif()
+			# M7 fix round 0: every backend counts its engine's own allocator (PtMemoryStats.NumAllocs; Jolt and Bullet through the
+			# adapters' counting wrappers), so the loop's engine allocations are a number, never null.
+			string(JSON _backend_allocs_type ERROR_VARIABLE _type_error TYPE "${_manifest}" alloc backend_allocs_in_loop)
+			if(_type_error OR NOT _backend_allocs_type STREQUAL "NUMBER")
+				list(APPEND _failures "${_label}: alloc.backend_allocs_in_loop is ${_backend_allocs_type} ${_type_error} (expected a count)")
+			endif()
+			if(EXISTS "${_dir}/hashes.csv")
+				file(STRINGS "${_dir}/hashes.csv" _hash_rows)
+				list(LENGTH _hash_rows _hash_row_count)
+				math(EXPR _last_frame "${PT_FRAMES} - 1")
+				list(GET _hash_rows -1 _hash_last)
+				if(NOT _hash_row_count EQUAL 2 OR NOT _hash_last MATCHES "^${_last_frame},")
+					list(APPEND _failures "${_label}: hashes.csv must hold the final frame only (HashEvery 0): ${_hash_rows}")
+				endif()
 			endif()
 			string(LENGTH "${_desc}" _desc_length)
 			if(NOT _desc_length EQUAL 64 OR NOT _name STREQUAL _backend)
@@ -107,4 +155,5 @@ if(_failures)
 endif()
 set(_all Null ${_entries})
 string(REPLACE ";" " = " _all "${_all}")
-message(STATUS "PASS: ${_runs} bench runs (${PT_FRAMES} frames) wrote timings.csv / manifest.json / effective_settings.jsonl, shape.wrapping 0, desc_sha256 ${_all}")
+message(STATUS "PASS: ${_runs} bench runs (${PT_FRAMES} frames) wrote timings.csv / manifest.json / effective_settings.jsonl / hashes.csv (final frame only) / "
+	"exit.json (0), preflight G0 G9 G10a passed, 0 allocations in the timed buckets, shape.wrapping 0, desc_sha256 ${_all}")

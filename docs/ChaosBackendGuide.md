@@ -73,7 +73,11 @@
 - `RequestExit`: `PostQuitMessage`를 부른다 (WindowsPlatformMisc.cpp:1517-1520 [V]). 호스트 메시지 루프가 WM_QUIT를 받는다.
 - `SetStandaloneSolver(true)`: 솔버가 태스크를 띄우지 않아 시뮬레이션이 진행되지 않는다 (PhysicsSolverBase.cpp:649-653 [V]).
 - `FreeLibrary`: 호스트는 모듈을 내리지 않는다. 브리지도 자기 자신을 내리지 않는다.
-- 프로세스 종료: `PT_MODULE_UE_RUNTIME` 모듈을 로드한 프로세스는 결과와 `exit.json`을 모두 쓰고 flush한 뒤 `TerminateProcess(GetCurrentProcess(), code)`로 끝내야 한다 ([Abi.md](Abi.md) §4). CRT detach 중 UE 정리를 피하기 위해서다. **이것은 호스트의 M7 의무이고 아직 없다 (M6):** 지금의 `PhysicsTestBench`는 모든 모드에서 `TermIdleModules` 뒤 `wmain`에서 그냥 돌아온다. M7은 실행 모드만이 아니라 Chaos가 모든 게이트를 도는 `-Conformance`와 `-Describe`, `-SceneHashes`도 UE_RUNTIME 모듈을 로드했으면 이 경로로 끝내야 한다 ([Progress.md](Progress.md) M6 §5). M13은 그 경로로 Chaos를 확인한다. 브리지는 `TermGamePhys`에서 씬을 파괴하되 엔진 종료(`AppPreExit` 등)는 하지 않는다 [R].
+- 프로세스 종료: `PT_MODULE_UE_RUNTIME` 모듈을 로드한 프로세스는 결과와 `exit.json`을 모두 쓰고 flush한 뒤 `TerminateProcess(GetCurrentProcess(), code)`로 끝내야 한다 ([Abi.md](Abi.md) §4). CRT detach 중 UE 정리를 피하기 위해서다. **M7에서 호스트가 구현했다:** run은 모든 출력과 `exit.json`(`terminate_process: true`)을 쓴 뒤 `TermGamePhys`를 부르고 `teardown.json`을 남긴 다음 `TerminateProcess`로 끝난다. `-Conformance`, `-Describe`, `-SceneHashes`, `-Gate=`도 UE_RUNTIME 모듈을 로드했으면 `wmain` 끝에서 같은 경로로 끝난다. Null DLL 시험 대역(`PT_NULL_DLL_UE_RUNTIME=1`)으로 확인했다: 그 DLL은 `DLL_PROCESS_DETACH`를 받지 않는다 (CTest `PhysicsTest.Bench.UeRuntimeTerminate`, 대조군 `UeRuntimeControl`, `UeRuntimeDescribe`). M13은 같은 경로로 Chaos를 확인한다. 브리지는 `TermGamePhys`에서 씬을 파괴하되 엔진 종료(`AppPreExit` 등)는 하지 않는다 [R]. Fatal도 같은 길로 끝난다 (M7 수정 라운드 0): UE_RUNTIME 모듈이 로드된 프로세스의 Fatal은 `exit.json`(3, `terminate_process: true`)을 쓴 뒤 `TerminateProcess`로 끝나고 (`_Exit`은 ExitProcess라 DLL detach를 부른다, CTest `PhysicsTest.Bench.UeRuntimeFatal`), teardown 중의 Fatal(브리지의 `TermGamePhys`에서 UE가 낸 Fatal 포함)은 `exit.json`을 바꾸지 않고 `teardown.json`에 남은 뒤 run의 코드로 `TerminateProcess`된다 (`ExitTeardownFatal`).
+
+**stdout (M7, M6 검토 지적):** `-List`, `-Describe`, `-SceneHashes`는 stdout에 JSON 하나만 내야 한다 (M8 도구가 파싱한다. 하네스 로그는 이 모드에서 모두 stderr로 간다). 브리지는 stdout에 아무것도 쓰지 않는다: PreInit 명령줄에 `-stdout`을 넣지 않고, 콘솔 출력 장치(`FOutputDeviceStdOutput` 등)를 붙이지 않는다. UE 로그는 `PtLogCallback`(호스트 로그, stderr)이나 `-ABSLOG` 파일로만 보낸다. M13에서 Chaos `-Describe`의 stdout 순수성을 `Bench.Conformance`에 더한다 (C-10).
+
+**Reserved 필드 (M7):** 입력 구조체의 `Reserved*`는 호스트가 언제나 0으로 쓰고, M7 이후의 Kit은 0이 아니면 `PT_E_INVALID_ARG`로 거부한다 ([Abi.md](Abi.md) §2). 브리지는 Kit을 쓰므로 따로 할 일이 없다. 출력 구조체의 Reserved에는 0을 쓴다.
 
 **MXCSR (A6):** PreInit이 MXCSR(FTZ/DAZ)을 바꿀 수 있다. Kit은 호출마다 호출 전 값을 되돌리고 경고를 한 번 남기며 `kit.mxcsr_restores`를 센다. A6는 그 경고가 하나라도 나오면 실패한다. 경고가 나오면 PreInit 이후 브리지가 UE가 정한 MXCSR로 도는지(엔진 정책) 호스트 값으로 도는지 결정해야 한다 (M2.5 SP2 기록 항목).
 
@@ -178,6 +182,8 @@
   - `shape.box_margin`: 셰이프에서 읽은 margin (§5).
   - `sleep.criteria`: 머티리얼 임계 (cm/s, rad/s, 카운터).
   - 필수 키 5개 (§2).
+  - `contact.point_pose` (선택 키, M7): **canonical = 1**, COMPILE_TIME. 스냅샷 접촉점이 `Integrate` 뒤 예측 자세 P, Q 기준이라는 선언이다 (§10). G3는 키가 있으면 점에서 추론한 자세와 같은지 확인한다 ([Abi.md](Abi.md) §5.14).
+  - **벤치 preflight의 G9 (M7):** 벤치는 run마다 그 씬의 effective 덤프로 G9 비교를 한다. 상자 기하에서 나온 상수 규칙에는 `"scene"`(그 기하의 씬 이름 하나나 목록)을 달고, 씬마다 값이 다르면 `"by_scene"`으로 그 씬의 값을 준다 (M7 수정 라운드 0, `tolerances.json`의 Bullet `contact.speculative_distance`가 예). 그렇지 않으면 다른 기하의 씬 run이 종료 코드 2로 거부된다. 바디 값을 정하는 게이트 씬에서는 바디 템플릿 규칙(`profile:linear_damping` 등)을 건너뛴다.
 - **G9 등록:** Chaos의 READBACK 키마다 `Config/Golden/tolerances.json`의 `gates.G9.readback`에 규칙을 더한다 (범위 `Chaos`, 변형별이면 `Chaos.<Variant>`). 규칙은 리졸브된 값과의 대조(`profile:`, `option:`, `init:`, `capacity:`, `const:`/`min:` + 이유, 텍스트 규칙)이거나, 대응하는 프로필 값이 없다는 이유를 단 `unchecked`다. 등록되지 않은 READBACK 키가 있으면 G9가 실패한다.
 
 ---
@@ -275,3 +281,5 @@
 | C-6 | 스냅샷·네이티브 드로 구조체 | M9에서 잠정 해제 |
 | C-8 | G3 narrow phase 자세와 접촉 점 식 (M6 수정 라운드 2) | 브리지의 PointOn0/1이 예측 자세 P, Q의 셰이프 표면 위인지, G3 노트가 "the predicted pose (Chaos convention)"를 고르는지 첫 G3 실행에서 확인한다. 정규화(§10)와 `NormalImpulse` = (`NetImpulse` + `NetPushOut` / Dt)·n의 부호도 함께 본다 [R] |
 | C-9 | `S05` 0.01 cm 틈에서의 Chaos 투기적 접촉 (G4) | step 38 끝 Phi = +0.01 cm에서 Chaos가 반발을 일찍 내지 않는지. 내면 원인을 소스로 확인하고 `G4.contact_frame_slack` Chaos 재정의를 첫 실행 전에 등록한다 [R] |
+| C-10 | Chaos `-Describe`의 stdout 순수성 (M7 추가) | `Bench.Conformance`의 `-Describe` 검사에 Chaos 항목을 더한다 (§2 stdout) |
+| C-11 | Chaos의 할당 수 (M7 수정 라운드 0) | 벤치 exe의 `operator new` 훅은 exe 이미지 안에서만 묶인다: DLL인 브리지는 자기 `operator new`와 `FMemory`(GMalloc)로 할당하므로 manifest `alloc.tick_new_calls` 0은 Chaos에 대해 아무것도 말하지 않는다 (`alloc.hook_scope`가 그렇게 적는다). 브리지는 GMalloc 래퍼(호출 수만 세는 `FMalloc` 위임자)를 InitGamePhys에서 두고 `GetMemoryStats`의 `NumAllocs`/`NumFrees`로 낸다. 그러면 `alloc.backend_allocs_in_loop`가 SDK 엔진과 같은 뜻이 된다 ([TimingContract.md](TimingContract.md) §4.1). 래퍼가 엔진 동작을 바꾸지 않는지(같은 할당자에 위임) M13에서 확인한다 [R] |

@@ -83,6 +83,7 @@ namespace PhysicsTest
 
 			if (Verbosity == ELogVerbosity::Fatal)
 			{
+				FPlatformMisc::SetFatalMessage(LineBuffer);
 				FPlatformMisc::DebugBreakIfDebuggerPresent();
 				FPlatformMisc::RequestExitFatal(3);
 			}

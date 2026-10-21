@@ -1604,7 +1604,8 @@ namespace PhysicsTest::JoltBackend
 		Out.AppendEffective("body.gyroscopic", Text, "bodies", NumGyroscopic > 0 ? 1.0 : 0.0, "bool", "READBACK");
 		snprintf(Text, sizeof(Text), "%s (%u of %u dynamic bodies may sleep, BodyCreationSettings::mAllowSleeping)", bSleepingAllowed ? "true" : "false",
 			NumMaySleep, NumDynamic);
-		Out.AppendEffective("sleep.enabled", Text, "bool", bSleepingAllowed && NumMaySleep > 0 ? 1.0 : 0.0, "bool", "READBACK");
+		// M7: a scene without dynamic bodies (P0.EmptyStep) has no body flag to read: n/a, like the other per-body aggregates.
+		Out.AppendEffective("sleep.enabled", Text, "bool", NumDynamic == 0 ? NaN : (bSleepingAllowed && NumMaySleep > 0 ? 1.0 : 0.0), "bool", "READBACK");
 		snprintf(Text, sizeof(Text), "every point of the body slower than %.9g m/s for %.9g s (global; UE per-material thresholds not mapped, M9)",
 			static_cast<double>(Settings.mPointVelocitySleepThreshold), static_cast<double>(Settings.mTimeBeforeSleep));
 		Out.AppendEffective("sleep.criteria", Text, "m/s", GScale.ToCm(static_cast<double>(Settings.mPointVelocitySleepThreshold)), "cm/s", "READBACK");
@@ -1637,6 +1638,9 @@ namespace PhysicsTest::JoltBackend
 		snprintf(Text, sizeof(Text), "%u (compound %u, local_transform %u, offset_com %u, axis_remap %u)", Wrapping.Total(), Wrapping.Compound,
 			Wrapping.LocalTransform, Wrapping.OffsetCom, Wrapping.AxisRemap);
 		Out.AppendEffective("shape.wrapping", Text, "shapes", static_cast<double>(Wrapping.Total()), "shapes", "READBACK");
+		// M7 (M6 review): the narrow-phase pose of the snapshot contact points, declared (optional key; G3 checks it against
+		// the points): 0 = the start-of-step pose (docs/Abi.md 9.1 decision 3).
+		Out.AppendEffective("contact.point_pose", "0 (start of step: the narrow phase collides the poses the step began with)", "", 0.0, "", "COMPILE_TIME");
 		Out.AppendEffective("listeners.installed", ContactListener ? "1 (contact listener: viz / PT_INSTR_CONTACTS)" : "0", "listeners", ContactListener ? 1.0 : 0.0,
 			"listeners", "READBACK");
 
@@ -1682,13 +1686,14 @@ namespace PhysicsTest::JoltBackend
 
 	PtResult FPhysScene_Jolt::GetMemoryStats(PtMemoryStats& Out)
 	{
-		// The per-scene temp block (allocator kind 2 = Jolt temp allocator): its size and its peak use. Jolt's heap
-		// allocations are not counted (no allocator hook), so NumAllocs / NumFrees are -1 = unknown; the temp block's heap
-		// fallbacks are the effective key jolt.temp_allocator_fallbacks and engine error bit 0x100, not an allocation count.
+		// The per-scene temp block (allocator kind 2 = Jolt temp allocator): its size and its peak use. NumAllocs / NumFrees
+		// are Jolt's heap calls through the module's counting wrappers (process-wide, as PhysX's allocator callback; M7 fix
+		// round 0): the bench takes their difference around the loop. The temp block's heap fallbacks are the effective key
+		// jolt.temp_allocator_fallbacks and engine error bit 0x100 (they also show up as heap calls here).
 		Out.LiveBytes = TempAllocator ? static_cast<int64>(TempAllocator->GetSize()) : 0;
 		Out.PeakBytes = TempAllocator ? static_cast<int64>(TempAllocator->GetPeakUsage()) : 0;
-		Out.NumAllocs = -1;
-		Out.NumFrees = -1;
+		Out.NumAllocs = GetJoltHeapAllocCount();
+		Out.NumFrees = GetJoltHeapFreeCount();
 		Out.AllocatorKind = 2;
 		return PT_OK;
 	}

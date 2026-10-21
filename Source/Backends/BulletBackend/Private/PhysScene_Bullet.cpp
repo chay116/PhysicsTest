@@ -1841,6 +1841,9 @@ namespace PhysicsTest::BulletBackend
 		snprintf(Text, sizeof(Text), "%u (compound %u, local_transform %u, offset_com %u, axis_remap %u)", Wrapping.Total(), Wrapping.Compound,
 			Wrapping.LocalTransform, Wrapping.OffsetCom, Wrapping.AxisRemap);
 		Out.AppendEffective("shape.wrapping", Text, "shapes", static_cast<double>(Wrapping.Total()), "shapes", "READBACK");
+		// M7 (M6 review): the narrow-phase pose of the snapshot contact points, declared (optional key; G3 checks it against
+		// the points): 0 = the start-of-step pose (docs/Abi.md 9.1 decision 3).
+		Out.AppendEffective("contact.point_pose", "0 (start of step: the narrow phase collides the poses the step began with)", "", 0.0, "", "COMPILE_TIME");
 		// Bullet's contact callbacks are process globals (btManifoldResult.h:32, btPersistentManifold.h:39-42 [V]); none is
 		// installed (viz / PT_INSTR_CONTACTS snapshots read the dispatcher's manifolds at capture).
 		const uint32 NumContactCallbacks = (gContactAddedCallback != nullptr ? 1u : 0u) + (gContactProcessedCallback != nullptr ? 1u : 0u)
@@ -1907,12 +1910,15 @@ namespace PhysicsTest::BulletBackend
 	PtResult FPhysScene_Bullet::GetMemoryStats(PtMemoryStats& Out)
 	{
 		// The two pools of the collision configuration (allocator kind 2 = an engine pool allocator): their size and the
-		// peak bytes in use (sampled after every step). Bullet's other heap use is not counted (no allocator hook), so
-		// NumAllocs / NumFrees stay -1; the pools' heap fallbacks are bullet.pool_heap_fallbacks and capacity error bits.
+		// peak bytes in use (sampled after every step). NumAllocs / NumFrees are Bullet's heap calls through the module's
+		// counting wrappers (process-wide, as PhysX's allocator callback; M7 fix round 0); the pools' heap fallbacks are also
+		// bullet.pool_heap_fallbacks and capacity error bits.
 		const btPoolAllocator& Manifolds = Dispatcher->GetManifoldPool();
 		const btPoolAllocator& Algorithms = Dispatcher->GetAlgorithmPool();
 		Out.LiveBytes = static_cast<int64>(Manifolds.getMaxCount()) * Manifolds.getElementSize() + static_cast<int64>(Algorithms.getMaxCount()) * Algorithms.getElementSize();
 		Out.PeakBytes = static_cast<int64>(PeakManifoldsUsed) * Manifolds.getElementSize() + static_cast<int64>(PeakAlgorithmsUsed) * Algorithms.getElementSize();
+		Out.NumAllocs = GetBulletHeapAllocCount();
+		Out.NumFrees = GetBulletHeapFreeCount();
 		Out.AllocatorKind = 2;
 		return PT_OK;
 	}

@@ -4,7 +4,8 @@
 # (Source/Tests/Probes/JoltSeam/PtJoltSeam.cpp) - must have:
 #   - no SDK include path (jolt-src, bullet3-src, physx-src / physx-build, the PhysX bootstrap tree)
 #   - no SDK definition (-DJPH_*, -DBT_*, -DPX_*, DISABLE_CUDA_PHYSX)
-#   - with the Shipped flag profile: no /arch option at all (so no __AVX2__)
+#   - no /arch option at all (so no __AVX2__), in every flag profile: Shipped and MatchedAVX2 (M7) give /arch only to the
+#     SDKs and the TUs compiled against them, never to the harness (PTFlagProfiles.cmake, desc_sha256 equality)
 #   cmake -DPT_COMPILE_COMMANDS=<compile_commands.json> -DPT_SOURCE_DIR=<repo> -DPT_BINARY_DIR=<build>
 #         -DPT_FLAG_PROFILE=Shipped -P CheckHarnessSdkIsolation.cmake
 cmake_minimum_required(VERSION 3.25)
@@ -49,8 +50,8 @@ foreach(_i RANGE 0 ${_last})
 	if(_cmd MATCHES "[-/]D[\"]?(JPH_[A-Za-z0-9_]+|BT_[A-Za-z0-9_]+|PX_[A-Za-z0-9_]+|DISABLE_CUDA_PHYSX)")
 		list(APPEND _violations "${_file}: an SDK definition (${CMAKE_MATCH_1})")
 	endif()
-	if(PT_FLAG_PROFILE STREQUAL "Shipped" AND _cmd_lower MATCHES "[-/]arch:")
-		list(APPEND _violations "${_file}: /arch in the Shipped profile (harness TUs never get __AVX2__)")
+	if(_cmd_lower MATCHES "[-/]arch:")
+		list(APPEND _violations "${_file}: /arch in the ${PT_FLAG_PROFILE} profile (harness TUs never get __AVX2__)")
 	endif()
 endforeach()
 if(_checked EQUAL 0)

@@ -472,6 +472,8 @@ namespace PhysicsTest::AbiGates
 				{ "InitGamePhys MaxThreads 0", PT_E_INVALID_ARG, [&] { BadInit = MakeInitParams(); BadInit.MaxThreads = 0; return Api.InitGamePhys(&BadInit); } },
 				{ "InitGamePhys unknown module option", PT_E_INVALID_ARG, [&] { BadInit = MakeInitParams(); BadInit.Options = &UnknownModuleOption; BadInit.NumOptions = 1; return Api.InitGamePhys(&BadInit); } },
 				{ "InitGamePhys NumOptions 2 with Options NULL", PT_E_INVALID_ARG, [&] { BadInit = MakeInitParams(); BadInit.NumOptions = 2; return Api.InitGamePhys(&BadInit); } },
+				// M7: the v1.0 Reserved-field rule (docs/Abi.md 2): a host writes 0, the Kit refuses anything else.
+				{ "InitGamePhys Reserved 1", PT_E_INVALID_ARG, [&] { BadInit = MakeInitParams(); BadInit.Reserved = 1; return Api.InitGamePhys(&BadInit); } },
 			},
 			[&](const char* Name)
 			{
@@ -565,6 +567,8 @@ namespace PhysicsTest::AbiGates
 				{ "CreateScene NumThreads 0", PT_E_INVALID_ARG, [&] { return WithDesc([](PtSceneDesc& D) { D.NumThreads = 0; }); } },
 				{ "CreateScene RunMode 7", PT_E_INVALID_ARG, [&] { return WithDesc([](PtSceneDesc& D) { D.RunMode = 7; }); } },
 				{ "CreateScene unknown scene option", PT_E_INVALID_ARG, [&] { return WithDesc([&UnknownSceneOption](PtSceneDesc& D) { D.Options = &UnknownSceneOption; D.NumOptions = 1; }); } },
+				{ "CreateScene Reserved0 1", PT_E_INVALID_ARG, [&] { return WithDesc([](PtSceneDesc& D) { D.Reserved0 = 1; }); } },
+				{ "CreateScene Reserved1 1", PT_E_INVALID_ARG, [&] { return WithDesc([](PtSceneDesc& D) { D.Reserved1 = 1; }); } },
 				{ "DestroyScene(0)", PT_E_INVALID_HANDLE, [&] { return Api.DestroyScene(0); } },
 				{ "DestroyScene(stale id)", PT_E_INVALID_HANDLE, [&] { return Api.DestroyScene(Stale); } },
 				{ "DestroyScene(slot 99)", PT_E_INVALID_HANDLE, [&] { return Api.DestroyScene((1ull << 32) | 99u); } },
@@ -573,6 +577,7 @@ namespace PhysicsTest::AbiGates
 				{ "CreateMaterials friction NaN", PT_E_INVALID_ARG, [&] { return WithMaterial([NaN](PtPhysicalMaterial& M) { M.Friction = NaN; }); } },
 				{ "CreateMaterials friction -1", PT_E_INVALID_ARG, [&] { return WithMaterial([](PtPhysicalMaterial& M) { M.Friction = -1.0; }); } },
 				{ "CreateMaterials combine mode 7", PT_E_INVALID_ARG, [&] { return WithMaterial([](PtPhysicalMaterial& M) { M.FrictionCombineMode = 7; }); } },
+				{ "CreateMaterials Reserved 1", PT_E_INVALID_ARG, [&] { return WithMaterial([](PtPhysicalMaterial& M) { M.Reserved = 1; }); } },
 				// actors
 				{ "CreateActors(NULL batch)", PT_E_INVALID_ARG, [&] { return Api.CreateActors(Scene, nullptr); } },
 				{ "CreateActors MaterialIndex 99", PT_E_INVALID_ARG, [&] { return WithActors([](FTestScene& S, PtActorBatch&) { S.Shapes[0].MaterialIndex = 99; }); } },
@@ -589,12 +594,15 @@ namespace PhysicsTest::AbiGates
 				{ "CreateActors initial velocity inf", PT_E_INVALID_ARG, [&] { return WithActors([Inf](FTestScene& S, PtActorBatch&) { S.Actors[1].InitialLinearVelocity.X = Inf; }); } },
 				{ "CreateActors ActorStride 4", PT_E_INVALID_ARG, [&] { return WithActors([](FTestScene&, PtActorBatch& B) { B.ActorStride = 4; }); } },
 				{ "CreateActors misaligned ActorStride", PT_E_INVALID_ARG, [&] { return WithActors([](FTestScene&, PtActorBatch& B) { B.ActorStride = sizeof(PtActorCreateInfo) + 4; }); } },
+				{ "CreateActors actor Reserved0 1", PT_E_INVALID_ARG, [&] { return WithActors([](FTestScene& S, PtActorBatch&) { S.Actors[1].Reserved0 = 1; }); } },
+				{ "CreateActors shape Reserved 1", PT_E_INVALID_ARG, [&] { return WithActors([](FTestScene& S, PtActorBatch&) { S.Shapes[1].Reserved = 1; }); } },
 				// commands (the batch is validated as a whole before anything is applied)
 				{ "ApplyBodyCommands body 99", PT_E_INVALID_ARG, [&] { return WithCommand([](PtBodyCommand& C) { C.Body = 99; }); } },
 				{ "ApplyBodyCommands type 99", PT_E_INVALID_ARG, [&] { return WithCommand([](PtBodyCommand& C) { C.Type = 99; }); } },
 				{ "ApplyBodyCommands NaN vector", PT_E_INVALID_ARG, [&] { return WithCommand([NaN](PtBodyCommand& C) { C.Vector.Y = NaN; }); } },
 				{ "ApplyBodyCommands SET_GLOBAL_POSE non-unit quaternion", PT_E_INVALID_ARG, [&] { return WithCommand([](PtBodyCommand& C) { C.Type = PT_CMD_SET_GLOBAL_POSE; C.Transform.Rotation = PtQuat{ 0.5, 0.0, 0.0, 0.5 }; }); } },
 				{ "ApplyBodyCommands unknown flags", PT_E_INVALID_ARG, [&] { return WithCommand([](PtBodyCommand& C) { C.Flags = 0x80u; }); } },
+				{ "ApplyBodyCommands Reserved 1", PT_E_INVALID_ARG, [&] { return WithCommand([](PtBodyCommand& C) { C.Reserved = 1; }); } },
 				{ "ApplyBodyCommands [valid, invalid] (atomic)", PT_E_INVALID_ARG, [&]
 					{
 						Commands[0] = MakeCommand(PT_CMD_ADD_IMPULSE, Bodies.FirstDynamic);

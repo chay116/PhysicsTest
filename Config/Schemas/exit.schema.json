@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://physicstest.local/schemas/exit.schema.json",
+  "title": "PhysicsTest exit record (physicstest.exit/1)",
+  "description": "exit.json, written last by PhysicsTestBench (a run, -Conformance, -Gate=G8 / G11) after every other output; the M8 runner trusts it over the process exit code (02_Architecture 12.2, docs/ResultsSchema.md). A missing exit.json means the process died before it finished.",
+  "type": "object",
+  "required": [ "schema", "exit_code", "meaning", "status", "category", "reason", "run_id", "utc", "pid", "terminate_process", "outputs" ],
+  "properties": {
+    "schema": { "const": "physicstest.exit/1" },
+    "exit_code": { "enum": [ 0, 2, 3, 4, 5, 6 ] },
+    "meaning": { "type": "string" },
+    "status": { "enum": [ "ok", "usage_error", "preflight_failed", "gate_failed", "engine_error", "fatal", "contaminated_host", "capacity_exceeded", "backend_unavailable" ] },
+    "category": { "enum": [ "", "usage", "preflight", "gate", "engine", "host", "capacity", "backend" ] },
+    "reason": { "type": "string" },
+    "run_id": { "type": "string" },
+    "utc": { "type": "string" },
+    "pid": { "type": "integer", "minimum": 0 },
+    "terminate_process": { "type": "boolean" },
+    "outputs": { "type": "array", "items": { "type": "string" } }
+  }
+}
