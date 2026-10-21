@@ -422,6 +422,9 @@ typedef struct PtMemoryStats { int64_t LiveBytes, PeakBytes, NumAllocs, NumFrees
 #define PT_CONTACT_SPECULATIVE      (1u << 2)
 #define PT_CONTACT_STATIC_FRICTION  (1u << 3)
 #define PT_CONTACT_SWAPPED          (1u << 4)
+#define PT_CONTACT_SLEEPING         (1u << 5)   /* M4: a contact of a sleeping island kept from the step it fell asleep in,
+                                                   with that step's other flags (Jolt reports no contacts for sleeping
+                                                   bodies; Chaos keeps them and their last solver results) */
 
 typedef struct PtParticleSnapshot {
 	PtTransform ActorTransform, CenterOfMassWorld;

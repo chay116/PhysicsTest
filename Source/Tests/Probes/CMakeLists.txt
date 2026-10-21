@@ -124,6 +124,10 @@ if(EXISTS "${_pt_msvc_bin}/dumpbin.exe")
 	pt_add_script_test(PhysicsTest.Probe.BenchNoRenderer
 		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckNoRendererImports.cmake"
 		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_DUMPBIN=${_pt_msvc_bin}/dumpbin.exe")
+	# M4: Automation links PT::PhysicsDebugDraw (the debug draw unit tests) and must stay renderer-free in every preset.
+	pt_add_script_test(PhysicsTest.Probe.AutomationNoRenderer
+		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckNoRendererImports.cmake"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestAutomation>" "-DPT_DUMPBIN=${_pt_msvc_bin}/dumpbin.exe")
 else()
 	message(WARNING "PhysicsTest.Probe.BenchNoRenderer disabled: dumpbin (${_pt_msvc_bin}) not found")
 endif()
@@ -138,9 +142,15 @@ if(PT_WITH_JOLT)
 	else()
 		set(_pt_adapter_strict ON)
 	endif()
+	# Every exe that links the adapter: Automation and Bench, and with PT_WITH_VIEWER (dbg, dev) the viewer and its tests.
+	set(_pt_adapter_maps "$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.map")
+	if(PT_WITH_VIEWER)
+		string(APPEND _pt_adapter_maps "$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestViewer>/PhysicsTestViewer.map"
+			"$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestViewerTests>/PhysicsTestViewerTests.map")
+	endif()
 	pt_add_script_test(PhysicsTest.Probe.AdapterComdats
 		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake"
-		ARGS "-DPT_MAPS=$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.map"
+		ARGS "-DPT_MAPS=${_pt_adapter_maps}"
 			-DPT_ADAPTER_LIBS=PtBackendJolt "-DPT_ADAPTER_OWNED=${_pt_adapter_owned}" -DPT_SDK_LIBS=Jolt "-DPT_SDK_OWNED=JPH@@" -DPT_STRICT=${_pt_adapter_strict})
 	add_test(NAME PhysicsTest.Probe.AdapterComdatsNegative
 		COMMAND "${CMAKE_COMMAND}" "-DPT_MAPS=${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AdapterComdatsNegative.map" -DPT_ADAPTER_LIBS=PtBackendJolt
@@ -151,7 +161,7 @@ if(PT_WITH_JOLT)
 endif()
 
 foreach(_test ThirdPartyIncludes NegativeScaleFatal HarnessCVars FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard CheckModules KitNamespaces
-		BackendIsolation KitNeedsBackendNs HarnessSdkIsolation BenchNoRenderer AdapterComdats AdapterComdatsNegative)
+		BackendIsolation KitNeedsBackendNs HarnessSdkIsolation BenchNoRenderer AutomationNoRenderer AdapterComdats AdapterComdatsNegative)
 	if(TEST PhysicsTest.Probe.${_test})
 		get_test_property(PhysicsTest.Probe.${_test} LABELS _labels)
 		if(_labels)

@@ -65,6 +65,9 @@ namespace PhysicsTest
 
 		// UE-style switches (FParse). False + OutError for a malformed value (e.g. -Threads=4x, -Frames=0).
 		static bool FromCommandLine(const char* CommandLine, FBenchRunSpec& Out, std::string& OutError);
+		// Only the -Param:Name=Value tokens (FromCommandLine uses it; the viewer too, which has its own -Frames meaning).
+		// False + OutError for a malformed token.
+		static bool ParseScenarioParams(const char* CommandLine, FScenarioParams& OutParams, std::string& OutError);
 	};
 
 	// One row of timings.csv per frame (02 12.3), kept in a pre-sized array: the timed loop never allocates.

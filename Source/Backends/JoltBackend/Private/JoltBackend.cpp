@@ -97,6 +97,15 @@ namespace PhysicsTest::JoltBackend
 		return GNumJoltAsserts.load(std::memory_order_relaxed);
 	}
 
+	void RaiseTestAssert(const char* Where)
+	{
+		GNumJoltAsserts.fetch_add(1, std::memory_order_relaxed);
+		if (Abi::FKitServices* Kit = GKitForHooks)
+		{
+			Kit->LogToHost(PT_LOG_WARNING, "Jolt", "test assert raised (%s)", Where);
+		}
+	}
+
 	void FJoltBackend::GetInfo(PtBackendInfo& Out) const
 	{
 		Out.Name = ModuleName;

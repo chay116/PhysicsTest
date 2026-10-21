@@ -74,6 +74,20 @@ pt_add_script_test(PhysicsTest.Bench.ExitHashEvery SCRIPT "${_pt_exit_script}"
 	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=need the M7 recorder"
 		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-ini:PhysicsTest:[/Script/PhysicsTest.PhysicsTestSettings]:HashEvery=1"
 	LABELS "bench")
+# Headline eligibility (M4): a run that is not FixedStep / RunMode=Bench / uninstrumented still runs (exit 0), but the
+# manifest says headline_eligible false with the reason; a default run is eligible.
+pt_add_script_test(PhysicsTest.Bench.HeadlineIneligibleViz SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=not headline-eligible: run mode Viz"
+		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Frames=2|-ini:PhysicsTest:[/Script/PhysicsTest.PhysicsTestSettings]:RunMode=Viz|-Out=${CMAKE_BINARY_DIR}/_bench/HeadlineIneligibleViz"
+		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/HeadlineIneligibleViz/manifest.json"
+		"-DPT_EXPECT_FILE_REGEX=.headline_eligible.: false,.*.headline_ineligible_reasons.: [[][^]]*run mode Viz: headline runs are RunMode=Bench"
+	LABELS "bench")
+pt_add_script_test(PhysicsTest.Bench.HeadlineEligibleDefault SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=status ok"
+		"-DPT_ARGS=-Backend=Null|-Scenario=S00.FreeFall|-Frames=2|-Out=${CMAKE_BINARY_DIR}/_bench/HeadlineEligibleDefault"
+		"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/HeadlineEligibleDefault/manifest.json"
+		"-DPT_EXPECT_FILE_REGEX=.headline_eligible.: true,.*.headline_ineligible_reasons.: [[][]]"
+	LABELS "bench")
 # An engine error bit the backend does not declare as a capacity bit: exit 3, manifest status engine_error.
 pt_add_script_test(PhysicsTest.Bench.ExitEngineError SCRIPT "${_pt_exit_script}"
 	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=3 "-DPT_EXPECT_REGEX=status engine_error"

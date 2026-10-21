@@ -1,6 +1,6 @@
 # PT::Core - minimal UE idioms (02_Architecture 3, A.5, DL18): math, UE_LOG, check/verify/ensure, FCommandLine/FParse,
 # FPlatformTime (QPC), FNV-1a / SHA-256, FRandomStream, UTF-8 string conversion, the harness-side third-party include
-# pair (M0), FConfigFile and IConsoleManager (M1). FCycleCounter arrives in M10.
+# pair (M0), FConfigFile and IConsoleManager (M1), FColor / FMatrix / FSphere for the debug draw (M4). FCycleCounter arrives in M10.
 pt_add_module(PtCore STATIC ALIAS PT::Core
 	SOURCES
 		Public/CoreMinimal.h
@@ -13,9 +13,12 @@ pt_add_module(PtCore STATIC ALIAS PT::Core
 		Public/Hash/Sha256.h
 		Public/Logging/LogMacros.h
 		Public/Math/Box.h
+		Public/Math/Color.h
+		Public/Math/Matrix.h
 		Public/Math/Quat.h
 		Public/Math/RandomStream.h
 		Public/Math/Rotator.h
+		Public/Math/Sphere.h
 		Public/Math/Transform.h
 		Public/Math/UnrealMathUtility.h
 		Public/Math/Vector.h
@@ -31,6 +34,7 @@ pt_add_module(PtCore STATIC ALIAS PT::Core
 		Private/Hash/Sha256.cpp
 		Private/Logging/LogMacros.cpp
 		Private/Math/Math.cpp
+		Private/Math/Matrix.cpp
 		Private/Math/RandomStream.cpp
 		Private/Misc/AssertionMacros.cpp
 		Private/Misc/CommandLine.cpp

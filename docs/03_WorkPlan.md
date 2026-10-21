@@ -386,7 +386,7 @@ Chaos 행까지:
   - 임펄스·속도 변화·힘은 push 때 엔진에 넣지 않고 스텝 직전에 넣는다 (Chaos·Null과 같은 "다음 스텝 적분" 의미, [Abi.md](Abi.md) §7.1, Progress.md M3 §7).
   - 중력은 값이 바뀔 때만 설정한다.
   - `DumpEffectiveSettings`는 공통 키와 Jolt 키를 내보내고, 읽을 수 있는 값은 READBACK으로 표시한다. `GetInfo`의 BuildFlagsJson은 어댑터 TU 자기보고다.
-- **Jolt 스냅샷:** viz 전용 contact listener(구현은 잡 스레드에서 잠금·할당 없는 atomic 슬롯 배열, Progress.md M3 §3 #13). `Normal = −mWorldSpaceNormal`, `Phi = −mPenetrationDepth`로 Chaos 규약에 맞춘다. 임펄스는 NaN, active 여부는 근사 플래그다. Jolt island ID는 internal API(`GetIslandIndexInternal`)뿐이라 쓰지 않고, 하네스 `FIslandBuilder`(M4)에 맡긴다.
+- **Jolt 스냅샷:** viz 전용 contact listener(구현은 잡 스레드에서 잠금·할당 없는 atomic 슬롯 배열, Progress.md M3 §3 #13). `Normal = −mWorldSpaceNormal`, 점마다 `Phi = −(p1 − p2)·n`으로 Chaos 규약에 맞춘다 (M4에서 정정: 처음 문장의 `−mPenetrationDepth`는 매니폴드에서 가장 깊은 점의 값이라 점마다 다른 Chaos의 Phi와 맞지 않았다). 임펄스는 NaN, active 여부는 근사 플래그다. Jolt island ID는 internal API(`GetIslandIndexInternal`)뿐이라 쓰지 않고, 하네스 `FIslandBuilder`(M4)에 맡긴다.
 - **씬:** `IMPLEMENT_PHYSICS_TEST_SCENARIO` 정적 등록, `WHOLE_ARCHIVE(PT::Scenarios)`, 시작 시 레지스트리가 비어 있지 않은지 assert.
   - `S00.FreeFall`: M2 자유낙하 픽스처와 같은 설정.
   - `M1.SingleBoxDrop` a/b: 100 cm 정육면체, 1000 kg 고정(bOverrideMass), 중심 z = 150 cm, b는 roll 30° 후 pitch 20°, μ 0.5, e 0, 300 프레임.
@@ -460,7 +460,7 @@ Chaos 행까지:
 - 변환 단위 테스트: ABI HalfLength → DrawDebugCapsule HalfHeight = HalfLength + R. 박스는 half extent 그대로 넘긴다.
 - 성능 (RTX 3080, 1600×900, MSAA 4x):
   - `M3.BoxPile` 10k Jolt를 일시정지한 상태에서 60 fps 이상이다.
-  - 같은 `M3.BoxPile` 10k에서 씬 하나의 스냅샷 + 드로 CPU 시간이 4 ms 이하다 (측정값을 Stats에 표시).
+  - 같은 `M3.BoxPile` 10k에서 씬 하나의 스냅샷 + 드로 CPU 시간이 4 ms 이하다. 연속 부하(`-Headless` 또는 창 모드 `-NoVSync`)에서 재고, 값은 Stats에 표시한다. 기본 창 모드(vsync)에서 Stats가 보여 주는 값은 프레임마다 vsync를 기다리며 쉬는 스레드의 값이라 판정에 쓰지 않는다 (M4 측정 [V]: 같은 일이 2~3배 느리다. Stats가 그때 그 사실을 한 줄로 알린다).
   - 시뮬레이션을 돌리는 동안의 fps는 표시만 하고 기준으로 삼지 않는다. 물리가 같은 스레드에서 돌기 때문이다 (Bullet ST 3008 박스가 스텝당 중앙값 18.1 ms [V]).
 - Null ↔ Jolt 전환이 재시작 없이 된다. 일시정지 중 "한 스텝"은 FrameCount를 정확히 1 올린다.
 - 뷰어가 보여 주는 모든 시간에 "viz mode, not a benchmark" 표기가 붙는다.

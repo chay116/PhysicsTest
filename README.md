@@ -14,7 +14,9 @@ Unreal Engine의 **Chaos**가 **Bullet**, **PhysX**, **Jolt**보다 실제로 �
 | Jolt | 5.6.0 (`e77f1755`) | 1단계 |
 | Chaos | UE 5.8.3, UBT Program DLL + C ABI | 나중에 직접 구현 |
 
-> **현재 상태 (2026-10-21):** M3(Jolt 수직 슬라이스 + 최소 벤치 exe)까지 마쳤습니다. UE 이름·기본값의 데이터 모델(M1)과 C ABI v0.9 + Kit + Null 백엔드(M2) 위에 첫 실제 엔진 Jolt 5.6.0이 같은 ABI로 붙었고, 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)와 `PhysicsTestBench.exe`가 결과 파일을 씁니다. M3의 타이밍은 모두 **비공식**입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M4(뷰어 1단계)입니다.
+> **현재 상태 (2026-10-21):** M4(뷰어 1단계)까지 마쳤습니다. UE 이름·기본값의 데이터 모델(M1)과 C ABI v0.9 + Kit + Null 백엔드(M2) 위에 첫 실제 엔진 Jolt 5.6.0이 같은 ABI로 붙었고(M3), 씬 세 개(`S00.FreeFall`, `M1.SingleBoxDrop`, `M3.BoxPile`)와 `PhysicsTestBench.exe`가 결과 파일을 씁니다. M4는 Chaos Debug Draw와 같은 색·테셀레이션·그리기 순서의 `PhysicsTestViewer.exe`(엔진 전환, 일시정지/한 스텝, Stats)입니다. 타이밍은 모두 **비공식**이고 뷰어의 시간은 "viz mode, not a benchmark"입니다 (측정 프로토콜은 M7). 결과와 완료 기준 표는 [docs/Progress.md](docs/Progress.md)에 있습니다. 다음 단계는 [작업 계획](docs/03_WorkPlan.md)의 M5(Bullet + PhysX)입니다.
+
+![뷰어: M3.BoxPile 1k, Jolt UEParity, 섬 표시(잠든 섬은 Black)](docs/images/m4_viewer_boxpile1k_islands.png)
 
 ## 문서
 
@@ -92,6 +94,9 @@ Tools\ctest.cmd --preset dev
 |---|---|
 | `PhysicsTest.Automation` | `PhysicsTestAutomation.exe`(doctest)의 모든 단위 테스트를 한 프로세스에서 실행 |
 | `PhysicsTest.Unit.<Area>` | 같은 exe를 `-tc=PhysicsTest.<Area>.*`로 영역별 실행: `Core`(UE 회전·합성 순서, SHA-256/FNV, FParse, `FRandomStream` 골든 값, UTF-8), `Config`(ini 문법, CVar 우선순위), `Types`(UE 필드·기본값, 32채널 충돌 필터, 조인트 프리셋), `BodyUtils`(질량 규칙), `StepPlanner`(tick mode 고정값), `Analytic`(`dt_engine`, S00 기준값), `Profile`(ini 계층, Origin, 변형 키 제한, `-ini:`/`-ExecCmds`), `PhysScene`(프레임 상태기계, 두 frame driver, 자유낙하 픽스처, 명령, 타이밍 버킷, 하네스 CVar 가드), `Abi`(ABI 게이트 A0~A7·A10을 static Null과 `PtBackend_Null.dll` 두 경로로, A0~A7을 SDK 백엔드(Jolt)로, Kit 상태 분리·가드, ABI 호출 비용 기록), `BackendCommon`(단위 계수, 캡슐 축, Bullet damping 변환, 결합 규칙, 접촉 규약, FNV-1a), `Backend`(레지스트리, 마샬링, effective 설정 파서), `Scenario`(씬 레지스트리, 파라미터, `scene_sha256`, BoxPile 배치, `desc_sha256`이 엔진·엔진 키와 무관함), `SdkBackend`(Jolt: S00 자유낙하, 네이티브 프리미티브, 정지 접촉 스냅샷, kinematic 원점 속도, 용량 힌트, Null과 같은 명령 결과). 걸러진 테스트가 0개이면 실패로 칩니다 |
+| `PhysicsTest.Unit.DebugDraw` | (M4, 세 프리셋) 디버그 드로 파이프라인: 단위 와이어 메시 선분 수(box 12, sphere 128, capsule 68, circle 8), Chaos 상태·bounds·섬 색, 9단계 그리기 순서(`PostTickDebugDraw`), 캡슐 HalfHeight = HalfLength + R와 박스 half extent, 접촉 원 6/3·normal 30·비활성 ×0.75, COM 축 30·화살표 10, `FIslandBuilder`, 큐 예산·영역, Null 호스트 스냅샷, 합성 스냅샷의 조인트, Jolt의 점별 Phi·잠든 섬 접촉·요소 인덱스 |
+| `PhysicsTest.Unit.Viewer` | (M4, dbg·dev) `PhysicsTestViewerTests.exe`: 카메라(비행, 가속·감쇠, E/Q, 시점, 휠, FOV, F), `FSceneView`(hFOV 90 major 축, reversed-Z), 세션(일시정지, 한 스텝 = FrameCount +1, Null ↔ Jolt 전환), 재시작 규칙, 오프스크린 D3D11 픽셀 색 |
+| `PhysicsTest.Viewer.Headless{Null,Jolt}` | (M4, dbg·dev) `PhysicsTestViewer.exe -Headless`가 씬을 그려 PNG와 `mode = viz` manifest를 쓰고 0으로 끝남 |
 | `PhysicsTest.Unit.CommandLineUtf8` | 한글 인자(`-PtUtf8Probe=한글 경로`)가 `wmain`을 거쳐 UTF-8로 `FCommandLine`에 들어감 |
 | `PhysicsTest.Bench.List` | `PhysicsTestBench.exe -List`가 성공하고 `M3.BoxPile`을 보여 줌 (시나리오 레지스트리가 `/WHOLEARCHIVE`로 들어옴) |
 | `PhysicsTest.Bench.M3Matrix` | Null과 Jolt × UEParity/Normalized × `M1.SingleBoxDrop` a/b, `M3.BoxPile` 1k/5k (30 프레임, 16 run): 결과 파일 세 개, 행 수, `status ok`, 비공식 표시, `shape.wrapping` = 0, Null과 Jolt의 `desc_sha256`이 같음 |
@@ -111,6 +116,8 @@ Tools\ctest.cmd --preset dev
 | `PhysicsTest.Probe.KitNeedsBackendNs` | `PT_BACKEND_NS` 없이 Kit를 include한 TU가 `#error`로 컴파일되지 않음 (`compile_commands.json`의 그 TU 컴파일 줄을 스크립트가 직접 실행한다. 빌드 트리를 다시 부르지 않는다) |
 | `PhysicsTest.Probe.HarnessSdkIsolation` | 하네스 TU(백엔드, SDK 스모크, JoltSeam 밖의 모든 `Source/` TU와 생성된 레지스트리)에 SDK include 경로와 `JPH_*`/`BT_*`/`PX_*` 정의가 없고, Shipped 프로필에서 `/arch`가 없음 |
 | `PhysicsTest.Probe.BenchNoRenderer` | `PhysicsTestBench.exe`가 d3d11.dll과 dxgi.dll을 import하지 않음 (`dumpbin /dependents`) |
+| `PhysicsTest.Probe.AutomationNoRenderer` | (M4) 디버그 드로를 링크한 `PhysicsTestAutomation.exe`도 d3d11·dxgi·d3dcompiler를 import하지 않음 |
+| `PhysicsTest.Bench.Headline{IneligibleViz,EligibleDefault}` | (M4) FixedStep·`RunMode=Bench`·계측 없음이 아닌 run은 manifest `run.headline_eligible = false`와 사유, 기본 run은 true |
 | `PhysicsTest.Probe.AdapterComdats` | Automation·Bench 링커 맵에서 `/arch:AVX2` 어댑터(`PtBackendJolt`) 오브젝트가 내놓은 함수가 모두 백엔드 소유이고, Jolt lib 자신의 namespace 밖 함수는 알려진 목록뿐 (하네스가 어댑터의 AVX2 COMDAT을 실행하지 않음, Abi.md §5.13). Debug 프리셋은 보고만 한다 |
 | `PhysicsTest.Probe.AdapterComdatsNegative` | 같은 스크립트가 어댑터 `vector<uint32>::push_back` 줄을 넣은 고정 맵(`Source/Tests/Probes/Fixtures/AdapterComdatsNegative.map`)에서 실패함 |
 
@@ -152,6 +159,28 @@ PhysicsTestBench.exe -Describe -Backend=Jolt -Scenario=M1.SingleBoxDrop -Param:C
 - **종료 코드:** 0 ok, 2 잘못된 명령줄·프로필·씬·파라미터, `HashEvery`/`CountersEvery` > 0(M7), 백엔드가 거부한 엔진 키 또는 필수 effective 키 누락, 3 엔진 오류, 5 용량 초과(백엔드가 effective 키 `errors.capacity_bits`로 알린 bit만 있을 때. 다른 오류 bit가 함께 있으면 3), 6 백엔드 없음.
 - **비공식:** M3의 타이밍은 모두 비공식입니다. 측정 프로토콜(affinity, 우선순위, 타이머 해상도, pre-roll)은 M7, 전원 계획 확인은 M8 러너, 적합성 스탬프는 M10에 생깁니다. manifest에 `"unofficial": true`, `"timing_valid_for_headline": false`로 남고, 전원 계획은 읽어서 기록만 합니다.
 - 씬 정의는 [docs/Scenes.md](docs/Scenes.md), 결과 형식은 [docs/02_Architecture.md](docs/02_Architecture.md) §12에 있습니다.
+
+### 뷰어 (M4, 1단계)
+
+`out/dev/bin/PhysicsTestViewer.exe`(dbg, dev 프리셋)는 씬 하나를 Chaos Debug Draw 방식으로 그립니다 (Win32 + D3D11 + Dear ImGui docking). 물리는 메시지 루프 스레드에서 렌더 프레임마다 한 프레임 돕니다.
+
+```
+PhysicsTestViewer.exe [-Backend=Jolt] [-BackendProfile=..] [-Profile=Normalized] [-Scenario=M1.SingleBoxDrop] [-Param:N=1000]
+                      [-ExecCmds="p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.DebugDraw.Radius 0"] [-Paused] [-WarmupFrames=N]
+                      [-ResX=1600 -ResY=900] [-NoVSync] [-Frames=N -Exit] [-Headless] [-Screenshot=<png>] [-PerfReport=<json>]
+                      [-NoUI | -UI=Stats,Engines,Inspector,Console] [-Camera=X,Y,Z,Pitch,Yaw]
+```
+
+- **패널:** Engines(레지스트리의 백엔드, 변형, 프로필, 씬과 파라미터, 스레드, Apply, 재생/일시정지/한 스텝/리셋/스크린숏, "재시작 필요" 안내), Inspector(바디 목록 + 선택한 바디의 상세), Stats(`stat ChaosCounters` 이름, 단계별 시간: 모두 "viz mode, not a benchmark"), Console(CVar와 명령: `help`, `stat ChaosCounters`, `pause`, `step`, `reset`, `cvars <filter>`). Show 메뉴가 `p.Chaos.Solver.DebugDraw*` 스위치를 켜고 끕니다.
+- **조작 (UE 에디터 규약):** RMB + 마우스 = 시점, RMB + WASD = 이동, E/Q = 월드 위/아래, C/Z = FOV, RMB 중 휠 = 속도 ±10 %, 휠 = 전진/후진, 왼쪽 드래그 = 지면 이동, 가운데 드래그 = 팬, Alt + 왼쪽 드래그 = 궤도, F = 선택(없으면 씬) 맞추기, 클릭 = 선택, P = 일시정지, `.` = 한 스텝, Ctrl+R = 리셋, F9 = 스크린숏(`Saved/Screenshots/`, 옆에 `mode = viz` `.json`).
+- **Chaos 예산:** 기본값은 Chaos와 같습니다 (`p.Chaos.DebugDraw.MaxLines 20000`, `p.Chaos.DebugDraw.Radius 3000` cm, 영역 중심은 카메라). UE 5.8.3처럼 캡처와 렌더 두 단계에서 예산과 영역을 보므로(렌더에서 박스 하나가 24), `M3.BoxPile` 1k도 기본값이면 박스 833개만 그려지고 그 뒤의 접촉·bounds는 빠집니다. Stats가 두 단계의 비용과 거부 수를 보여 줍니다. 다 보려면 Show > "Draw everything" 또는 `-ExecCmds="p.Chaos.DebugDraw.MaxLines 0, p.Chaos.DebugDraw.Radius 0"`을 씁니다.
+- **헤드리스:** `-Headless`는 창 없이 같은 경로로 오프스크린에 그리고 `-Frames`(기본 1) 뒤에 끝납니다 (자동 검사, 문서 그림). `-PerfReport`는 프레임별 CPU·GPU 시간 요약을 씁니다.
+- **시간 읽기:** 창 모드 vsync에서는 스레드가 프레임마다 vsync를 기다리며 쉬어 Stats의 "Snapshot + draw"가 연속 부하 값의 2~3배로 보입니다. 성능을 볼 때는 `-NoVSync`(지원되면 tearing으로 갱신 주기에 묶이지 않음)나 `-Headless`를 씁니다. 기준 4b(스냅샷 + 드로 ≤ 4 ms)는 이 연속 부하 값으로 판정합니다.
+- 백엔드에 스냅샷이 없으면(Null) 호스트가 당겨 둔 바디 상태로 그립니다 (접촉·섬 없음).
+- **PowerShell:** Windows PowerShell 5.1은 따옴표 없는 `-Scenario=M3.BoxPile`을 점에서 잘라 넘깁니다 (뷰어가 "unknown scenario 'M3'"를 냅니다). PowerShell에서는 `'-Scenario=M3.BoxPile'`처럼 점이 든 인자를 따옴표로 감싸거나 cmd에서 실행합니다.
+- **하네스 물리 CVar**(`p.ComNudgeAffectsInertia`, `p.SensitiveSleepThresholdMultiplier`)는 Console에서 값을 보기만 하고 바꾸지 않습니다. 씬의 설정이 정하는 값이라 살아 있는 씬 아래에서 바꾸면 다음 바디 생성에서 Fatal이 되기 때문입니다. 프로필이나 커맨드라인(`-ExecCmds=`, `-ini:`)으로 정하면 Apply / Reset이 다음 씬에 적용합니다.
+
+![뷰어: M1.SingleBoxDrop a, Jolt, 정지 접촉(접촉 원, COM 축, 질량). InertiaScale 0으로 찍었습니다 (기본값 1이면 마젠타 관성 상자가 정육면체를 덮습니다)](docs/images/m4_viewer_m1_jolt.png)
 
 ### 빌드 자기보고
 

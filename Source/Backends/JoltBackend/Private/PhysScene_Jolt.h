@@ -42,11 +42,17 @@
 // (Jolt resets mForce only for active bodies, PhysicsSystem.cpp:2541 [V]).
 //
 // Debug snapshot (viz only, PROVISIONAL(M9)): particles with Jolt's world bounds, and the contacts of the last step from
-// FJoltContactListener in the Chaos convention: Normal = -mWorldSpaceNormal, Phi = -mPenetrationDepth, then Body0 = the
-// more mobile body (CanonicalizeContact). Impulses are NaN (Q8: no local patch), "active" is PT_CONTACT_ACTIVE_APPROX for
-// Phi <= 0. Native islands are not offered (GetIslandIndexInternal is internal); the viewer builds its own (M4).
-// Known limits (docs/Abi.md 7.1, M4 / M9): PtContactPoint::Shape0 / Shape1 stay 0 (the SubShapeID is not mapped to an
-// element index), and a body's friction / restitution are its first element's material (Jolt keeps one per body).
+// FJoltContactListener in the Chaos convention: Normal = -mWorldSpaceNormal, Phi = -(p1 - p2) . n per point (M4; M3 gave
+// every point the manifold's mPenetrationDepth), then Body0 = the more mobile body (CanonicalizeContact). Impulses are NaN
+// (Q8: no local patch), "active" is PT_CONTACT_ACTIVE_APPROX for Phi <= 0. The contacts of sleeping islands are kept from
+// the step they fell asleep in and reported with their last flags plus PT_CONTACT_SLEEPING (M4, UpdateSleepingContacts; Chaos
+// keeps a sleeping constraint's last solver results, so a resting sleeping contact still draws active). A body put to sleep by
+// PT_CMD_PUT_TO_SLEEP between steps keeps its pairs from the last step; a kept pair goes when a body of it wakes or a command
+// sets its pose (SET_GLOBAL_POSE, SET_BODY_STATE: the kept points would be stale), and comes back only when Jolt reports the
+// pair again (FlushKeptContactCommands, M4 fix round 2). Native islands are not offered (GetIslandIndexInternal is internal);
+// the viewer builds its own (FIslandBuilder, M4).
+// PtContactPoint::Shape0 / Shape1 are the harness element indices of the manifold's sub shapes (M4). Known limit (docs/Abi.md
+// 7.1, M9): a body's friction / restitution are its first element's material (Jolt keeps one per body).
 //
 // ODR / flag isolation (docs/Abi.md 5.13, CTest PhysicsTest.Probe.AdapterComdats): these TUs are compiled with Jolt's
 // /arch:AVX2, so every container of the adapter is a JPH::Array (a Jolt type) and never a std:: container. A
@@ -111,6 +117,11 @@ namespace PhysicsTest::JoltBackend
 		bool bKinematicMovedLastStep = false;
 		bool bPendingImpulse = false;            // listed in FPhysScene_Jolt::PendingImpulseBodies
 		bool bPendingForce = false;              // listed in FPhysScene_Jolt::PendingForceBodies
+		// Viz runs: a command since the last FlushKeptContactCommands that changes this body's kept sleeping contacts (listed
+		// once in FPhysScene_Jolt::KeptContactBodies).
+		bool bKeptContactsListed = false;
+		bool bPutToSleepByCommand = false;       // PT_CMD_PUT_TO_SLEEP deactivated it: keep its last-step contacts
+		bool bPoseSetByCommand = false;          // SET_GLOBAL_POSE / SET_BODY_STATE: its kept points are stale
 	};
 
 	class FPhysScene_Jolt final : public ::PhysicsTest::Abi::IPhysicsBackendScene
@@ -149,6 +160,23 @@ namespace PhysicsTest::JoltBackend
 		// Every live body's BoxShape convex radius as the shapes hold it (shape.box_margin readback), through decorated and
 		// compound shapes. false when there is no box.
 		bool ReadBoxConvexRadii(double& OutMinCm, double& OutMaxCm) const;
+		// Viz runs (the listener exists), after each Update: keeps the contacts of bodies that are asleep now. Jolt runs no
+		// collision detection for sleeping bodies, so the listener reports nothing for them; Chaos keeps a sleeping island's
+		// constraints, and the snapshot reports these as PT_CONTACT_SLEEPING (M4, islands and DrawCollisions).
+		void UpdateSleepingContacts();
+		// Viz runs, StartFrame before the listener is cleared: what commands did to the kept contacts since the last step.
+		// A body put to sleep between steps (PT_CMD_PUT_TO_SLEEP) keeps its pairs from the last step's listener contents, as
+		// if it had fallen asleep in that step; the kept pairs of a body whose pose a command set (SET_GLOBAL_POSE,
+		// SET_BODY_STATE - a static or DontActivate pose leaves a sleeping pair asleep) are dropped, because their world
+		// points no longer match; a body a command woke loses its kept pairs. One pass over the listener and the kept list.
+		void FlushKeptContactCommands();
+		void NoteKeptContactCommand(uint32 BodyIndex, bool bPutToSleep, bool bPoseSet);
+		// A pair with a dynamic body whose dynamic bodies are all asleep (static and kinematic ends never sleep).
+		bool IsSleepingPair(const FJoltRawContact& Contact) const;
+		// A Jolt assert that fired since the last check - inside Update or not (creation, commands, reads, snapshots) - sets
+		// GJoltErrorAssert in this frame's and the scene's error bits (M3 review: asserts outside Update were only counted).
+		void CheckJoltAsserts();
+		void CheckJoltAssertsBetweenFrames();
 		PtBodyState MakeState(const FJoltBody& Body) const;
 		JPH::Body* GetBody(const FJoltBody& Body) const;
 		void MarkDirty(uint32 BodyIndex);
@@ -177,6 +205,11 @@ namespace PhysicsTest::JoltBackend
 		JPH::Array<uint32> ActiveScratch;
 		JPH::Array<PtParticleSnapshot> SnapshotParticles;
 		JPH::Array<PtContactPoint> SnapshotContacts;
+		JPH::Array<FJoltRawContact> SleepingContacts;   // see UpdateSleepingContacts (reserved to the listener capacity)
+		JPH::Array<FJoltRawContact> SleepingScratch;
+		JPH::Array<uint32> KeptContactBodies;           // see FJoltBody::bKeptContactsListed (reserved to MaxBodies in viz runs)
+		bool bSleepingContactsDropped = false;
+		uint32 AssertsSeen = 0;                         // GetNumJoltAsserts() at the last CheckJoltAsserts
 
 		::PhysicsTest::Abi::FShapeWrappingCounts Wrapping;
 		uint32 MaxBodies = 0;
@@ -187,6 +220,7 @@ namespace PhysicsTest::JoltBackend
 		uint32 NumStartAsleepSkipped = 0;
 		uint32 NumIterationOverrides = 0;
 		uint32 FrameErrorBits = 0;
+		uint32 PendingErrorBits = 0;                    // seen between frames, reported by the next frame
 		uint32 TotalErrorBits = 0;
 		uint64 TotalSteps = 0;
 		float StepDeltaTime = 0.0f;
@@ -227,4 +261,9 @@ namespace PhysicsTest::JoltBackend
 
 	// The number of Jolt asserts this module has seen (JoltBackend.cpp; always 0 without JPH_ENABLE_ASSERTS).
 	uint32 GetNumJoltAsserts();
+	// Harness test hook (runtime scene option GJoltTestRaiseAssertKey, M4): counts and logs one assert exactly as the dbg assert
+	// hook does, in every build, so the propagation of an assert outside PhysicsSystem::Update into the error bits is a unit
+	// test. CreateScene rejects the key (ApplySceneOption), so no profile or variant file can reach it.
+	inline constexpr const char* GJoltTestRaiseAssertKey = "pt.test.raise_assert";
+	void RaiseTestAssert(const char* Where);
 }

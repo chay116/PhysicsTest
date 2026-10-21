@@ -430,8 +430,20 @@ namespace PhysicsTest
 		return Names;
 	}
 
-	FPhysicsBackendModule* FPhysicsBackendRegistry::FindOrLoadModule(const std::string_view InName, std::string& OutError)
+	FPhysicsBackendModule* FPhysicsBackendRegistry::FindOrLoadModule(const std::string_view InName, std::string& OutError, EBackendLoadFailure* OutFailure)
 	{
+		const auto Fail = [OutFailure](const EBackendLoadFailure Failure) -> FPhysicsBackendModule*
+		{
+			if (OutFailure != nullptr)
+			{
+				*OutFailure = Failure;
+			}
+			return nullptr;
+		};
+		if (OutFailure != nullptr)
+		{
+			*OutFailure = EBackendLoadFailure::None;
+		}
 		for (const std::unique_ptr<FPhysicsBackendModule>& Module : Modules)
 		{
 			if (Module->GetName() == InName)
@@ -446,7 +458,7 @@ namespace PhysicsTest
 			if (!IsChaosAvailable(Reason))
 			{
 				OutError = Reason;
-				return nullptr;
+				return Fail(EBackendLoadFailure::Unavailable);
 			}
 			std::string DllPath;
 			if (!FParse::Value(FCommandLine::Get(), "ChaosDll=", DllPath))
@@ -475,14 +487,14 @@ namespace PhysicsTest
 			if (Found == nullptr)
 			{
 				OutError = "unknown backend '" + std::string(InName) + "'";
-				return nullptr;
+				return Fail(EBackendLoadFailure::UnknownBackend);
 			}
 			Loaded = Found->StaticEntry != nullptr ? FPhysicsBackendModule::CreateStatic(InName, Found->StaticEntry, OutError)
 				: FPhysicsBackendModule::LoadDll(InName, GetExecutableDirectory() / Found->DllFileName, OutError);
 		}
 		if (!Loaded)
 		{
-			return nullptr;
+			return Fail(EBackendLoadFailure::LoadFailed);
 		}
 		if ((Loaded->GetInfo().ModuleFlags & PT_MODULE_UE_RUNTIME) != 0)
 		{
@@ -491,7 +503,7 @@ namespace PhysicsTest
 				if ((Module->GetInfo().ModuleFlags & PT_MODULE_UE_RUNTIME) != 0)
 				{
 					OutError = "backend '" + std::string(InName) + "' is a UE_RUNTIME module and '" + Module->GetName() + "' is already loaded (one per process)";
-					return nullptr;
+					return Fail(EBackendLoadFailure::OnePerProcess);
 				}
 			}
 		}
@@ -532,6 +544,26 @@ namespace PhysicsTest
 			return nullptr;
 		}
 		return Module;
+	}
+
+	int32 FPhysicsBackendRegistry::TermIdleModules()
+	{
+		int32 NumTerminated = 0;
+		for (const std::unique_ptr<FPhysicsBackendModule>& Module : Modules)
+		{
+			if (Module->IsInitialized() && Module->GetNumLiveScenes() == 0)
+			{
+				const PtResult Result = Module->TermGamePhys();
+				if (Result < 0)
+				{
+					UE_LOG(LogPhysicsBackend, Warning, "backend '%s': TermGamePhys failed with %s: %s", Module->GetName().c_str(), GetPtResultName(Result),
+						Module->GetLastErrorMessage().c_str());
+					continue;
+				}
+				++NumTerminated;
+			}
+		}
+		return NumTerminated;
 	}
 
 	// ---- FMarshalledActorBatch / FPhysicsBackendScene ----------------------------------------------------------------
@@ -841,7 +873,13 @@ namespace PhysicsTest
 
 	PtResult FPhysicsBackendScene::CaptureDebugSnapshot(const uint32 SnapshotFlags, FPhysicsDebugSnapshot& Out)
 	{
-		Out.Reset();
+		// The arrays keep their sizes between captures (M4: a viewer captures every frame): resize below only
+		// value-initialises elements it adds, and ReadDebugSnapshot overwrites every element the counts describe.
+		Out.FrameIndex = 0;
+		Out.SimTime = 0.0;
+		Out.bTruncated = false;
+		Out.bFromHostState = false;
+		Out.HarnessIslandIndex.clear();
 		Out.Capabilities = Module->GetInfo().Capabilities;
 		PtDebugSnapshotRequest Request = {};
 		Request.StructSize = sizeof(PtDebugSnapshotRequest);
@@ -852,6 +890,7 @@ namespace PhysicsTest
 		PtResult Result = Api->CaptureDebugSnapshot(SceneId, &Request, &Counts);
 		if (Result < 0)
 		{
+			Out.Reset();
 			return Result;
 		}
 		Out.Particles.resize(Counts.NumParticles);

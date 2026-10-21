@@ -494,6 +494,27 @@ namespace PhysicsTest
 				"final frame only and writes no per-frame counters (set both to 0)", Config.TestSettings.HashEvery, Config.TestSettings.CountersEvery);
 			return EBenchExit::GateFailed;
 		}
+		// Headline eligibility (M4, M3 review): the bench drives FixedStep frames at the nominal dt; a headline run must also
+		// be a bench-mode run without instrumentation (02 9.3, 9.4: no listener, no counters). Any other combination still
+		// runs and writes its outputs, but the manifest marks it not headline-eligible with the reasons (M7's analysis drops
+		// it); every M3 / M4 timing is unofficial anyway.
+		std::vector<std::string> HeadlineIneligibleReasons;
+		if (Config.TestSettings.TickMode != EPhysicsTickMode::FixedStep)
+		{
+			HeadlineIneligibleReasons.push_back(std::string("tick_mode ") + ToString(Config.TestSettings.TickMode) + ": headline runs are FixedStep");
+		}
+		if (Config.TestSettings.RunMode != EPhysicsRunMode::Bench)
+		{
+			HeadlineIneligibleReasons.push_back(std::string("run mode ") + ToString(Config.TestSettings.RunMode) + ": headline runs are RunMode=Bench");
+		}
+		if (Config.TestSettings.InstrumentFlags != 0)
+		{
+			HeadlineIneligibleReasons.push_back("instrumentation flags " + std::to_string(Config.TestSettings.InstrumentFlags) + ": headline runs have none");
+		}
+		for (const std::string& Reason : HeadlineIneligibleReasons)
+		{
+			UE_LOG(LogPhysicsBench, Warning, "not headline-eligible: %s", Reason.c_str());
+		}
 		const int32 Frames = Spec.Frames > 0 ? Spec.Frames : Scenario->GetDefaultFrames(Params);
 		const int32 Seed = Scenario->GetSeed(Params);
 		const std::string RunId = MakeRunId();
@@ -785,6 +806,8 @@ namespace PhysicsTest
 		{
 			FJson Run;
 			Run["mode"] = ToString(Test.RunMode);
+			Run["headline_eligible"] = HeadlineIneligibleReasons.empty();
+			Run["headline_ineligible_reasons"] = HeadlineIneligibleReasons;
 			Run["instrumentation"] = Test.InstrumentFlags;
 			Run["frames"] = Frames;
 			Run["frames_run"] = FramesRun;

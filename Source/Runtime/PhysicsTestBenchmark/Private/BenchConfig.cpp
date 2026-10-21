@@ -55,6 +55,29 @@ namespace PhysicsTest
 		return StringConv::Utf8ToPath(PT_SOURCE_DIR).make_preferred() / "Saved" / "Results";
 	}
 
+	bool FBenchRunSpec::ParseScenarioParams(const char* CommandLine, FScenarioParams& OutParams, std::string& OutError)
+	{
+		// -Param:Name=Value tokens (repeatable; the value may be quoted).
+		const char* Cursor = CommandLine != nullptr ? CommandLine : "";
+		std::string Token;
+		while (FParse::Token(Cursor, Token))
+		{
+			if (!StartsWithNoCase(Token, "-Param:") && !StartsWithNoCase(Token, "/Param:"))
+			{
+				continue;
+			}
+			const std::string Assignment = Token.substr(7);
+			const size_t Equals = Assignment.find('=');
+			if (Equals == std::string::npos || Equals == 0)
+			{
+				OutError = "malformed " + Token + " (expected -Param:Name=Value)";
+				return false;
+			}
+			OutParams[Assignment.substr(0, Equals)] = StripQuotes(Assignment.substr(Equals + 1));
+		}
+		return true;
+	}
+
 	bool FBenchRunSpec::FromCommandLine(const char* CommandLine, FBenchRunSpec& Out, std::string& OutError)
 	{
 		Out = FBenchRunSpec();
@@ -132,23 +155,9 @@ namespace PhysicsTest
 		{
 			return false;
 		}
-		// -Param:Name=Value tokens (repeatable; the value may be quoted).
-		const char* Cursor = Cmd;
-		std::string Token;
-		while (FParse::Token(Cursor, Token))
+		if (!ParseScenarioParams(Cmd, Out.Params, OutError))
 		{
-			if (!StartsWithNoCase(Token, "-Param:") && !StartsWithNoCase(Token, "/Param:"))
-			{
-				continue;
-			}
-			const std::string Assignment = Token.substr(7);
-			const size_t Equals = Assignment.find('=');
-			if (Equals == std::string::npos || Equals == 0)
-			{
-				OutError = "malformed " + Token + " (expected -Param:Name=Value)";
-				return false;
-			}
-			Out.Params[Assignment.substr(0, Equals)] = StripQuotes(Assignment.substr(Equals + 1));
+			return false;
 		}
 		if (!Out.bList && Out.Backend.empty())
 		{

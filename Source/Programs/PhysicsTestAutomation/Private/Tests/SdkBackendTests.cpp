@@ -601,3 +601,71 @@ TEST_CASE("PhysicsTest.SdkBackend.MassReadbackIsATensor")
 		CHECK(Engine.Mass == doctest::Approx(Body->MassProperties.Mass).epsilon(1e-6));
 	}
 }
+
+// M3 review minor (4), fixed in M4: a Jolt assert outside PhysicsSystem::Update (creation, commands, reads, snapshots) used to
+// raise only the module counter jolt.asserts, so a dbg run ended with status ok. Now the next frame reports engine error bit
+// 0x200 and the scene's step stats keep it (the bench's exit code 3) - also when a query between frames (GetStepStats, as the
+// viewer's Stats panel calls it every frame) sees the assert first. The harness test key pt.test.raise_assert (runtime
+// SetOption only) counts one assert exactly as the dbg hook does, in every build; as a CreateScene option it is rejected.
+TEST_CASE("PhysicsTest.SdkBackend.JoltAssertOutsideUpdateIsAnEngineError")
+{
+	const std::vector<std::string> Available = FPhysicsBackendRegistry::Get().GetAvailableNames();
+	if (std::find(Available.begin(), Available.end(), "Jolt") == Available.end())
+	{
+		return;
+	}
+	constexpr uint32 AssertBit = 1u << 9;
+	constexpr const char* TestKey = "pt.test.raise_assert";
+	const FResolvedPhysicsConfig Config = LoadSdkConfig("Jolt", "Normalized");
+	std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("S00.FreeFall", {}, "Jolt", Config);
+	Scene->Tick(Config.TestSettings.FixedDeltaTime);
+	CHECK((Scene->GetLastFrameTiming().EngineErrorBits & AssertBit) == 0u);
+	// Between frames (Idle): the assert belongs to the next frame.
+	REQUIRE(Scene->GetBackendScene().SetOption(TestKey, "1") == PT_OK);
+	Scene->Tick(Config.TestSettings.FixedDeltaTime);
+	CHECK((Scene->GetLastFrameTiming().EngineErrorBits & AssertBit) != 0u);
+	PtStepStats Stats = {};
+	Stats.StructSize = sizeof(PtStepStats);
+	REQUIRE(Scene->GetBackendScene().GetStepStats(Stats) == PT_OK);
+	CHECK((Stats.EngineErrorBits & AssertBit) != 0u);   // sticky for the run
+	Scene->Tick(Config.TestSettings.FixedDeltaTime);
+	CHECK((Scene->GetLastFrameTiming().EngineErrorBits & AssertBit) == 0u);   // one frame reports it once
+	// A query between frames sees the assert first (the viewer's Stats panel): the step stats have it at once and the next
+	// frame still reports it.
+	REQUIRE(Scene->GetBackendScene().SetOption(TestKey, "1") == PT_OK);
+	PtStepStats Between = {};
+	Between.StructSize = sizeof(PtStepStats);
+	REQUIRE(Scene->GetBackendScene().GetStepStats(Between) == PT_OK);
+	CHECK((Between.EngineErrorBits & AssertBit) != 0u);
+	Scene->Tick(Config.TestSettings.FixedDeltaTime);
+	CHECK((Scene->GetLastFrameTiming().EngineErrorBits & AssertBit) != 0u);
+	Scene->Tick(Config.TestSettings.FixedDeltaTime);
+	CHECK((Scene->GetLastFrameTiming().EngineErrorBits & AssertBit) == 0u);
+	// After the last frame: GetStepStats itself checks (the bench reads it after its loop).
+	std::unique_ptr<FPhysScene> Fresh = MakeScenarioScene("S00.FreeFall", {}, "Jolt", Config);
+	Fresh->Tick(Config.TestSettings.FixedDeltaTime);
+	REQUIRE(Fresh->GetBackendScene().SetOption(TestKey, "1") == PT_OK);
+	PtStepStats After = {};
+	After.StructSize = sizeof(PtStepStats);
+	REQUIRE(Fresh->GetBackendScene().GetStepStats(After) == PT_OK);
+	CHECK((After.EngineErrorBits & AssertBit) != 0u);
+	// The test key is not a scene option: CreateScene (profiles, backend variants, the viewer's preflight) rejects it.
+	std::string Error;
+	FPhysicsBackendModule* Module = FPhysicsBackendRegistry::Get().FindOrLoadModule("Jolt", Error);
+	REQUIRE(Module != nullptr);
+	const PtKeyValue Option{ TestKey, "1" };
+	PtSceneDesc Desc = {};
+	Desc.StructSize = sizeof(PtSceneDesc);
+	Desc.RunMode = PT_RUN_BENCH;
+	Desc.Gravity = PtVec3{ 0.0, 0.0, -980.0 };
+	Desc.NominalDeltaTime = 1.0 / 60.0;
+	Desc.AsyncFixedTimeStepSize = PT_ASYNC_DT_SYNC;
+	Desc.RestitutionThreshold = -1.0;
+	Desc.NumThreads = 1;
+	Desc.DebugName = "TestKeyAsSceneOption";
+	Desc.Options = &Option;
+	Desc.NumOptions = 1;
+	CHECK(FPhysicsBackendScene::Create(*Module, Desc, Error) == nullptr);
+	CHECK(Error.find("unknown scene option") != std::string::npos);
+	MESSAGE("as a CreateScene option: " << Error);
+}

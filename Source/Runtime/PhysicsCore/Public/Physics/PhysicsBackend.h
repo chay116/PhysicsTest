@@ -125,6 +125,16 @@ namespace PhysicsTest
 		friend class FPhysicsBackendScene;
 	};
 
+	// Why FindOrLoadModule returned nullptr (callers branch on this, never on the error text).
+	enum class EBackendLoadFailure : uint8
+	{
+		None,
+		UnknownBackend,     // not in the registry
+		Unavailable,        // Chaos without -ChaosDll / PT_CHAOS_DLL, or the DLL file is missing
+		LoadFailed,         // LoadLibrary, the entry point or the API table checks failed
+		OnePerProcess,      // a second UE_RUNTIME module (PT_MODULE_UE_RUNTIME) while one is loaded
+	};
+
 	class FPhysicsBackendRegistry
 	{
 	public:
@@ -132,13 +142,16 @@ namespace PhysicsTest
 
 		// Generated static list + DLL backends whose file exists next to the executable + Chaos when available.
 		[[nodiscard]] std::vector<std::string> GetAvailableNames() const;
-		// Loads (once) without initialising. nullptr + OutError when unknown or the load fails.
-		FPhysicsBackendModule* FindOrLoadModule(std::string_view Name, std::string& OutError);
+		// Loads (once) without initialising. nullptr + OutError (+ OutFailure when given) when unknown or the load fails.
+		FPhysicsBackendModule* FindOrLoadModule(std::string_view Name, std::string& OutError, EBackendLoadFailure* OutFailure = nullptr);
 		// Loads and initialises once (InitGamePhys with Params). Process rules (02 6, A.8): at most one UE_RUNTIME module;
 		// a GLOBAL_SCENE_SETTINGS module accepts one set of init options per process (PhysX tolerances scale) - a request
 		// with other options is refused. Other modules reuse their first initialisation; a later request with another
 		// MaxThreads budget logs a warning (the module keeps the first one; M2 review).
 		FPhysicsBackendModule* FindOrLoad(std::string_view Name, const FBackendInitParams& Params, std::string& OutError);
+		// A host's shutdown: TermGamePhys on every loaded module that is initialised and has no live scene, whoever
+		// initialised it (also a module whose InitGamePhys succeeded for an Open that failed later). Returns how many.
+		int32 TermIdleModules();
 		// Chaos: -ChaosDll=<path> on the command line or PT_CHAOS_DLL in the environment, and the file exists (M2.5 / M13).
 		[[nodiscard]] static bool IsChaosAvailable(std::string& OutReason);
 		[[nodiscard]] static std::filesystem::path GetExecutableDirectory();

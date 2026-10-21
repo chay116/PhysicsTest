@@ -20,31 +20,29 @@ namespace PhysicsTest
 	// ------------------------------------------------------------------------------------------------------------
 	FVector FVector::GetSafeNormal(const double Tolerance) const
 	{
-		const double SquareSum = SizeSquared();
-		if (SquareSum == 1.0)
+		// UE semantics: an exactly unit vector comes back unchanged, a too short one as zero.
+		const double LengthSquared = SizeSquared();
+		if (LengthSquared == 1.0)
 		{
 			return *this;
 		}
-		if (SquareSum < Tolerance)
+		if (LengthSquared < Tolerance)
 		{
 			return ZeroVector;
 		}
-		const double Scale = FMath::InvSqrt(SquareSum);
-		return FVector(X * Scale, Y * Scale, Z * Scale);
+		const double InvLength = FMath::InvSqrt(LengthSquared);
+		return FVector(X * InvLength, Y * InvLength, Z * InvLength);
 	}
 
 	bool FVector::Normalize(const double Tolerance)
 	{
-		const double SquareSum = SizeSquared();
-		if (SquareSum > Tolerance)
+		const double LengthSquared = SizeSquared();
+		if (!(LengthSquared > Tolerance))
 		{
-			const double Scale = FMath::InvSqrt(SquareSum);
-			X *= Scale;
-			Y *= Scale;
-			Z *= Scale;
-			return true;
+			return false;
 		}
-		return false;
+		*this *= FMath::InvSqrt(LengthSquared);
+		return true;
 	}
 
 	bool FVector::IsNearlyZero(const double Tolerance) const
@@ -65,6 +63,15 @@ namespace PhysicsTest
 	bool FVector::ContainsNaN() const
 	{
 		return !FMath::IsFinite(X) || !FMath::IsFinite(Y) || !FMath::IsFinite(Z);
+	}
+
+	FVector FVector::GetPerpendicularUnit() const
+	{
+		// Crossing with a world axis that is far from this direction: world X when the direction is mostly vertical, world
+		// Z otherwise. Either cross product keeps at least sqrt(1/3) of a unit direction's length, and the choice changes
+		// only where the vertical component stops being the largest, so the result is stable between frames.
+		const bool bMostlyVertical = FMath::Abs(Z) > FMath::Max(FMath::Abs(X), FMath::Abs(Y));
+		return (*this ^ (bMostlyVertical ? ForwardVector : UpVector)).GetSafeNormal();
 	}
 
 	// ------------------------------------------------------------------------------------------------------------
@@ -118,18 +125,31 @@ namespace PhysicsTest
 		return Quaternion().UnrotateVector(V);
 	}
 
+	namespace
+	{
+		// Each angle is compared after wrapping into (-180, 180], so 359.9 and -0.1 degrees are the same; NaN is never near.
+		bool AreAnglesNearlyZero(const double Tolerance, const double First, const double Second, const double Third)
+		{
+			const double Angles[3] = { First, Second, Third };
+			for (const double Angle : Angles)
+			{
+				if (!(FMath::Abs(FRotator::NormalizeAxis(Angle)) <= Tolerance))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+	}
+
 	bool FRotator::Equals(const FRotator& R, const double Tolerance) const
 	{
-		return FMath::Abs(NormalizeAxis(Pitch - R.Pitch)) <= Tolerance
-			&& FMath::Abs(NormalizeAxis(Yaw - R.Yaw)) <= Tolerance
-			&& FMath::Abs(NormalizeAxis(Roll - R.Roll)) <= Tolerance;
+		return AreAnglesNearlyZero(Tolerance, Pitch - R.Pitch, Yaw - R.Yaw, Roll - R.Roll);
 	}
 
 	bool FRotator::IsNearlyZero(const double Tolerance) const
 	{
-		return FMath::Abs(NormalizeAxis(Pitch)) <= Tolerance
-			&& FMath::Abs(NormalizeAxis(Yaw)) <= Tolerance
-			&& FMath::Abs(NormalizeAxis(Roll)) <= Tolerance;
+		return AreAnglesNearlyZero(Tolerance, Pitch, Yaw, Roll);
 	}
 
 	FRotator FRotator::GetNormalized() const
@@ -137,24 +157,18 @@ namespace PhysicsTest
 		return FRotator(NormalizeAxis(Pitch), NormalizeAxis(Yaw), NormalizeAxis(Roll));
 	}
 
-	double FRotator::ClampAxis(double Angle)
+	double FRotator::ClampAxis(const double Angle)
 	{
-		Angle = FMath::Fmod(Angle, 360.0);
-		if (Angle < 0.0)
-		{
-			Angle += 360.0;
-		}
-		return Angle;
+		// Into [0, 360): fmod keeps the sign of its first argument, so a negative remainder moves up one turn.
+		const double Remainder = FMath::Fmod(Angle, 360.0);
+		return Remainder < 0.0 ? Remainder + 360.0 : Remainder;
 	}
 
-	double FRotator::NormalizeAxis(double Angle)
+	double FRotator::NormalizeAxis(const double Angle)
 	{
-		Angle = ClampAxis(Angle);
-		if (Angle > 180.0)
-		{
-			Angle -= 360.0;
-		}
-		return Angle;
+		// Into (-180, 180].
+		const double Wrapped = ClampAxis(Angle);
+		return Wrapped > 180.0 ? Wrapped - 360.0 : Wrapped;
 	}
 
 	// ------------------------------------------------------------------------------------------------------------
@@ -162,12 +176,14 @@ namespace PhysicsTest
 	// ------------------------------------------------------------------------------------------------------------
 	FQuat::FQuat(const FVector& Axis, const double AngleRad)
 	{
-		double S = 0.0, C = 0.0;
-		FMath::SinCos(&S, &C, 0.5 * AngleRad);
-		X = S * Axis.X;
-		Y = S * Axis.Y;
-		Z = S * Axis.Z;
-		W = C;
+		// Unit quaternion of a rotation by AngleRad about the unit Axis: (sin(a/2) Axis, cos(a/2)).
+		double SinHalf = 0.0;
+		double CosHalf = 0.0;
+		FMath::SinCos(&SinHalf, &CosHalf, 0.5 * AngleRad);
+		X = SinHalf * Axis.X;
+		Y = SinHalf * Axis.Y;
+		Z = SinHalf * Axis.Z;
+		W = CosHalf;
 	}
 
 	FQuat::FQuat(const FRotator& R)
@@ -223,26 +239,25 @@ namespace PhysicsTest
 
 	void FQuat::Normalize(const double Tolerance)
 	{
-		const double SquareSum = SizeSquared();
-		if (SquareSum >= Tolerance)
-		{
-			const double Scale = FMath::InvSqrt(SquareSum);
-			X *= Scale;
-			Y *= Scale;
-			Z *= Scale;
-			W *= Scale;
-		}
-		else
+		// A quaternion too short to normalise becomes the identity (UE semantics).
+		const double LengthSquared = SizeSquared();
+		if (!(LengthSquared >= Tolerance))
 		{
 			*this = Identity;
+			return;
 		}
+		const double InvLength = FMath::InvSqrt(LengthSquared);
+		X *= InvLength;
+		Y *= InvLength;
+		Z *= InvLength;
+		W *= InvLength;
 	}
 
 	FQuat FQuat::GetNormalized(const double Tolerance) const
 	{
-		FQuat Result(*this);
-		Result.Normalize(Tolerance);
-		return Result;
+		FQuat Copy(*this);
+		Copy.Normalize(Tolerance);
+		return Copy;
 	}
 
 	FQuat FQuat::Slerp_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, const double Alpha)
@@ -290,13 +305,14 @@ namespace PhysicsTest
 
 	FVector FQuat::GetRotationAxis() const
 	{
-		const double SquareSum = X * X + Y * Y + Z * Z;
-		if (SquareSum < UE_SMALL_NUMBER)
+		// The normalised vector part; +X for a (near) identity rotation, whose axis is undefined (UE semantics).
+		const FVector Imaginary(X, Y, Z);
+		const double LengthSquared = Imaginary.SizeSquared();
+		if (LengthSquared < UE_SMALL_NUMBER)
 		{
-			return FVector(1.0, 0.0, 0.0);
+			return FVector::ForwardVector;
 		}
-		const double Scale = FMath::InvSqrt(SquareSum);
-		return FVector(X * Scale, Y * Scale, Z * Scale);
+		return Imaginary * FMath::InvSqrt(LengthSquared);
 	}
 
 	void FQuat::ToAxisAndAngle(FVector& Axis, double& Angle) const
@@ -308,32 +324,27 @@ namespace PhysicsTest
 	FRotator FQuat::Rotator() const
 	{
 		// Inverse of FRotator::Quaternion() (Z-Y-X Euler extraction with UE's pitch/roll signs). Inside the singularity
-		// band (|SingularityTest| > 0.4999995, |Pitch| > ~89.92 deg) the yaw/roll split is not unique; UE 5.8.3 snaps
+		// band (|sin(Pitch) / 2| > 0.4999995, |Pitch| > ~89.92 deg) the yaw/roll split is not unique; UE 5.8.3 snaps
 		// Pitch to +-90, sets Roll = 0 and puts the whole twist into Yaw = NormalizeAxis(-+2 * atan2(X, W))
 		// (FQuat4d::Rotator, UnrealMath.cpp:691-717).
-		const double SingularityTest = Z * X - W * Y;
-		const double YawY = 2.0 * (W * Z + X * Y);
-		const double YawX = 1.0 - 2.0 * (FMath::Square(Y) + FMath::Square(Z));
-
+		// HalfSinPitch = sin(Pitch) / 2 in UE's sign convention; the yaw and roll terms are the matrix entries of the rotation.
+		const double HalfSinPitch = Z * X - W * Y;
 		FRotator Result;
-		if (SingularityTest < -QuatSingularityThreshold)
+		if (FMath::Abs(HalfSinPitch) > QuatSingularityThreshold)
 		{
-			Result.Pitch = -90.0;
-			Result.Yaw = FRotator::NormalizeAxis(FMath::RadiansToDegrees(-2.0 * FMath::Atan2(X, W)));
+			const double Sign = HalfSinPitch > 0.0 ? 1.0 : -1.0;
+			Result.Pitch = 90.0 * Sign;
+			Result.Yaw = FRotator::NormalizeAxis(FMath::RadiansToDegrees(Sign * 2.0 * FMath::Atan2(X, W)));
 			Result.Roll = 0.0;
+			return Result;
 		}
-		else if (SingularityTest > QuatSingularityThreshold)
-		{
-			Result.Pitch = 90.0;
-			Result.Yaw = FRotator::NormalizeAxis(FMath::RadiansToDegrees(2.0 * FMath::Atan2(X, W)));
-			Result.Roll = 0.0;
-		}
-		else
-		{
-			Result.Pitch = FMath::RadiansToDegrees(FMath::Asin(2.0 * SingularityTest));
-			Result.Yaw = FMath::RadiansToDegrees(FMath::Atan2(YawY, YawX));
-			Result.Roll = FMath::RadiansToDegrees(FMath::Atan2(-2.0 * (W * X + Y * Z), 1.0 - 2.0 * (FMath::Square(X) + FMath::Square(Y))));
-		}
+		const double YawSine = 2.0 * (W * Z + X * Y);
+		const double YawCosine = 1.0 - 2.0 * (FMath::Square(Y) + FMath::Square(Z));
+		const double RollSine = -2.0 * (W * X + Y * Z);
+		const double RollCosine = 1.0 - 2.0 * (FMath::Square(X) + FMath::Square(Y));
+		Result.Pitch = FMath::RadiansToDegrees(FMath::Asin(2.0 * HalfSinPitch));
+		Result.Yaw = FMath::RadiansToDegrees(FMath::Atan2(YawSine, YawCosine));
+		Result.Roll = FMath::RadiansToDegrees(FMath::Atan2(RollSine, RollCosine));
 		return Result;
 	}
 

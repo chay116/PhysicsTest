@@ -159,7 +159,8 @@ D:\PhysicsTest\
       Core/                Math, LogMacros, AssertionMacros, CommandLine/Parse, ConfigCacheIni, IConsoleManager,
                            PlatformTime (QPC), PlatformAffinity, Fnv/Sha256, FRandomStream,
                            Containers/StringConv (UTF-16 <-> UTF-8, wmain argv, M1),
-                           Misc/PtThirdPartyIncludesStart.h / PtThirdPartyIncludesEnd.h (harness side)
+                           Misc/PtThirdPartyIncludesStart.h / PtThirdPartyIncludesEnd.h (harness side),
+                           Math/Color Matrix Sphere (FColor, FMatrix, FSphere for the debug draw, M4)
       PhysicsTestAbi/Public/PhysicsTestAbi/  PtBackendAbi.h (C)  PtBackendKit.h  PtAbiCodec.h (M14)
       PhysicsTestAbi/Private/CompatCheck/    PtAbiUeCompatCheck.cpp (Kit with UE flags)  PtAbiC11Check.c (ABI header as C11)  (M2; own CMakeLists)
       BackendCommon/Public/                  PtTypes.h  PtUnitScale.h  PtContactConvention.h  PtCombine.h  PtDamping.h  (M2)
@@ -173,8 +174,9 @@ D:\PhysicsTest\
                                  PhysicsProfile PhysicsConsoleVariables (M1) PhysicsDebugSnapshot AnalyticReference (dt_engine, M1)
                                  EffectiveSettings (DumpEffectiveSettings parser + required keys, M2)
         Private/Physics/Matrix33 (3x3 helpers: Jacobi, quat <-> matrix, M1)
-      PhysicsDebugDraw/    DebugDrawQueue DebugDrawSettings PhysicsDebugDraw DebugDrawRenderer IslandBuilder (no D3D)
-      D3D11DebugRenderer/  D3D11RHI D3D11DebugDrawRenderer SceneView; Private/WireMeshes Shaders.hlsl.inl Capture
+      PhysicsDebugDraw/    DebugDrawQueue DebugDrawSettings PhysicsDebugDraw DebugDrawRenderer IslandBuilder WireMeshes (no D3D, M4)
+      D3D11DebugRenderer/  D3D11RHI D3D11DebugDrawRenderer SceneView; Private/D3D11RHIPrivate.h Shaders.hlsl.inl
+                           StbImageWrite.cpp (M4; PNG capture is FD3D11RHI::CaptureOutputPng)
       PhysicsTestScenarios/    Public/PhysicsTestScenario.h (registry, IMPLEMENT_PHYSICS_TEST_SCENARIO, M3)
                                Public/Fixtures/FreeFallFixture.h (M2 fixture, moved from Conformance in M3)
                                Private/Scenarios/ScenarioHelpers.h  Gates/S00_FreeFall  Behavior/M1_SingleBoxDrop  Perf/M3_BoxPile (M3)
@@ -196,13 +198,15 @@ D:\PhysicsTest\
       PhysXBackend/  Private/ PhysXIncludes.h PhysXSupport.* PhysicsInitialization.cpp PhysXCPUDispatcher.*
                               PhysicsFiltering.* PhysXSimEventCallback.* PhysScene_PhysX.* PhysXBodySetup.cpp
                               PhysXBodyInstance.cpp PhysXConstraint.cpp PhysXSceneConfig.* PhysXCompat.h
-    Editor/PhysicsTestEditor/  ViewportClient CameraController ReplaySource (M12)
-                               Panels/{Engines,Inspector,Stats,Console}  (+ Profiler, OutputLog: M12)
-    Programs/  PhysicsTestBench/ (M3: Private/PhysicsTestBenchMain.cpp, RunBenchMatrix.cmake)  PhysicsTestViewer/
+    Editor/PhysicsTestEditor/  PhysicsViewportClient ViewportCameraController ViewerSession PhysicsTestEditor (M4)  ReplaySource (M12)
+                               Private/Panels/{Engines,Inspector,Stats,Console}Panel.cpp (M4)  (+ Profiler, OutputLog: M12)
+    Programs/  PhysicsTestBench/ (M3: Private/PhysicsTestBenchMain.cpp, RunBenchMatrix.cmake)
+               PhysicsTestViewer/ (M4: Private/PhysicsTestViewerApp.*, PhysicsTestViewerMain.cpp; Tests/ -> PhysicsTestViewerTests.exe)
                PhysicsTestAutomation/  PtBackendServer/ (M14, conditional)
     Tests/     SdkSmoke/ (PtSmoke{Jolt,Bullet,PhysX}.exe, M0)  Probes/ (CTest probes: includes, flag leak, BuildFlags,
                refs clean, longest path, pin guard, negative-scale fatal, M0; harness CVars, M1; check modules, Kit
-               namespaces, backend isolation, Kit needs PT_BACKEND_NS, M2; harness SDK isolation, bench without renderer, M3)
+               namespaces, backend isolation, Kit needs PT_BACKEND_NS, M2; harness SDK isolation, bench without renderer, M3;
+               automation without renderer, M4)
                AbiTwin/ (second static test backend, PT_BACKEND_NS=AbiTwin: Kit state isolation and guards, M2)
   Unreal/ChaosBridgeHost/          UBT only, implemented by the user
     ChaosBridgeHost.uproject       (name differs from the target, UEBuildTarget.cs:1926-1946 [V])
@@ -340,6 +344,12 @@ PhysicsTestChaos_UBT_{Development,Test}   custom target (PT_WITH_CHAOS=ON, not i
 - **WHOLE_ARCHIVE:** CMake의 `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>`는 한 라이브러리가 두 feature로 링크되면 거부한다 (Conformance가 Scenarios를 보통으로 링크한다). 그래서 `pt_link_scenarios(<target>)`가 보통 링크에 MSVC `/WHOLEARCHIVE:<lib 파일 이름>`을 더한다. 벤치 exe와 Automation이 이것을 쓰고, 시작할 때 `FScenarioRegistry::CheckNotEmpty()`가 빈 레지스트리를 Fatal로 막는다.
 - Jolt의 PUBLIC `/arch:AVX2`와 `JPH_*` 정의는 `PtBackendJolt` TU에만 간다 (PRIVATE 링크). 하네스 TU에 SDK include 경로·정의가 없고 Shipped에서 `/arch`가 없다는 것은 `PhysicsTest.Probe.HarnessSdkIsolation`이, 벤치 exe가 d3d11/dxgi를 import하지 않는다는 것은 `PhysicsTest.Probe.BenchNoRenderer`(dumpbin)가 확인한다. 하네스가 어댑터 오브젝트의 AVX2 COMDAT을 실행하지 않는다는 것(바이너리 수준)은 `PhysicsTest.Probe.AdapterComdats`(Automation·Bench 링커 맵, M3 수정 라운드 0, §7.3)가 확인한다. 벤치 exe도 `/MAP`을 낸다. `KitNamespaces`는 Jolt의 `PT_BACKEND_NS`도 본다.
 - `PTBuildInfo.h`에 `PT_BUILD_GIT_SHA`와 `PT_BUILD_GIT_DIRTY`를 더했다 (configure 시점 `git --no-optional-locks`). manifest의 harness 필드가 쓴다.
+
+**M4 구현 메모 [V]**
+- 더한 타깃: `PT::PhysicsDebugDraw`(`PtPhysicsDebugDraw` STATIC → PT::PhysicsCore. D3D가 없어 Automation이 모든 프리셋에서 링크한다), `PT::D3D11DebugRenderer`(→ PUBLIC PT::PhysicsDebugDraw, PRIVATE PT::Stb, d3d11, dxgi, d3dcompiler), `PT::Editor`(`PtEditor` → PUBLIC PT::D3D11DebugRenderer, PT::Benchmark, PT::Scenarios, PRIVATE PT::ImGui), `PhysicsTestViewer.exe`(→ PT::Core, PT::Editor, PT::BackendRegistry, PT::BuildInfo, PT::ImGui, PT::Json + 시나리오 전체), `PhysicsTestViewerTests.exe`(doctest, `PhysicsTest.Viewer.*`). 렌더러·Editor·두 exe는 `PT_WITH_VIEWER`(dbg, dev)에서만 만든다. test 프리셋에는 D3D 타깃이 없다.
+- 위 그래프의 `PT::D3D11DebugRenderer → imgui, implot`은 링크하지 않았다. 렌더러는 ImGui를 쓰지 않고 `DrawDebugString` 텍스트를 호출자에게 돌려준다. ImGui·ImPlot은 Editor와 viewer exe가 링크한다. 렌더러의 단위 와이어 메시는 렌더러와 무관한 `PhysicsDebugDraw/WireMeshes`로 옮겨 선분 수 시험이 모든 프리셋에서 돈다 ([Progress.md](Progress.md) M4 §3).
+- CTest: `PhysicsTest.Unit.DebugDraw`(Automation, 세 프리셋), `PhysicsTest.Unit.Viewer`, `PhysicsTest.Unit.ViewerRenderer`와 `PhysicsTest.Viewer.Headless{Null,Jolt}`(dbg·dev, 창 없이 오프스크린 D3D11. 하드웨어 D3D11 장치가 없으면 렌더러 시험은 실패가 아니라 건너뜀), `PhysicsTest.Probe.AutomationNoRenderer`(Automation이 d3d11·dxgi·d3dcompiler를 import하지 않는다), `PhysicsTest.Bench.Headline{IneligibleViz,EligibleDefault}`. doctest 요약을 보는 `PASS_REGULAR_EXPRESSION`의 `|`는 따옴표 인자 안에서 역슬래시 두 개로 쓴다 (하나면 CMake가 지워 정규식이 alternation이 되고 실패한 요약도 통과한다. M4 수정 라운드 2).
+- ODR / 플래그 격리 (DL46): `PhysicsTestViewer.exe`와 `PhysicsTestViewerTests.exe`도 `/arch:AVX2` Jolt 어댑터 객체를 에디터·렌더러·ImGui TU와 함께 링크하므로 `/MAP`을 내고, `PT_WITH_VIEWER` 프리셋(dbg·dev)에서 `PhysicsTest.Probe.AdapterComdats`가 그 map도 본다 (dev는 strict, dbg는 보고만. M4 수정 라운드 2).
 
 ### 4.6 빌드 자기보고 (G0) [MVP M0 생성, 교차검증 확장 M7]
 
@@ -871,13 +881,13 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
   - EPhysicsUpdateError를 매 스텝 검사한다.
 - **동기화:** `GetBodyInterfaceNoLock` + `GetActiveBodiesUnsafe` (M3 메모).
 - **Prepare:** `OptimizeBroadPhase`.
-- **접촉:** viz 전용 listener (잡 스레드에서 잠금·할당 없이 미리 잡은 배열에 atomic 슬롯을 예약한다. M3 메모 "스냅샷", [Progress.md](Progress.md) M3 §3 #13). `Normal = -mWorldSpaceNormal`, `Phi = -mPenetrationDepth`. impulse는 NaN이고 active 여부는 근사 플래그다.
+- **접촉:** viz 전용 listener (잡 스레드에서 잠금·할당 없이 미리 잡은 배열에 atomic 슬롯을 예약한다. M3 메모 "스냅샷", [Progress.md](Progress.md) M3 §3 #13). `Normal = -mWorldSpaceNormal`, 점마다 `Phi = -(p1 - p2)·n` (M4에서 정정. 매니폴드의 `mPenetrationDepth`는 가장 깊은 점의 값이다). impulse는 NaN이고 active 여부는 근사 플래그다. 잠든 섬의 접촉은 유지해 마지막 스텝의 플래그(Phi ≤ 0이면 `ACTIVE_APPROX`)에 `PT_CONTACT_SLEEPING`을 더해 낸다 (M4 메모. Chaos도 잠든 제약의 마지막 솔버 결과를 지우지 않아 쉬는 잠든 접촉을 활성으로 그린다).
 - **섬:** 네이티브 섬은 내부 API뿐이므로 하네스 `FIslandBuilder`를 쓴다 (§7.5).
 - **sleep 끄기 (Normalized):** 바디마다 `BodyCreationSettings::mAllowSleeping=false` (BodyCreationSettings.h:106 [V]).
 - **속도 클램프:** UEParity에서 `mMaxAngularVelocity`는 62.83으로 둔다. `mMaxLinearVelocity`(500 m/s)는 해제한다.
 
 **M3 구현 메모 [V]**
-- **생성 순서 (§6):** 바디마다 `BodyCreationSettings`(모션 타입, 레이어, `CollisionGroup`, `mAllowSleeping`, CCD, 자이로, 중력 계수, 선속도 한계, damping 0) → `AddBodiesPrepare`/`AddBodiesFinalize` 1회 → 동적 속성(질량·관성 `MassAndInertiaProvided`, damping, 각속도 한계를 `MotionProperties`에, 초기 속도) → `!bStartAwake`이고 kinematic이 아니면 `DeactivateBody`. sleep을 끈 씬(Normalized)에서는 이 마지막 단계를 건너뛰고 `jolt.start_asleep_skipped`로 센다.
+- **생성 순서 (§6):** 바디마다 `BodyCreationSettings`(모션 타입, 레이어, `CollisionGroup`, `mAllowSleeping`, CCD, 자이로, 중력 계수, 선속도 한계, damping 0, 질량·관성 `mMassPropertiesOverride` + `EOverrideMassProperties::MassAndInertiaProvided`) → `AddBodiesPrepare`/`AddBodiesFinalize` 1회 → 동적 속성(damping, 각속도 한계를 `MotionProperties`에, 초기 속도) → `!bStartAwake`이고 kinematic이 아니면 `DeactivateBody`. sleep을 끈 씬(Normalized)에서는 이 마지막 단계를 건너뛰고 `jolt.start_asleep_skipped`로 센다. 질량·관성은 UE가 `InitDynamicProperties`에서 정하지만, Jolt는 `CreateBody`가 `MotionProperties`를 계산하므로 1단계의 생성 설정에 넣는다. 그 사이에 스텝이 없어 결과는 같다 (M3 검토 지적, M4에서 이 문장을 정정했다).
 - **속도 한계:** Jolt는 언제나 clamp한다 (`ClampLinearVelocity`가 float로 제곱한다). "제한 없음"은 1e7 m/s, 1e7 rad/s로 둔다 (제곱이 float에서 유한하다). 프로필 각속도 한계(UEParity `MaxAngularVelocity`)가 있으면 그 값을 쓴다.
 - **필터:** `FJoltUEGroupFilter`. `CollisionGroup`의 GroupID에 BlockMask, SubGroupID에 ObjectType을 넣어 `(Mask0 & Bit(Type1)) && (Mask1 & Bit(Type0))`을 판정한다. BP 레이어는 정적/움직임 2개.
 - **combine:** 바디 user data의 bit 0-31에 바디 인덱스, 32-33에 마찰 결합 모드, 34-35에 반발 결합 모드를 넣고 `SetCombineFriction`/`SetCombineRestitution` 함수가 `PtCombine`의 UE 규칙(우선순위 Max > Multiply > Min > Average)으로 계산한다.
@@ -889,7 +899,7 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
 - **읽기:** `PT_READ_ACTIVE_ONLY`는 `GetActiveBodiesUnsafe` + 직전 프레임에 활성이던 바디 + 명령으로 바뀐 바디(스탬프로 중복 제거)다. 잠든 바디의 마지막 상태도 한 번 나간다.
 - **스냅샷:** viz 전용 listener는 viz 실행이나 `PT_INSTR_CONTACTS`일 때만 설치한다 (벤치는 비용을 내지 않는다, effective `listeners.installed`). `OnContactAdded`/`OnContactPersisted`의 매니폴드를 한 번 크기를 잡은 `JPH::Array`(4 × 접촉 제약 용량)에 atomic 슬롯 예약으로 모으고 (잡 스레드에서 할당·잠금 없음, 넘치면 truncated. M3 수정 라운드 0 전에는 mutex + `std::vector`), 캡처할 때 `CanonicalizeContact`로 Chaos 규약(Body0이 더 움직이는 쪽, normal은 Body1 → Body0, Phi < 0 침투)에 맞춘다. Phi ≤ 0이면 `ACTIVE_APPROX`, 아니면 `SPECULATIVE` 플래그를 단다. 임펄스는 NaN, 섬 번호는 내지 않는다.
 - **해시:** `h_native`는 바디 인덱스 순서로 Jolt가 가진 actor 위치(cm로 바꾼 double)와 회전을 이어 붙인 값의 FNV-1a 64다. 엔진 간에는 비교하지 않는다.
-- **훅:** Jolt `Trace`와 `AssertFailed`를 Kit 로그로 보낸다. assert는 dbg 빌드에서만 켜지고, 난 스텝은 오류 bit 0x200(벤치 종료 코드 3), 누적 횟수는 모듈 effective 키 `jolt.asserts`로 남는다. `Factory`와 `RegisterTypes`는 `InitGamePhys`에서, 해제는 `TermGamePhys`에서 한다.
+- **훅:** Jolt `Trace`와 `AssertFailed`를 Kit 로그로 보낸다. assert는 dbg 빌드에서만 켜지고, 난 스텝은 오류 bit 0x200(벤치 종료 코드 3), 누적 횟수는 모듈 effective 키 `jolt.asserts`로 남는다. M4부터 `Update` 밖의 assert(생성, 명령, 읽기, 스냅샷)도 다음 프레임의 0x200과 `GetStepStats`의 누적 bit가 된다 (씬이 카운터를 `SetUpForFrame`, `StartFrame` 앞뒤, `EndFrame`, `GetStepStats`에서 확인한다. 프레임 사이의 `GetStepStats`가 먼저 본 assert는 대기 bit로 남아 다음 프레임에 들어간다. M3 검토 지적, M4 수정 라운드 0). `Factory`와 `RegisterTypes`는 `InitGamePhys`에서, 해제는 `TermGamePhys`에서 한다.
 - **예외와 RTTI:** 어댑터 TU는 CMake 기본 `/GR /EHsc`를 유지한다 (Jolt 자신은 `/GR-`, 예외 없음). Kit의 예외 장벽이 하네스와 같은 조건에서 동작한다. 어댑터 컨테이너는 `JPH::Array`라 예외를 던지지 않는다 (§7.3 어댑터 규칙, M3 수정 라운드 0). `JPH::GetConfigurationString()`은 헤더 inline이라 어댑터 TU 기준("(C++ RTTI) (C++ Exceptions)")을 보고하므로, Jolt lib의 플래그 증거는 `BuildFlags.json`이다.
 - **변형:** `Config/Profiles/Backend/Jolt.Default.ini`가 Jolt 기본값을 명시한다 (NumVelocitySteps 10, NumPositionSteps 2, ConvexRadius 5 cm, PenetrationSlop 2 cm, SpeculativeContactDistance 2 cm, Baumgarte 0.2). 옵션 키는 이 6개와 `UseLargeIslandSplitter`, `DeterministicSimulation`, `TempAllocatorBytes`다.
 - **effective 키:** 공통 키 24개 + `jolt.config_string`, `jolt.temp_allocator_bytes`, `jolt.temp_allocator_peak_bytes`, `jolt.temp_allocator_fallbacks`, `jolt.capacity`, `jolt.penetration_slop`, `jolt.baumgarte`, `jolt.max_depenetration_velocity`(n/a), `jolt.inertia_conditioning`(n/a), `jolt.start_asleep_skipped`, `jolt.update_error_bits` + 선택 키 `errors.capacity_bits`(0x107, [Abi.md](Abi.md) §5.14). 모듈 키는 `jolt.version`(`JPH_VERSION_*`와 고정 SHA로 만든다), `jolt.module_config_string`, `jolt.max_threads`, `jolt.live_scenes`, `jolt.asserts`. READBACK은 엔진에서 읽은 값만이다 (M3 수정 라운드 1): `shape.box_margin`은 바디 셰이프의 `BoxShape::GetConvexRadius`(데코레이터·compound를 따라간다), `threads.workers`는 `JobSystemThreadPool::GetMaxConcurrency() - 1`, `shape.convex_radius`는 옵션 값이라 SET_ONLY다.
@@ -1177,8 +1187,10 @@ after EndFrame, only on viz/capture frames, untimed
     DrawParticleShapes -> DrawCollisions -> DrawParticleMass -> DrawParticleBounds -> DrawParticleTransforms
     -> DrawConstraintGraph (islands) -> DrawSleepState (UE: FPBDIslandManager::DebugDrawSleepState)
     -> DrawCollidingShapes -> DrawJointConstraints
-  -> FDebugDrawQueue (Chaos::FDebugDrawQueue signatures; budget p.Chaos.DebugDraw.MaxLines 20000, region radius 3000 cm)
-  -> VisitCommands -> IDebugDrawRenderer -> FD3D11DebugDrawRenderer
+  -> FDebugDrawQueue (Chaos::FDebugDrawQueue signatures; capture stage = FChaosDDFrame: budget p.Chaos.DebugDraw.MaxLines
+     20000, region radius 3000 cm)
+  -> VisitCommands -> FDebugDrawRenderStage (render stage = FChaosDDRenderer: same budget and region again)
+  -> IDebugDrawRenderer -> FD3D11DebugDrawRenderer
 ```
 
 - 섬 드로어 이름은 UE와 같은 `DrawConstraintGraph`다. CVar는 UE처럼 `p.Chaos.Solver.DebugDrawIslands`다.
@@ -1250,8 +1262,23 @@ CVar 이름은 Chaos와 같다: `p.Chaos.DebugDraw.Enabled`, `p.Chaos.Solver.Deb
 - **타이밍 표기:** 뷰어가 보여주는 모든 시간에는 "viz mode, not a benchmark"를 붙인다. 뷰어에서 나온 manifest는 mode=viz이며 분석 단계가 거부한다.
 - **성능 기준:**
   - 1600×900, RTX 3080에서 시뮬레이션을 멈춘 상태로 ≥ 60 fps.
-  - 스냅샷 + 드로의 CPU 시간은 씬당 ≤ 4 ms (`M3.BoxPile` 10k).
+  - 스냅샷 + 드로의 CPU 시간은 씬당 ≤ 4 ms (`M3.BoxPile` 10k). 연속 부하(`-Headless` 또는 `-NoVSync`)에서 재고 Stats에 표시한다. 창 모드 vsync의 Stats 값은 판정에 쓰지 않는다 (M4 [V]: vsync를 기다리며 쉬는 스레드는 같은 일을 2~3배 느리게 한다).
   - 라이브 시뮬레이션의 fps는 보고만 하고 게이트로 쓰지 않는다. 물리가 메시지 루프 스레드에서 돌고, Bullet ST만 해도 3008 박스에서 스텝당 중앙값 18.1 ms가 걸리기 때문이다 [V build-bullet].
+
+**M4 구현 메모 [V]** ([Progress.md](Progress.md) M4)
+- **파이프라인 함수:** `DebugDraw::CaptureSnapshot`(백엔드 스냅샷. 스냅샷이 없는 백엔드(Null)는 호스트가 당겨 둔 바디 상태로 파티클을 만들고 `bFromHostState`를 켠다) → `FIslandBuilder::Build`/`GatherIslands`(접촉을 캡처한 프레임만) → `DebugDraw::DrawAll`(`FDrawContext`: 씬, 스냅샷, 설정, 플래그, 바디 → 파티클 표, 섬 목록) → `FDebugDrawQueue::ExtractAllElements` → `VisitCommands`(→ `FDebugDrawRenderStage`) → `FD3D11DebugDrawRenderer`. 뷰어에서는 `FPhysicsViewportClient::BuildFrame` 한 함수가 이 순서로 부르고 단계별 CPU 시간을 잰다.
+- **영역과 예산 (수정 라운드 0에서 5.8.3 모델로 고침):** 5.8.3은 새 큐가 기본이고(`bChaosDebugDraw_UseNewQueue = true`, DebugDrawQueue.cpp:10 [V]) 판정이 두 단계다. **캡처 단계**(`FDebugDrawQueue`, UE `FChaosDDFrame`): 솔버 드로어는 ChaosDebugDraw.cpp:151-245의 파일 지역 래퍼를 거쳐 `FChaosDDPrimitives`로 가므로 비용은 점·선·화살표·원 1, 구 64, 캡슐 16, 박스 12, 삼각형 3, 문자열 10이고, 명령마다 **자기 bounds**로 영역을 본다 (DebugDrawPrimitives.cpp:11-120 [V]. 박스 bounds는 넘긴 half extent의 절반 크기, 캡슐 bounds는 축 선분뿐이라는 UE 특성까지 따른다). 셰이프는 `FChaosDDParticle::DrawShapes` 경로라 셰이프 하나에 비용 1, 파티클 bounds로만 거른다 (PBDRigidsSolver.cpp:3445-3453, DebugDrawParticle.cpp:283-349 [V]). 영역은 반경 0이면 어디서나, 아니면 bounds와 중심의 제곱 거리 < W², 예산 0은 무한이고 거부된 명령의 비용도 누적한다 (ChaosDDFrame.h:106-149 [V]). 레거시 API로만 있는 `DrawDebugCoordinateSystem`은 위치 판정·비용 3의 latent 명령이다. **렌더 단계**(`FDebugDrawRenderStage`, UE `FChaosDDRenderer`, ChaosDebugDrawSubsystem.cpp:50-246 [V]): 같은 `MaxLines`를 렌더 예산으로 다시 쓰고 비용은 점·선 1, 화살표 3, 원 8, 구 16, 캡슐 16, 박스 12, 삼각형 3, 문자열 10이다. 영역은 제곱 거리 <= W²이고, `TryAddToCost`가 수락한 명령의 비용을 두 번 더하는 UE 동작도 그대로 따른다 (박스 하나가 예산 24를 쓴다). latent 명령은 먼저, 예산 밖에서 그린다. 하네스가 다른 점은 하나다: UE 렌더 단계의 영역 판정에는 W > 0 조건이 없어 `Radius 0`("0 means infinite")이면 카메라를 bounds 안에 품은 명령만 그려지는데, 하네스는 두 단계 모두 W = 0을 어디서나로 둔다. 영역 중심은 카메라 위치다 (ChaosDebugDrawSubsystem.cpp:411-417 [V]). SleepState·CollidingShapes는 `DrawShapesImpl` 경로라 셰이프마다 자기 bounds로 먼저 거르고, 접촉은 두 파티클 bounds로 거른다 (ChaosDebugDraw.cpp:910, 1437-1445 [V]). 기본값(MaxLines 20000, Radius 3000 cm)이면 `M3.BoxPile` 1k도 렌더 예산 때문에 박스 833개만 그려지고(1001 × 24 > 20000) 그 뒤의 접촉·bounds는 그려지지 않는다. 그래서 Stats가 두 단계의 비용·거부 수와 UE의 "Capture / Render Budget Exceeded" 문구를 보여 주고, 하나도 안 그려지면 뷰포트 가운데에 안내를 띄우고, Show 메뉴에 "Draw everything (MaxLines 0, Radius 0)"을 뒀다.
+- **원과 구:** 원 명령은 `DrawCollisionImpl`처럼 12분할을 기록하지만 비용은 분할 수와 무관하다 (캡처 1, 렌더 8). `IDebugDrawRenderer::RenderCircle`에는 분할 인자가 없고, UE의 ChaosDD 렌더러도 원과 구를 `SphereSegments(8)`로 그린다 (ChaosDebugDrawSubsystem.cpp:58, :133-154 [V]). 그래서 원은 8선분, 구는 128선분이다.
+- **CVar 기본값:** A.11 스케치대로 `p.Chaos.DebugDraw.Enabled`, `p.Chaos.Solver.DebugDrawShapes`, `p.Chaos.Solver.DebugDrawJoints`가 1이다 (UE는 0이고 콘솔로 켠다). 나머지는 UE 값이다.
+- **섬:** 간선은 Phi ≤ 0 접촉과 씬의 조인트다. static뿐 아니라 kinematic도 섬을 잇지 않는다 (Chaos의 섬 노드는 dynamic 파티클이다). 간선이 하나도 없는 dynamic 바디는 섬이 없다 (Chaos의 isolated particle, IslandManager.cpp:4194-4224 [V]). 섬 색 번호는 id 정렬 목록의 위치다 (UE `GetIslandColor`의 인자가 섬 배열 위치인 것과 같다). Jolt 스냅샷은 잠든 섬의 접촉을 `PT_CONTACT_SLEEPING`으로 유지하므로 UEParity에서 잠든 섬이 Black으로 남는다 (§8.3).
+- **조인트:** Chaos의 a = particle[1], b = particle[0]을 `FConstraintInstance::Body2`, `Body1`로 둔다 (PROVISIONAL(M9)). 기본 기능(actor connector + stretch, ChaosDebugDraw.h:179-185 [V])만 그린다. b 쪽 간격도 a의 길이(`Lena`)로 나누는 UE 코드(ChaosDebugDraw.cpp:1869 [V])까지 따랐다.
+- **SleepState:** 스냅샷에 매끄럽게 한 속도(VSmooth)가 없어 현재 속도를 쓴다. 임계값은 바디 머티리얼의 sleep 임계값 × sleep family 배수이고, 프로필이 sleep을 끄면 임계값이 없다 (회색). 섬이 없는(고립된) 잠든 바디는 그리지 않는다: UE의 고립 루프는 활성 파티클 보기(`GetActiveDynamicMovingKinematicParticlesView`)를 도는데 잠든 파티클은 활성 배열에서 빠진다 (PBDRigidsSOAs.cpp:50-57, PBDRigidsSOAs.h:722-749, IslandManager.cpp:2712 [V]. 수정 라운드 1).
+- **그리지 않는 것:** convex 요소(Phase 1 씬에 없다. Stats가 개수를 낸다), 접촉의 InitialPhi 원과 restored·replaced 정보 상자(스냅샷에 데이터가 없다), contact graph 선(UE 기본 꺼짐).
+- **렌더러:** 위치는 카메라 상대 float로 올린다. 선 폭은 끝점마다 `max(LineThickness × 픽셀/cm, 1 px)`를 VS에서 정한다. 박스·구·캡슐·원은 단위 메시 인스턴스(80 B), 선과 점은 구조화 버퍼다. 화살표는 UE line batcher처럼 축 하나와 머리선 둘이다: 끝에서 축을 따라 −√ArrowSize, 옆으로 ±√ArrowSize (ArrowSize 10이면 한 줄 약 4.47 cm, LineBatchComponent.cpp:361-383 [V]). 옆 방향은 Core의 `FVector::GetPerpendicularUnit`(축 × 월드 Z, 축의 Z 성분이 가장 크면 축 × 월드 X)이라 머리가 UE와 같은 평면에 놓인다. 원 명령의 틀은 `MakeCircleFrame`이 만들고(UE `FRotationMatrix::MakeFromYZ`의 결과), 축이 0이거나 평행해도 직교 틀을 낸다 (M4 수정 라운드 2. 두 함수는 UE 코드가 아니라 모양 설명에서 짰다). 캡슐 양 끝 반구의 중심은 중심에서 `max(HalfHeight − Radius, 1)`이다 (LineBatchComponent.cpp:588 [V]). GPU 시간은 timestamp query 4개 링이다.
+- **앱:** 콘솔 서브시스템 exe다 (로그가 콘솔로 간다). `-Headless`는 창 없이 같은 경로로 오프스크린에 그린다 (자동 검사와 문서 그림). ImGui 레이아웃은 창 모드에서 `Saved/Config/PhysicsTestViewer.imgui.ini`에 남는다. 물리는 렌더 프레임마다 한 프레임이다 (일시정지면 0, "한 스텝"이면 정확히 1). 화면이 60 Hz보다 느리면 시뮬레이션도 실시간보다 느리다 (viz). 잘못된 `-Threads`, `-Frames`, `-WarmupFrames`, `-Param:` 값은 모든 모드에서 종료 코드 2다 (벤치와 같다. 처음 구현은 `-Param:`을 조용히 버리고 기본 파라미터로 씬을 열었다). 종료 때 레지스트리가 초기화된 모듈 중 살아 있는 씬이 없는 것을 모두 `TermGamePhys`한다 (`FPhysicsBackendRegistry::TermIdleModules`: 열기에 실패한 선택이 초기화한 모듈 포함). 전원 스로틀링(QoS)은 Windows 기본값이다. 뷰어 전용 opt-out과 `-AllowPowerThrottling`은 효과가 재어지지 않아 수정 라운드 2에서 지웠고, 벤치와 뷰어의 QoS 정책은 M7 호스트 제어(DL11)가 함께 정한다.
+- **재시작:** `FViewerSession::Open`이 씬을 만들기 전에 레지스트리 규칙을 본다. 두 번째 UE_RUNTIME 모듈, 다른 init 옵션으로 초기화된 GLOBAL_SCENE_SETTINGS 모듈, ONE_PER_PROCESS·NO_REINIT·GLOBAL_SCENE_SETTINGS 모듈의 InitGamePhys 거부는 RestartRequired다 (`ClassifyBackendSwitch`). Engines 패널의 버튼이 같은 exe를 새 선택의 명령줄로 띄우고 (`CreateProcessW`) 자신은 끝난다. 모듈은 프로세스가 끝날 때까지 내리지 않는다 (PhysX는 InitGamePhys가 한 번이다). 변형의 엔진 키는 씬 전에 빈 시험 씬으로 검사해 Fatal 대신 오류 문장을 낸다 (벤치의 preflight와 같다).
+- **카메라 [R]:** 최대 비행 속도 1000 cm/s × 속도 배율, 마우스 시점 0.25°/px, 피치 ±89°, C/Z FOV 60°/s, 비행이 아닐 때 휠 1칸 = 100 cm × 배율 전진, 왼쪽 드래그는 지면 이동 + yaw, 가운데 드래그는 팬. 설계가 정한 값(hFOV 90 major 축, near 10 cm, RMB + WASD, E/Q 월드 상하, 휠 ±10 %, 가속 20000 cm/s², 감쇠 10/s)은 단위 테스트로 고정했다.
+- **manifest:** 스크린숏마다 `<png>.json`(`schema = physicstest.viewer/1`, `mode = viz`, `timing_label`, `timing_valid_for_headline = false`, 씬·desc·options 해시, 카메라, 디버그 드로 플래그와 수, 단계별 시간)을 쓰고, `-PerfReport`는 `physicstest.viewer.perf/1`(mode viz)을 쓴다. 뷰어가 여는 씬의 `RunMode`는 언제나 Viz다.
 
 **2단계 [확장 M12]**
 - **레이아웃:** SideBySide / GhostOverlay (엔진별 tint + COM 궤적).
@@ -1352,7 +1379,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **`states.ptst`** [확장 M7] (little-endian):
   - 64 B 헤더: magic `PTST`, version, flags, body_count, frame_count, record_stride 112, units 1=cm, dt, scene_sha256 prefix, desc_sha256 prefix.
   - 프레임 레코드: {u32 frame, u32 step, f64 sim_time}.
-  - 바디 레코드: 13×f64 (actor 원점 위치, quat, COM 선속도 cm/s, 각속도 rad/s) + u8 state + pad.
+  - 바디 레코드: 13×f64 (actor 원점 위치, quat, 선속도 cm/s(dynamic은 COM, kinematic은 actor 원점: `PtBodyState`, §5.2 #48. M4에서 정정), 각속도 rad/s) + u8 state + pad.
   - numpy 로딩용 `states.dtype.json`을 함께 둔다.
 - **`hashes.csv`** [확장 M7]: `frame, h_native, h_quantized`. h_quantized는 위치 1e-4 cm, quat는 w≥0으로 정규화 후 1e-6. 엔진 간이나 빌드 간에는 절대 비교하지 않는다.
 - **`contacts.ptcn`** [확장 M7]: `PTCN` 헤더 + 프레임별 {u32 frame, u32 count} + `PtContactPoint[count]`.
@@ -1366,6 +1393,10 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **출력:** `timings.csv`, `manifest.json`, `effective_settings.jsonl`(Prepare 전, §12.2의 7), `effective_settings_after.jsonl`(마지막 프레임 뒤. temp allocator peak 같은 READBACK 값), `scene.json`. 카운터는 `CountersEvery = 0`이라 -1, `solver_ns`는 비운다. 명령이 없는 프레임의 `push_ns`는 0이다 (호출이 없다, §9.3).
 - **manifest:** `schema = physicstest.run/1`, `status`, `exit_code`, `unofficial = true`, `timing_label`(비공식 사유 문장), `timing_valid_for_headline = false`, harness(git SHA, dirty, `git_sha_source = cmake_configure`: 마지막 configure 시점 값이라 그 뒤의 커밋·수정은 반영되지 않는다, exe SHA-256, preset), build(`crt`는 하네스 TU의 `_DLL`/`_DEBUG`로 정한다: dbg는 `MDd`. `lto`는 `CMAKE_INTERPROCEDURAL_OPTIMIZATION`), backend, profile(`physics_sha256`, `variant_sha256`, fidelity notes), `effective[]`, `effective_module[]`, `missing_effective_keys`, `bodies_sampled`(질량 상대 오차와 관성 텐서 R·diag·Rᵀ의 상대 오차. 엔진의 주축 순서는 하네스와 다를 수 있다), scene(`scene_sha256`, `desc_sha256`, `desc_sha256_scope`, `options_sha256`, windows), run(`frames`, `frames_run`, `sync_policy` = `push_per_step+pull_active_only_per_frame`(Harness driver) 또는 `push_per_frame+pull_active_only_per_frame`(Native driver)), threads(`T`, `engine_native` = 백엔드의 `threads.workers` READBACK), platform, memory(프로세스 peak commit·WS와 현재 값, 백엔드 씬 `GetMemoryStats`), `phases_ns`(`option_preflight` 포함), summary(윈도별 mean/median/p95/p99/min/max, frame 0 별도), determinism(`h_native`, `engine_error_bits`, `capacity_error_bits_declared`·`capacity_error_bits`·`other_error_bits`), 시험 전용 `run.injected_engine_error_bits`(`-InjectEngineErrorBits`를 줬을 때만), `deferred_fields`(M7/M10이 채울 §12.3 필드 목록), outputs. preflight 실패는 앞부분(status, harness, build, backend, profile)과 `preflight_error`만 쓴다 (M3 수정 라운드 0).
 - **비공식:** M3의 모든 타이밍은 비공식이다. 측정 프로토콜(M7), 전원 계획 확인(M8 러너), 적합성 스탬프(M10)가 없다.
+
+**M4 메모 [V]** (M3 검토 경미 지적)
+- `scene_sha256`의 정규 JSON에 seed(정수, `GetSeed`)를 언제나 넣는다: `{"name","params","seed","version"}`. 전에는 `Seed` 파라미터를 선언한 씬(`M3.BoxPile`)만 seed가 들어갔다. 값이 바뀌었으므로 M3 세션의 `scene_sha256`과는 비교하지 않는다.
+- manifest `run.headline_eligible`, `run.headline_ineligible_reasons`: 틱 모드가 FixedStep이 아니거나, `RunMode`가 Bench가 아니거나, `InstrumentFlags`가 0이 아니면 거짓과 사유(경고 로그도 낸다). run은 그대로 돌고 종료 코드도 바뀌지 않는다 (M7 분석이 거른다). 벤치 루프는 언제나 명목 dt의 FixedStep 프레임을 넣는다. 비공식 표시(`timing_valid_for_headline = false`)는 그대로다.
 
 ### 12.4 적합성 스탬프 [확장 M10]
 

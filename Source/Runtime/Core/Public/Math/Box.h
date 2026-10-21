@@ -40,5 +40,22 @@ namespace PhysicsTest
 		{
 			return P.X > Min.X && P.X < Max.X && P.Y > Min.Y && P.Y < Max.Y && P.Z > Min.Z && P.Z < Max.Z;
 		}
+		// The squared distance from P to the box (0 inside). UE: TBox::ComputeSquaredDistanceToPoint.
+		[[nodiscard]] double ComputeSquaredDistanceToPoint(const FVector& P) const
+		{
+			double DistanceSq = 0.0;
+			for (int32 Axis = 0; Axis < 3; ++Axis)
+			{
+				if (P[Axis] < Min[Axis])
+				{
+					DistanceSq += (Min[Axis] - P[Axis]) * (Min[Axis] - P[Axis]);
+				}
+				else if (P[Axis] > Max[Axis])
+				{
+					DistanceSq += (P[Axis] - Max[Axis]) * (P[Axis] - Max[Axis]);
+				}
+			}
+			return DistanceSq;
+		}
 	};
 }

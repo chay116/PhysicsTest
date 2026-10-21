@@ -41,8 +41,7 @@ namespace PhysicsTest
 
 	int32 FRandomStream::RandRange(const int32 Min, const int32 Max)
 	{
-		const int32 Range = (Max - Min) + 1;
-		return Min + RandHelper(Range);
+		return Min + RandHelper(Max - Min + 1);   // Max - Min + 1 values, Min .. Max inclusive
 	}
 
 	double FRandomStream::FRandRange(const double Min, const double Max)

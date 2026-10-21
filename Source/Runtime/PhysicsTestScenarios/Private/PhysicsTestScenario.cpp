@@ -194,7 +194,9 @@ namespace PhysicsTest
 
 	std::string IPhysicsTestScenario::MakeCanonicalJson(const FScenarioParams& Resolved) const
 	{
-		// Keys in a fixed order, parameters sorted by name (std::map), every value a string: one text per scene.
+		// Keys in a fixed order, parameters sorted by name (std::map), every parameter value a string: one text per scene.
+		// The seed is always there (M4, M3 review): a scene without a Seed parameter still draws from FRandomStream with
+		// GetDefaultSeed(), and a change of that default must change scene_sha256 (02 12.3: name, version, params, seed).
 		std::string Json = "{\"name\":";
 		AppendJsonString(Json, GetName());
 		Json += ",\"params\":{";
@@ -207,7 +209,7 @@ namespace PhysicsTest
 			Json += ':';
 			AppendJsonString(Json, Value);
 		}
-		Json += "},\"version\":" + std::to_string(GetVersion()) + "}";
+		Json += "},\"seed\":" + std::to_string(GetSeed(Resolved)) + ",\"version\":" + std::to_string(GetVersion()) + "}";
 		return Json;
 	}
 

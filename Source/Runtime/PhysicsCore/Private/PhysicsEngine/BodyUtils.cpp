@@ -114,9 +114,12 @@ namespace PhysicsTest::BodyUtils
 		// diagonalises otherwise; returns the principal moments and composes the rotation of mass.
 		void TransformToLocalSpace(const FMatrix33& Inertia, FQuat& InOutRotationOfMass, FVector& OutPrincipal)
 		{
-			const double OffDiagSizeSq = FMath::Square(Inertia.M[1][0]) + FMath::Square(Inertia.M[2][0]) + FMath::Square(Inertia.M[2][1]);
-			const double Trace = (Inertia.M[0][0] + Inertia.M[1][1] + Inertia.M[2][2]) / 3.0;
-			if (Trace <= UE_SMALL_NUMBER || (OffDiagSizeSq / FMath::Square(Trace)) < UE_SMALL_NUMBER)
+			// Diagonal enough: the squared off-diagonal terms are negligible next to the squared mean moment (ratio below
+			// UE_SMALL_NUMBER), or the tensor is vanishingly small. Same arithmetic as Chaos (bit-identical results).
+			const double OffDiagonalSquares = FMath::Square(Inertia.M[1][0]) + FMath::Square(Inertia.M[2][0]) + FMath::Square(Inertia.M[2][1]);
+			const double MeanMoment = (Inertia.M[0][0] + Inertia.M[1][1] + Inertia.M[2][2]) / 3.0;
+			const bool bVanishing = MeanMoment <= UE_SMALL_NUMBER;
+			if (bVanishing || OffDiagonalSquares / FMath::Square(MeanMoment) < UE_SMALL_NUMBER)
 			{
 				// Identity rotation; the diagonal is kept and the (tiny) off-diagonal terms are dropped (UE reads the
 				// diagonal only, BodyInstance.cpp:3500-3503).
@@ -127,19 +130,34 @@ namespace PhysicsTest::BodyUtils
 			InOutRotationOfMass = InOutRotationOfMass * Private::QuatFromRotationMatrix(Eigenvectors);
 		}
 
-		// Chaos::Utilities::ScaleInertia (matrix overload, Utilities.h:537-560 [V]) with bScaleMass = false.
+		// The inertia of the same body stretched by Scale along its local axes, mass unchanged: the result of
+		// Chaos::Utilities::ScaleInertia (matrix overload, Utilities.h:537-560 [V]) with bScaleMass = false. Each diagonal
+		// entry is a sum of two second moments (I_xx = S_y + S_z with S_a = sum of m a^2), so S_a = trace / 2 - I_aa; a
+		// stretch by s_a multiplies S_a by s_a^2 and a product of inertia I_ab by s_a s_b. The sign of a scale does not
+		// matter. Same operations in the same order as Chaos, so the values match to the bit (BodyUtils golden tests).
 		FMatrix33 ScaleInertia(const FMatrix33& Inertia, const FVector& Scale)
 		{
-			const FVector AbsScale(FMath::Abs(Scale.X), FMath::Abs(Scale.Y), FMath::Abs(Scale.Z));
-			const FVector D = Inertia.GetDiagonal();
-			const FVector XYZSq = (FVector(0.5 * (D.X + D.Y + D.Z)) - D) * AbsScale * AbsScale;
+			const double Stretch[3] = { FMath::Abs(Scale.X), FMath::Abs(Scale.Y), FMath::Abs(Scale.Z) };
+			const double HalfTrace = 0.5 * (Inertia.M[0][0] + Inertia.M[1][1] + Inertia.M[2][2]);
+			double SecondMoment[3];
+			for (int32 Axis = 0; Axis < 3; ++Axis)
+			{
+				SecondMoment[Axis] = (HalfTrace - Inertia.M[Axis][Axis]) * Stretch[Axis] * Stretch[Axis];
+			}
 			FMatrix33 Result;
-			Result.M[0][0] = XYZSq.Y + XYZSq.Z;
-			Result.M[1][1] = XYZSq.X + XYZSq.Z;
-			Result.M[2][2] = XYZSq.X + XYZSq.Y;
-			Result.M[0][1] = Result.M[1][0] = Inertia.M[0][1] * AbsScale.X * AbsScale.Y;
-			Result.M[0][2] = Result.M[2][0] = Inertia.M[0][2] * AbsScale.X * AbsScale.Z;
-			Result.M[1][2] = Result.M[2][1] = Inertia.M[1][2] * AbsScale.Y * AbsScale.Z;
+			for (int32 Row = 0; Row < 3; ++Row)
+			{
+				// The two other axes, in increasing order (S_y + S_z, S_x + S_z, S_x + S_y).
+				const int32 Low = Row == 0 ? 1 : 0;
+				const int32 High = Row == 2 ? 1 : 2;
+				Result.M[Row][Row] = SecondMoment[Low] + SecondMoment[High];
+				for (int32 Column = Row + 1; Column < 3; ++Column)
+				{
+					const double Product = Inertia.M[Row][Column] * Stretch[Row] * Stretch[Column];
+					Result.M[Row][Column] = Product;
+					Result.M[Column][Row] = Product;
+				}
+			}
 			return Result;
 		}
 	}

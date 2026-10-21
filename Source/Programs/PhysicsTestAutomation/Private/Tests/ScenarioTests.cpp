@@ -161,7 +161,7 @@ TEST_CASE("PhysicsTest.Scenario.ParamsAndSceneHash")
 	REQUIRE(Pile.ResolveParams({}, Params, Error));
 	CHECK(Params.at("N") == "1000");
 	CHECK(Params.at("Seed") == "24301");
-	CHECK(Pile.MakeCanonicalJson(Params) == "{\"name\":\"M3.BoxPile\",\"params\":{\"N\":\"1000\",\"Seed\":\"24301\"},\"version\":1}");
+	CHECK(Pile.MakeCanonicalJson(Params) == "{\"name\":\"M3.BoxPile\",\"params\":{\"N\":\"1000\",\"Seed\":\"24301\"},\"seed\":24301,\"version\":1}");
 	const std::string Sha1000 = Pile.ComputeSceneSha256(Params);
 	CHECK(Sha1000.size() == 64u);
 	REQUIRE(Pile.ResolveParams({ { "n", "5000" } }, Params, Error));   // parameter names compare case-insensitively
@@ -175,6 +175,35 @@ TEST_CASE("PhysicsTest.Scenario.ParamsAndSceneHash")
 	REQUIRE(Drop.ResolveParams({ { "Case", "b" } }, Params, Error));
 	CHECK(Params.at("Case") == "b");
 	CHECK(Drop.GetSeed(Params) == FRandomStream::DefaultSeed);   // no Seed parameter: the scenario default
+	CHECK(Drop.MakeCanonicalJson(Params) == "{\"name\":\"M1.SingleBoxDrop\",\"params\":{\"Case\":\"b\"},\"seed\":24301,\"version\":1}");
+}
+
+// M4 (M3 review minor): scene_sha256 covers the seed also for a scene that declares no Seed parameter, so a change of
+// GetDefaultSeed() changes the hash (02 12.3).
+TEST_CASE("PhysicsTest.Scenario.SceneHashCoversDefaultSeed")
+{
+	struct FSeedOnlyScenario final : IPhysicsTestScenario
+	{
+		int32 Seed = FRandomStream::DefaultSeed;
+		const char* GetName() const override { return "Test.SeedOnly"; }
+		int32 GetVersion() const override { return 1; }
+		EScenarioKind GetKind() const override { return EScenarioKind::Gate; }
+		bool IsChaotic() const override { return false; }
+		const char* GetDescription() const override { return "test only"; }
+		int32 GetDefaultFrames(const FScenarioParams&) const override { return 1; }
+		std::vector<FStepWindow> GetWindows(const FScenarioParams&) const override { return {}; }
+		FScenarioCapacity GetCapacity(const FScenarioParams&) const override { return {}; }
+		void BuildScene(FPhysScene&, const FScenarioContext&) override {}
+		int32 GetDefaultSeed() const override { return Seed; }
+	};
+	FSeedOnlyScenario Scenario;
+	FScenarioParams Params;
+	std::string Error;
+	REQUIRE(Scenario.ResolveParams({}, Params, Error));
+	const std::string Before = Scenario.ComputeSceneSha256(Params);
+	Scenario.Seed = 7;
+	CHECK(Scenario.ComputeSceneSha256(Params) != Before);
+	CHECK(Scenario.MakeCanonicalJson(Params) == "{\"name\":\"Test.SeedOnly\",\"params\":{},\"seed\":7,\"version\":1}");
 }
 
 // M3 fix round: Seed is an Int32 parameter. A malformed value is rejected (it used to become std::atoi's 0), and the

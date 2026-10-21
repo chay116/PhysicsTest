@@ -295,6 +295,7 @@ namespace PhysicsTest::JoltBackend
 		Desc.DebugName = nullptr;
 		Desc.Options = nullptr;
 		Desc.NumOptions = 0;
+		AssertsSeen = GetNumJoltAsserts();   // asserts from here on (creation included) are this scene's (CheckJoltAsserts)
 		Gravity = InDesc.Gravity;
 		bSleepingAllowed = (InDesc.SimFlags & PT_SIM_ALLOW_SLEEPING) != 0;
 		// Fixed capacities from the scenario's declared counts (02 9.4); overflow is the run's G12 failure.
@@ -317,6 +318,9 @@ namespace PhysicsTest::JoltBackend
 			// Sized once from the contact capacity: the job threads never allocate (JoltContactListener.h).
 			ContactListener = std::make_unique<FJoltContactListener>(GListenerPointsPerConstraint * MaxContactConstraints);
 			System->SetContactListener(ContactListener.get());
+			SleepingContacts.reserve(GListenerPointsPerConstraint * MaxContactConstraints);
+			SleepingScratch.reserve(GListenerPointsPerConstraint * MaxContactConstraints);
+			KeptContactBodies.reserve(MaxBodies);
 		}
 		Bodies.reserve(MaxBodies);
 		MobilityRanks.reserve(MaxBodies);
@@ -692,9 +696,158 @@ namespace PhysicsTest::JoltBackend
 			System->SetGravity(ToJoltLength(Gravity));
 		}
 		StepDeltaTime = Params.DeltaSeconds;   // one step per call (no NATIVE_FRAME_MODEL: MaxSubsteps 1, no substepping)
-		FrameErrorBits = 0;
+		// Asserts since the last frame belong to this frame: the ones a query between frames already counted (PendingErrorBits,
+		// see CheckJoltAssertsBetweenFrames) and the ones nobody has looked at yet (creation, commands, reads).
+		FrameErrorBits = PendingErrorBits;
+		PendingErrorBits = 0;
 		bStepped = false;
+		CheckJoltAsserts();
 		return PT_OK;
+	}
+
+	void FPhysScene_Jolt::CheckJoltAsserts()
+	{
+		const uint32 Now = GetNumJoltAsserts();
+		if (Now != AssertsSeen)
+		{
+			FrameErrorBits |= GJoltErrorAssert;   // dbg builds (logged by JoltAssertFailed)
+			TotalErrorBits |= GJoltErrorAssert;
+			AssertsSeen = Now;
+		}
+	}
+
+	void FPhysScene_Jolt::CheckJoltAssertsBetweenFrames()
+	{
+		// A query between frames (Idle) must not touch FrameErrorBits - that is the last frame's result, and the next
+		// SetUpForFrame starts a new one. The assert is sticky for the run (TotalErrorBits) and becomes part of the next
+		// frame's EngineErrorBits (docs/Abi.md 9).
+		const uint32 Now = GetNumJoltAsserts();
+		if (Now != AssertsSeen)
+		{
+			PendingErrorBits |= GJoltErrorAssert;
+			TotalErrorBits |= GJoltErrorAssert;
+			AssertsSeen = Now;
+		}
+	}
+
+	bool FPhysScene_Jolt::IsSleepingPair(const FJoltRawContact& Contact) const
+	{
+		if (Contact.Body1 >= Bodies.size() || Contact.Body2 >= Bodies.size())
+		{
+			return false;
+		}
+		const auto IsAsleepOrNotDynamic = [this](const uint32 Index)
+		{
+			const FJoltBody& Record = Bodies[Index];
+			return !Record.bReleased && (Record.Motion != PT_MOTION_DYNAMIC || !GetBody(Record)->IsActive());
+		};
+		const bool bAnyDynamic = Bodies[Contact.Body1].Motion == PT_MOTION_DYNAMIC || Bodies[Contact.Body2].Motion == PT_MOTION_DYNAMIC;
+		return bAnyDynamic && IsAsleepOrNotDynamic(Contact.Body1) && IsAsleepOrNotDynamic(Contact.Body2);
+	}
+
+	void FPhysScene_Jolt::NoteKeptContactCommand(const uint32 BodyIndex, const bool bPutToSleep, const bool bPoseSet)
+	{
+		if (!ContactListener)
+		{
+			return;   // bench runs keep no contacts
+		}
+		FJoltBody& Record = Bodies[BodyIndex];
+		Record.bPutToSleepByCommand = Record.bPutToSleepByCommand || bPutToSleep;
+		Record.bPoseSetByCommand = Record.bPoseSetByCommand || bPoseSet;
+		if (!Record.bKeptContactsListed)
+		{
+			Record.bKeptContactsListed = true;
+			KeptContactBodies.push_back(BodyIndex);   // reserved to MaxBodies: each body is listed once
+		}
+	}
+
+	void FPhysScene_Jolt::FlushKeptContactCommands()
+	{
+		if (KeptContactBodies.empty())
+		{
+			return;
+		}
+		// 1. Bodies put to sleep since the last step: Jolt will not report them, so their sleeping pairs come from the last
+		// step's listener contents (still intact: the listener is cleared after this). A pair of such a body is not kept
+		// yet - the body was awake in that step - so nothing is added twice.
+		bool bAnyPutToSleep = false;
+		for (const uint32 Index : KeptContactBodies)
+		{
+			bAnyPutToSleep = bAnyPutToSleep || Bodies[Index].bPutToSleepByCommand;
+		}
+		if (bAnyPutToSleep)
+		{
+			const FJoltRawContact* Stepped = ContactListener->GetContacts();
+			const uint32 NumStepped = ContactListener->GetNumContacts();
+			for (uint32 Index = 0; Index < NumStepped; ++Index)
+			{
+				const FJoltRawContact& Contact = Stepped[Index];
+				const bool bTouchesPutToSleep = (Contact.Body1 < Bodies.size() && Bodies[Contact.Body1].bPutToSleepByCommand)
+					|| (Contact.Body2 < Bodies.size() && Bodies[Contact.Body2].bPutToSleepByCommand);
+				if (!bTouchesPutToSleep || !IsSleepingPair(Contact))
+				{
+					continue;
+				}
+				if (SleepingContacts.size() >= SleepingContacts.capacity())
+				{
+					bSleepingContactsDropped = true;   // never grow: the arrays are sized once
+					break;
+				}
+				SleepingContacts.push_back(Contact);
+			}
+		}
+		// 2. One pass over the kept pairs: drop those of a body whose pose a command set (stale points) and those that are no
+		// longer sleeping pairs (a command woke a body).
+		uint32 NumKept = 0;
+		for (uint32 Index = 0; Index < static_cast<uint32>(SleepingContacts.size()); ++Index)
+		{
+			const FJoltRawContact& Contact = SleepingContacts[Index];
+			if (!IsSleepingPair(Contact) || Bodies[Contact.Body1].bPoseSetByCommand || Bodies[Contact.Body2].bPoseSetByCommand)
+			{
+				continue;
+			}
+			SleepingContacts[NumKept++] = Contact;
+		}
+		SleepingContacts.resize(NumKept);
+		for (const uint32 Index : KeptContactBodies)
+		{
+			FJoltBody& Record = Bodies[Index];
+			Record.bKeptContactsListed = false;
+			Record.bPutToSleepByCommand = false;
+			Record.bPoseSetByCommand = false;
+		}
+		KeptContactBodies.clear();
+	}
+
+	void FPhysScene_Jolt::UpdateSleepingContacts()
+	{
+		// A pair is kept while it has a dynamic body and every dynamic body of it is asleep (IsSleepingPair). Jolt wakes a
+		// sleeping body that an awake one touches, so a kept pair is never also in the listener's list.
+		SleepingScratch.clear();
+		for (const FJoltRawContact& Contact : SleepingContacts)
+		{
+			if (IsSleepingPair(Contact))
+			{
+				SleepingScratch.push_back(Contact);
+			}
+		}
+		const FJoltRawContact* Stepped = ContactListener->GetContacts();
+		const uint32 NumStepped = ContactListener->GetNumContacts();
+		bSleepingContactsDropped = false;
+		for (uint32 Index = 0; Index < NumStepped; ++Index)
+		{
+			if (!IsSleepingPair(Stepped[Index]))
+			{
+				continue;
+			}
+			if (SleepingScratch.size() >= SleepingScratch.capacity())
+			{
+				bSleepingContactsDropped = true;   // never grow: the arrays are sized once
+				break;
+			}
+			SleepingScratch.push_back(Stepped[Index]);
+		}
+		std::swap(SleepingContacts, SleepingScratch);
 	}
 
 	PtResult FPhysScene_Jolt::StartFrame()
@@ -752,19 +905,21 @@ namespace PhysicsTest::JoltBackend
 		ApplyPendingDynamics();
 		if (ContactListener)
 		{
+			FlushKeptContactCommands();   // before BeginStep clears the last step's contacts
 			ContactListener->BeginStep();
 		}
 		const uint64 FallbacksBefore = TempAllocator->GetNumFallbacks();
-		const uint32 AssertsBefore = GetNumJoltAsserts();
+		CheckJoltAsserts();   // the kinematic moves and pending dynamics above
 		const JPH::EPhysicsUpdateError Error = System->Update(StepDeltaTime, 1, TempAllocator.get(), JobSystem.get());
 		FrameErrorBits |= static_cast<uint32>(Error);
 		if (TempAllocator->GetNumFallbacks() != FallbacksBefore)
 		{
 			FrameErrorBits |= GJoltErrorTempAllocatorFallback;
 		}
-		if (GetNumJoltAsserts() != AssertsBefore)
+		CheckJoltAsserts();   // the step itself
+		if (ContactListener)
 		{
-			FrameErrorBits |= GJoltErrorAssert;   // dbg builds: the step ran into a Jolt assert (logged by JoltAssertFailed)
+			UpdateSleepingContacts();
 		}
 		TotalErrorBits |= FrameErrorBits;
 		bStepped = true;
@@ -831,6 +986,7 @@ namespace PhysicsTest::JoltBackend
 
 	PtResult FPhysScene_Jolt::EndFrame(PtFrameResult& Out)
 	{
+		CheckJoltAsserts();
 		Out.NumStepsTaken = bStepped ? 1u : 0u;
 		Out.EngineErrorBits = FrameErrorBits;
 		return PT_OK;
@@ -859,6 +1015,7 @@ namespace PhysicsTest::JoltBackend
 			{
 				BodyInterface.ActivateBody(Record.Id);
 				MarkDirty(Cmd.Body);
+				NoteKeptContactCommand(Cmd.Body, false, false);   // its kept pairs go at the next flush
 			}
 		};
 		switch (Cmd.Type)
@@ -877,6 +1034,7 @@ namespace PhysicsTest::JoltBackend
 				Record.bKinematicMovedLastStep = false;
 			}
 			MarkDirty(Cmd.Body);
+			NoteKeptContactCommand(Cmd.Body, false, true);   // a static pose leaves the pairs on it asleep, with stale points
 			break;
 		case PT_CMD_SET_KINEMATIC_TARGET:
 			Record.KinematicTarget = Cmd.Transform;   // the last target before a step wins
@@ -910,6 +1068,7 @@ namespace PhysicsTest::JoltBackend
 				Body.SetAngularVelocityClamped(ToJoltVector(Cmd.Vector2));
 			}
 			MarkDirty(Cmd.Body);
+			NoteKeptContactCommand(Cmd.Body, false, true);   // DontActivate: a sleeping body stays asleep with stale kept points
 			break;
 		case PT_CMD_ADD_IMPULSE:
 		case PT_CMD_ADD_VELOCITY:
@@ -991,6 +1150,7 @@ namespace PhysicsTest::JoltBackend
 				// is dropped at the step unless a later command of this push wakes the body again (as Null).
 				BodyInterface.DeactivateBody(Record.Id);
 				MarkDirty(Cmd.Body);
+				NoteKeptContactCommand(Cmd.Body, true, false);   // keep its last-step contacts (FlushKeptContactCommands)
 			}
 			break;
 		default:
@@ -1146,6 +1306,7 @@ namespace PhysicsTest::JoltBackend
 
 	PtResult FPhysScene_Jolt::GetStepStats(PtStepStats& Out)
 	{
+		CheckJoltAssertsBetweenFrames();   // reads and snapshots after the last frame (the bench reads the stats after its loop)
 		// Values that need no listener (headline-safe): the active list. Contacts only with the viz listener.
 		const uint32 NumActive = System->GetNumActiveBodies(JPH::EBodyType::RigidBody);
 		const JPH::BodyID* Active = System->GetActiveBodiesUnsafe(JPH::EBodyType::RigidBody);
@@ -1208,13 +1369,24 @@ namespace PhysicsTest::JoltBackend
 		}
 		if ((Req.Flags & PT_SNAP_CONTACTS) != 0 && ContactListener)
 		{
-			bTruncated = bTruncated || ContactListener->HasDropped();
+			bTruncated = bTruncated || ContactListener->HasDropped() || bSleepingContactsDropped;
 			const double NaN = nan("");
+			// The last step's contacts, then the kept contacts of sleeping islands (UpdateSleepingContacts).
 			const FJoltRawContact* RawContacts = ContactListener->GetContacts();
-			const uint32 NumRaw = ContactListener->GetNumContacts();
+			const uint32 NumStepped = ContactListener->GetNumContacts();
+			const uint32 NumRaw = NumStepped + static_cast<uint32>(SleepingContacts.size());
+			// Commands since the last step (FlushKeptContactCommands runs at the next StartFrame): a kept pair a command woke or
+			// moved is already left out here, so a snapshot between steps shows no stale sleeping points.
+			const bool bKeptCommandsPending = !KeptContactBodies.empty();
 			for (uint32 RawIndex = 0; RawIndex < NumRaw; ++RawIndex)
 			{
-				const FJoltRawContact& Raw = RawContacts[RawIndex];
+				const bool bSleeping = RawIndex >= NumStepped;
+				const FJoltRawContact& Raw = bSleeping ? SleepingContacts[RawIndex - NumStepped] : RawContacts[RawIndex];
+				if (bSleeping && bKeptCommandsPending
+					&& (!IsSleepingPair(Raw) || Bodies[Raw.Body1].bPoseSetByCommand || Bodies[Raw.Body2].bPoseSetByCommand))
+				{
+					continue;
+				}
 				if (SnapshotContacts.size() >= Req.MaxContactPoints)
 				{
 					bTruncated = true;
@@ -1228,18 +1400,25 @@ namespace PhysicsTest::JoltBackend
 				Contact.PointOn0 = PtVec3{ GScale.ToCm(Raw.PointOn1[0]), GScale.ToCm(Raw.PointOn1[1]), GScale.ToCm(Raw.PointOn1[2]) };
 				Contact.PointOn1 = PtVec3{ GScale.ToCm(Raw.PointOn2[0]), GScale.ToCm(Raw.PointOn2[1]), GScale.ToCm(Raw.PointOn2[2]) };
 				Contact.Normal = PtVec3{ Raw.Normal[0], Raw.Normal[1], Raw.Normal[2] };
-				Contact.Phi = GScale.ToCm(Raw.PenetrationDepth);
+				Contact.Phi = GScale.ToCm(Raw.PenetrationDepth);   // this point's depth (p1 - p2) . n; negated below
 				Contact.NormalImpulse = NaN;                     // Jolt exposes no per-point impulse (Q8)
 				Contact.FrictionImpulse = PtVec3{ NaN, NaN, NaN };
 				Contact.Body0 = Raw.Body1;
 				Contact.Body1 = Raw.Body2;
-				// Shape0 / Shape1 stay 0: the SubShapeIDs of the manifold are not mapped to element indices yet (M4
-				// CollidingShapes / M9 compounds, docs/Abi.md 7.1).
+				// The element indices of the manifold's sub shapes (M4, GetElementIndex in JoltContactListener.h).
+				Contact.Shape0 = Raw.Shape1;
+				Contact.Shape1 = Raw.Shape2;
 				// Jolt: the normal moves body 2 out, i.e. points from body 1 (Body0) toward body 2 (Body1), and the depth is
 				// positive when penetrating. Chaos: the normal lies on Body1 and points toward Body0, Phi < 0 penetrates
 				// (ContactPoint.h:49-53 [V]); then Body0 = the more mobile body.
 				Abi::CanonicalizeContact(Contact, MobilityRanks.data(), true, true);
-				Contact.Flags |= Contact.Phi <= 0.0 ? PT_CONTACT_ACTIVE_APPROX : PT_CONTACT_SPECULATIVE;
+				// A kept contact of a sleeping island carries the flags of its last stepped state plus PT_CONTACT_SLEEPING. Chaos
+				// keeps a sleeping constraint's last solver results: they are rewritten only for constraints in the solver
+				// (UpdateCollisionConstraintFromSolver, PBDCollisionContainerSolver.cpp:373-409 [V]), SetIsSleeping does not touch
+				// them (PBDCollisionConstraint.cpp:538-545 [V]), and DrawCollisionImpl's bIsActive reads NetImpulse / NetPushOut
+				// (ChaosDebugDraw.cpp:1453 [V]). So a resting sleeping contact stays active (red, or yellow-green in the static
+				// friction cone) and gets the black sleeping box.
+				Contact.Flags |= (Contact.Phi <= 0.0 ? PT_CONTACT_ACTIVE_APPROX : PT_CONTACT_SPECULATIVE) | (bSleeping ? PT_CONTACT_SLEEPING : 0u);
 				SnapshotContacts.push_back(Contact);
 			}
 		}
@@ -1300,6 +1479,14 @@ namespace PhysicsTest::JoltBackend
 
 	PtResult FPhysScene_Jolt::SetOption(const Abi::FStringRef Key, const Abi::FStringRef Value)
 	{
+		// Harness test hook (M4), runtime SetOption only: one assert outside Update, counted as the dbg hook counts one, so the
+		// next frame reports GJoltErrorAssert. The "pt.test." prefix marks it as a test key; CreateScene options (profiles,
+		// backend variants, the viewer's preflight) go through ApplySceneOption, which rejects it (SdkBackend tests).
+		if (EqualsNoCase(GJoltTestRaiseAssertKey, Key))
+		{
+			RaiseTestAssert("SetOption");
+			return PT_OK;
+		}
 		// The PhysicsSettings keys can change between frames; capacities, the convex radius and the temp block cannot.
 		if (EqualsNoCase("ConvexRadius", Key) || EqualsNoCase("TempAllocatorBytes", Key))
 		{

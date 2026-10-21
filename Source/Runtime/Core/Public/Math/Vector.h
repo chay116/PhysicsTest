@@ -72,6 +72,10 @@ namespace PhysicsTest
 		// Every component within Tolerance of the other vector's component.
 		[[nodiscard]] bool Equals(const FVector& V, double Tolerance = UE_KINDA_SMALL_NUMBER) const;
 		[[nodiscard]] bool ContainsNaN() const;
+		// A unit vector perpendicular to this direction (harness helper, M4 debug draw): this x world Z, or this x world X
+		// when the direction is mostly vertical (|Z| larger than |X| and |Y|). Never degenerate for a non-zero direction;
+		// ZeroVector for a zero one. The arrowhead plane of the renderer and the fallback axis of a circle frame.
+		[[nodiscard]] FVector GetPerpendicularUnit() const;
 	};
 
 	[[nodiscard]] constexpr FVector operator*(const double Scale, const FVector& V)

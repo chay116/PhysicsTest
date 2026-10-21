@@ -18,12 +18,15 @@ namespace PhysicsTest
 		double SimTime = 0.0;
 		uint64 Capabilities = 0;      // the backend's capabilities when captured (CONTACT_POINTS, BOUNDS, ...)
 		bool bTruncated = false;      // the backend had more than the request allowed
+		// M4: the backend has no snapshot (PT_E_UNSUPPORTED, e.g. Null) and the particles come from the host's pulled body
+		// states instead (DebugDraw::CaptureSnapshot): no contacts, bounds and COM from the harness data model.
+		bool bFromHostState = false;
 		std::vector<PtParticleSnapshot> Particles;
 		std::vector<PtContactPoint> Contacts;
 		std::vector<PtJointSnapshot> Joints;
 		std::vector<PtDebugDrawCmd> NativeCommands;
 		std::string StringPool;
-		std::vector<int32> HarnessIslandIndex;   // FIslandBuilder output per body (M4)
+		std::vector<int32> HarnessIslandIndex;   // FIslandBuilder output, parallel to Particles (M4; INDEX_NONE = no island)
 
 		void Reset()
 		{
@@ -31,6 +34,7 @@ namespace PhysicsTest
 			SimTime = 0.0;
 			Capabilities = 0;
 			bTruncated = false;
+			bFromHostState = false;
 			Particles.clear();
 			Contacts.clear();
 			Joints.clear();

@@ -443,7 +443,7 @@ typedef struct PtBodyCommand {
 
 typedef struct PtBodyState {
   PtTransform ActorTransform;      /* body ORIGIN, not the COM */
-  PtVec3 LinearVelocity;           /* at COM, cm/s */
+  PtVec3 LinearVelocity;           /* cm/s: dynamic = of the COM, kinematic = of the actor origin (02 5.2 #48; M4 docs fix) */
   PtVec3 AngularVelocity;          /* rad/s */
   uint32_t ObjectState, Flags;
 } PtBodyState;          /* 112 B */
@@ -471,6 +471,7 @@ typedef struct PtMemoryStats { int64_t LiveBytes, PeakBytes, NumAllocs, NumFrees
 #define PT_CONTACT_SPECULATIVE      (1u << 2)
 #define PT_CONTACT_STATIC_FRICTION  (1u << 3)
 #define PT_CONTACT_SWAPPED          (1u << 4)
+#define PT_CONTACT_SLEEPING         (1u << 5)   /* M4: a sleeping island's contact kept from the step it fell asleep in, with that step's flags (Jolt) */
 
 typedef struct PtParticleSnapshot {
   PtTransform ActorTransform, CenterOfMassWorld;
@@ -1555,6 +1556,7 @@ std::vector<std::string> GetRequiredEffectiveKeys(const FBackendInfo& Info);
 - `IDebugDrawRenderer`의 메서드 순서와 인자 순서는 ChaosDDRenderer.h:19-44와 이미 대조했다 **[V]**. 나중에 다시 확인할 작업은 없다.
 - 뷰어 성능 기준은 시뮬레이션을 멈추거나 리플레이할 때 60 fps 이상, 씬당 스냅샷+드로 CPU 4 ms 이하다. 시뮬레이션이 도는 동안의 fps는 보고만 하고 게이트로 쓰지 않는다. 마일스톤별 완료 기준은 [03_WorkPlan.md](../03_WorkPlan.md)를 따른다.
 - SideBySide, GhostOverlay, Replay, Profiler는 뷰어 2단계(확장 M12)다. 뷰어 1단계(M4)는 씬 하나를 돌리고 엔진을 바꾸면 씬을 다시 만든다. PhysX UE4Compat / -TGS / -Stab은 tolerance scale이 같으므로 한 프로세스에서 나란히 띄울 수 있다 (A.8).
+- **M4 구현과 다른 점 [V]** ([Progress.md](../Progress.md) M4 §3): 단위 와이어 메시는 렌더러와 무관한 `PhysicsDebugDraw/Public/WireMeshes.h`로 옮겼다 (선분 수 시험이 test 프리셋에서도 돈다). `FDrawContext`에 `std::span<const int32> ParticleOfBody`(`BuildParticleLookup`)와 선택 항목 `const std::vector<FHarnessIsland>* Islands`를 더했고, `DrawAll`은 `FDrawStats`(섬 수, 그리지 않은 convex 수)를 돌려준다. `FIslandBuilder::GatherIslands`와 `FHarnessIsland`(id, awake, bounds)를 더했다. `HarnessIslandIndex`는 바디가 아니라 `Particles`와 나란한 배열이다. 스냅샷이 없는 백엔드를 위한 `DebugDraw::CaptureSnapshot`(호스트 상태, `FPhysicsDebugSnapshot::bFromHostState`)과 `GetRequiredSnapshotFlags`를 더했다. `FDebugDrawQueue`는 `GetStats`(수락, 영역·예산 거부, 비용), `NoteRegionRejection`, `GetCommandCost`, `Reset`이 있다. 수정 라운드 0에서 5.8.3의 두 단계 판정으로 바꾸며 `DrawParticleShape`(셰이프당 비용 1, 파티클 bounds), `GetCommandBounds`, `FLatentDrawCommand::bLatent`, `IDebugDrawRenderer::RenderLatentCommand`, 렌더 단계 `FDebugDrawRenderStage`/`FDebugDrawRenderStats`를 더했다 (02 §11 M4 메모). `FDebugDrawFlags`에 `bShowStatics/Kinematics/Dynamics`(UE `p.Chaos.Solver.DebugDraw.Show*`), `FDebugDrawSettings`에 `ContactOwnerWidth`, `ShapeThicknesScale`이 있다. 렌더러는 `FD3D11DebugDrawRenderer(FD3D11RHI&)` + `Init`, `BeginView(const FSceneView&, const FSphere& DrawRegion)`, `DrawGrid`, `Flush(bSeeThrough)`, `GetStrings`(ImGui가 그린다), `GetStats`다. `FD3D11RHI`는 장치, 4x MSAA 장면 타깃, 스왑 체인이나 헤드리스 출력, `CaptureOutputPng`, GPU timestamp를 맡는다. Core에 `FColor`, `FMatrix`(행 벡터, `MakeFromX/Z`, `ToQuat`), `FSphere`를 더했다. 수정 라운드 2에서 `FVector::GetPerpendicularUnit`(화살표 머리 평면, 원 틀의 대체 축), `FPhysicsBackendRegistry::TermIdleModules`(호스트 종료 때 초기화된 유휴 모듈 모두 `TermGamePhys`), `FBenchRunSpec::ParseScenarioParams`(`-Param:`만 해석, 벤치와 뷰어가 공유)를 더했다.
 
 ```cpp
 // File: Source/Runtime/PhysicsCore/Public/Physics/PhysicsDebugSnapshot.h   [MVP M4; the ABI structs it holds are PROVISIONAL(M9)]

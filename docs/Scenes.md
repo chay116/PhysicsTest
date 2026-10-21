@@ -20,7 +20,7 @@
 | 질량 | 방법론 씬은 `bOverrideMass`로 질량을 고정한다 (02 §10, DL17). 그래서 엔진과 프로필이 같은 질량을 쓴다 |
 | 난수 | `FRandomStream`(mt19937_64 + 하네스 [0,1) 매핑). 씬이 `Seed` 파라미터를 선언하면 그 값, 아니면 0x5EED(24301)로 시작한다. 그리기 순서는 씬마다 정의에 적는다 |
 | 파라미터 | `-Param:Name=Value`. 씬이 선언하지 않은 이름이나 허용하지 않은 값은 오류다 (벤치 종료 코드 2). 이름은 대소문자를 구분하지 않는다. 파라미터에는 형이 있다 (`EScenarioParamType`): `text`(허용 값 목록이 있으면 그중 하나)와 `int32`(`-`와 10진 숫자만, 32-bit 범위). `int32` 값은 정규형으로 저장한다 (`024301` → `24301`). 그래서 `Seed=abc`는 오류이고(전에는 `atoi`로 0이 됐다), 같은 seed를 다르게 적어도 `scene_sha256`이 같다. seed는 `IPhysicsTestScenario::GetSeed`로만 읽는다 (M3 수정 라운드 0) |
-| scene_sha256 | 정규 JSON `{"name","params"(모든 선언 파라미터, 정규형, 이름순),"version"}`의 SHA-256 (02 §12.3). `scene.json`으로도 쓴다 |
+| scene_sha256 | 정규 JSON `{"name","params"(모든 선언 파라미터, 정규형, 이름순),"seed","version"}`의 SHA-256 (02 §12.3). `seed`는 `GetSeed`의 값(정수)이라 `Seed` 파라미터가 없는 씬도 기본 seed가 바뀌면 해시가 바뀐다 (M4에서 더함, M3 검토 지적). `scene.json`으로도 쓴다 |
 | desc_sha256의 범위 | 엔진 독립이지만 **빌드 구성에는 독립이 아니다.** 하네스가 계산해 넣는 double(질량·관성, `FRotator` → `FQuat`)이 `/fp:fast`에서 `/Od`(dbg)와 `/O2`(dev, test)의 마지막 1~2 ulp가 다르다 [V]: 정적 바닥의 관성(`0x1.52f506ea62ff3p+51` 대 `…ff4p+51`), `FRotator(20, 0, 30).Quaternion()`, `FTransform(FRotator(0,0,0)).Rotator()`의 Roll 부호(+0 대 −0). 그래서 바닥이 있거나 회전한 바디가 있는 씬(`M1.SingleBoxDrop`, `M3.BoxPile`)은 dbg와 dev/test의 값이 다르다. `S00.FreeFall`(구 하나, 바닥 없음)은 같다. dev와 test는 같다 (같은 `/O2`). 비교는 한 빌드 구성 안에서만 한다 (manifest `scene.desc_sha256_scope`). M7의 "test와 test-avx2의 `desc_sha256`이 같다"는 하네스 플래그가 두 프리셋에서 같고(하네스에 `/arch` 없음) 하네스가 어댑터의 AVX2 COMDAT을 쓰지 않을 때(`PhysicsTest.Probe.AdapterComdats`)만 성립하므로, M7은 두 조건을 함께 확인한다. 정적 바디의 질량·관성을 해시에서 0으로 두는 안은 택하지 않았다: 회전한 바디의 쿼터니언도 다르므로 dbg 문제를 풀지 못하고, 엔진에 넘기는 바이트를 그대로 덮는다는 원칙만 깬다 |
 | 윈도 | 씬이 프레임 윈도를 선언한다 (02 §9.5). frame 0은 통계에서 빼고 따로 보고한다 |
 | 용량 힌트 | 씬이 바디·쌍·접촉 수를 선언하고, 그 값이 `FPhysSceneInitParams`의 힌트가 된다 (02 §9.4). Jolt는 이 값으로 `PhysicsSystem::Init`과 temp allocator 크기를 정한다 |
@@ -59,7 +59,7 @@
 | 윈도 | headline 1-299, impact 1-89, settled 150-299 |
 | 용량 힌트 | 바디 2, 쌍 64, 접촉 64 |
 | 판정 (03 M3) | a의 정지 접촉 스냅샷(viz run): 상자-바닥 접촉점마다 normal·(+Z) > 0.999, −2.5 cm ≤ Phi ≤ 0.5 cm. 하한은 Jolt 침투 허용치 `mPenetrationSlop` 0.02 m (PhysicsSettings.h:53 [V])에 0.5 cm를 더한 값이다. `shape.wrapping` = 0 |
-| 측정값 [V] | Jolt Normalized 300 프레임: 접촉점 4개, normal.z = 1.0000, Phi = −2.00003 cm (4점 모두), 상자 z = 48.0 cm, Dynamic. UEParity는 정지 후 약 0.5 s 뒤 잠들고 잠든 바디는 접촉을 만들지 않으므로 50 프레임에 같은 검사를 한다 (−2.00004 cm) |
+| 측정값 [V] | Jolt Normalized 300 프레임: 접촉점 4개, normal.z = 1.0000, Phi = −2.00003 cm (4점 모두), 상자 z = 48.0 cm, Dynamic. UEParity는 정지 후 약 0.5 s 뒤 잠들고 잠든 바디는 접촉을 만들지 않으므로 50 프레임에 같은 검사를 한다 (−2.00004 cm). M4부터 Jolt 스냅샷은 잠든 섬의 접촉을 `PT_CONTACT_SLEEPING`으로 유지하고 Phi는 점마다 계산한다 (4점 −2.00003 ~ −2.00002 cm) |
 
 ### 2.3 `M3.BoxPile(N)` (방법론 카탈로그 M3, 헤드라인 성능 씬)
 
