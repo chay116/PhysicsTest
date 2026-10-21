@@ -61,17 +61,6 @@ namespace PhysicsTest
 			return Body;
 		}
 
-		// An impulse or velocity change writes the body's game-thread dynamics: forces held since a PutToSleep are pushed
-		// again (FPhysScene::MarkDynamicsDirty_AssumesLocked). Without an owning scene there are no held forces.
-		void MarkDynamicsDirty(const FPhysicsActorHandle& Handle)
-		{
-			FPhysScene* Scene = nullptr;
-			if (const FBodyInstance* Body = FindOwnedBody(Handle, Scene))
-			{
-				Scene->MarkDynamicsDirty_AssumesLocked(Body);
-			}
-		}
-
 		// Flush the scene's buffer and pull every body state, then return the handle's body.
 		const FBodyInstance* Refresh(const FPhysicsActorHandle& Handle)
 		{
@@ -92,6 +81,16 @@ namespace PhysicsTest
 					Scene.GetLastErrorMessage().c_str());
 			}
 			return Scene.GetBody(Handle.Index);
+		}
+	}
+
+	// Without an owning scene there are no held forces.
+	void FPhysicsInterface::MarkDynamicsDirty(const FPhysicsActorHandle& Handle)
+	{
+		FPhysScene* Scene = nullptr;
+		if (const FBodyInstance* Body = FindOwnedBody(Handle, Scene))
+		{
+			Scene->MarkDynamicsDirty_AssumesLocked(Body);
 		}
 	}
 

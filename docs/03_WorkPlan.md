@@ -382,10 +382,11 @@ Chaos 행까지:
   - BP 레이어 2개 + UE 상호 차단 `GroupFilter`. 결합 람다는 `PtCombine`의 동적 결합값을 쓴다 (Jolt는 쌍당 마찰 계수가 하나라 정지마찰 규칙을 재현하지 못한다, DL41).
   - 바디 생성은 M2의 UE 순서를 따른다: 바디 생성(생성 시점 플래그) → 셰이프·필터·머티리얼 → `AddBodiesPrepare`/`AddBodiesFinalize`로 배치 추가 1회 → 동적 속성 → `!bStartAwake`이고 kinematic이 아니면 추가된 뒤 `BodyInterface::DeactivateBody`로 재운다.
   - Normalized에서는 sleep을 끄고 (바디마다 `BodyCreationSettings::mAllowSleeping = false`, BodyCreationSettings.h:106 [V], [04_DecisionLog.md](04_DecisionLog.md) DL48), 기본 damping 0.05 (BodyCreationSettings.h:109 [V])를 덮어쓴다. 선속도 clamp(500 m/s, BodyCreationSettings.h:111 [V])는 해제한다.
-  - 스텝은 `PhysicsSystem::Update(dt, 1, TempAllocatorImpl, JobSystemThreadPool(T−1))`, 매 스텝 `EPhysicsUpdateError` 검사, `PrepareForSimulation`에서 `OptimizeBroadPhase`, T_pull은 `GetActiveBodies`.
+  - 스텝은 `PhysicsSystem::Update(dt, 1, FJoltTempAllocator, JobSystemThreadPool(T−1))`, 매 스텝 `EPhysicsUpdateError` 검사, `PrepareForSimulation`에서 `OptimizeBroadPhase`, T_pull은 `GetActiveBodiesUnsafe`(+ 직전 활성 바디와 명령으로 바뀐 바디). 구현은 `TempAllocatorImpl`(블록이 모자라면 abort) 대신 넘침을 오류 bit로 내는 하네스 할당기를, `GetActiveBodies`(벡터 복사 = T_pull 안의 할당) 대신 `GetActiveBodiesUnsafe`를 쓴다 ([Progress.md](Progress.md) M3 §3 #12, #16).
+  - 임펄스·속도 변화·힘은 push 때 엔진에 넣지 않고 스텝 직전에 넣는다 (Chaos·Null과 같은 "다음 스텝 적분" 의미, [Abi.md](Abi.md) §7.1, Progress.md M3 §7).
   - 중력은 값이 바뀔 때만 설정한다.
   - `DumpEffectiveSettings`는 공통 키와 Jolt 키를 내보내고, 읽을 수 있는 값은 READBACK으로 표시한다. `GetInfo`의 BuildFlagsJson은 어댑터 TU 자기보고다.
-- **Jolt 스냅샷:** viz 전용 contact listener(mutex 보호). `Normal = −mWorldSpaceNormal`, `Phi = −mPenetrationDepth`로 Chaos 규약에 맞춘다. 임펄스는 NaN, active 여부는 근사 플래그다. Jolt island ID는 internal API(`GetIslandIndexInternal`)뿐이라 쓰지 않고, 하네스 `FIslandBuilder`(M4)에 맡긴다.
+- **Jolt 스냅샷:** viz 전용 contact listener(구현은 잡 스레드에서 잠금·할당 없는 atomic 슬롯 배열, Progress.md M3 §3 #13). `Normal = −mWorldSpaceNormal`, `Phi = −mPenetrationDepth`로 Chaos 규약에 맞춘다. 임펄스는 NaN, active 여부는 근사 플래그다. Jolt island ID는 internal API(`GetIslandIndexInternal`)뿐이라 쓰지 않고, 하네스 `FIslandBuilder`(M4)에 맡긴다.
 - **씬:** `IMPLEMENT_PHYSICS_TEST_SCENARIO` 정적 등록, `WHOLE_ARCHIVE(PT::Scenarios)`, 시작 시 레지스트리가 비어 있지 않은지 assert.
   - `S00.FreeFall`: M2 자유낙하 픽스처와 같은 설정.
   - `M1.SingleBoxDrop` a/b: 100 cm 정육면체, 1000 kg 고정(bOverrideMass), 중심 z = 150 cm, b는 roll 30° 후 pitch 20°, μ 0.5, e 0, 300 프레임.

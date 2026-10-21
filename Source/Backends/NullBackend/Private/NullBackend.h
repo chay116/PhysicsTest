@@ -102,7 +102,8 @@ namespace PhysicsTest::NullBackend
 	};
 
 	// One rigid body. The integrator works on the centre of mass (P, Q = COM position and principal-frame orientation),
-	// like Chaos' XCom / RCom; the actor pose is derived through ComLocal.
+	// like Chaos' XCom / RCom; the actor pose is derived through ComLocal. V is the COM velocity of a dynamic body and the
+	// actor-origin velocity of a kinematic body (Chaos ApplyKinematicTargets, PtBodyState).
 	struct FNullBody
 	{
 		PtTransform ComLocal = {};              // COM frame in actor space

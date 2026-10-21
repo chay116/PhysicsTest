@@ -63,7 +63,8 @@ namespace PhysicsTest
 
 	// UE: FRigidBodyState / GetUnrealWorldTransform. BodyTM is the rigid pose of the body ORIGIN (not the COM) with
 	// unit scale - the body scale lives in FBodyInstance::Scale3D, as in UE (BodyInstance.cpp:2732-2747 [V]:
-	// GetUnrealWorldTransform returns the actor pose); velocities are of the COM in cm/s and rad/s.
+	// GetUnrealWorldTransform returns the actor pose); velocities in cm/s and rad/s. The linear velocity is of the COM for
+	// a dynamic body and of the actor origin for a kinematic body, as Chaos reports it (PtBodyState, M3).
 	struct FBodyInstanceState
 	{
 		FTransform BodyTM;
@@ -124,9 +125,15 @@ namespace PhysicsTest
 		// UE signature minus the owning component: stores the setup, Scale3D = Transform's scale and the initial pose
 		// (rotation + translation, no scale: UE's GetUnrealWorldTransform is the rigid actor pose), computes the mass
 		// properties (harness BodyUtils, D5) and defers the actor to the scene (FPhysScene::DeferAddActor) when given.
+		// A body that is already registered (deferred or with a backend actor) is terminated first (TermBody), so one
+		// FBodyInstance never has two actors (M2 review, M3). Intentional difference: UE's InitBody does not call TermBody
+		// (BodyInstance.cpp:1759-1789 [V]); a UE component terms before it re-inits when it recreates its physics state,
+		// and the harness has no component layer to do that (02_Architecture 5.2 #49).
 		void InitBody(const FBodySetup* Setup, const FTransform& Transform, FPhysScene* InRBScene);
-		// Releases the backend actor (FPhysScene::ReleaseBody, phase Idle) and clears the handle. The body stays in the
-		// scene's storage and GetBodies() with ObjectState Uninitialized.
+		// Releases the backend actor (FPhysScene::ReleaseBody, phase Idle) and clears the handle; a body that was deferred
+		// but not flushed yet leaves the scene's pending list instead (RemoveBodyInstanceFromPendingLists_AssumesLocked), so
+		// the next flush creates no actor for it. The body stays in the scene's storage and GetBodies() with ObjectState
+		// Uninitialized.
 		void TermBody();
 
 		// ---- commands (UE FBodyInstance names; M2). They go through FPhysicsInterface into the scene proxy's command
@@ -134,11 +141,13 @@ namespace PhysicsTest
 		// UE5 (BodyInstance.cpp:2804-2827 [V]): a kinematic body with ETeleportType::None gets a kinematic target from the
 		// owning scene (FPhysScene::SetKinematicTarget_AssumesLocked, bAllowSubstepping true); otherwise a kinematic body
 		// gets FPhysicsInterface::SetKinematicTarget_AssumesLocked and then the teleport, any other body the teleport.
-		void SetBodyTransform(const FTransform& NewTransform, ETeleportType Teleport);
+		// bAutoWake is accepted and ignored, as in UE 5.8.3 (the teleport always wakes, BodyInstance.cpp:2767-2827 [V]).
+		void SetBodyTransform(const FTransform& NewTransform, ETeleportType Teleport, bool bAutoWake = true);
 		// bAddToCurrent adds FPhysicsInterface::Get*Velocity_AssumesLocked, as UE does (BodyInstance.cpp:3630-3646 [V]): the
 		// game-thread velocity including the writes issued since the last pull (the read flushes the command buffer).
-		void SetLinearVelocity(const FVector& NewVel, bool bAddToCurrent);
-		void SetAngularVelocityInRadians(const FVector& NewAngVel, bool bAddToCurrent);
+		// bAutoWake is accepted and ignored, as in UE 5.8.3 (BodyInstance.cpp:3631-3666 [V]: the interface default wakes).
+		void SetLinearVelocity(const FVector& NewVel, bool bAddToCurrent, bool bAutoWake = true);
+		void SetAngularVelocityInRadians(const FVector& NewAngVel, bool bAddToCurrent, bool bAutoWake = true);
 		// UE5: FPhysicsInterface::AddForce_AssumesLocked / AddTorque_AssumesLocked, which the harness hands to the owning
 		// FPhysScene (FPhysScene::AddForce_AssumesLocked; its frame rule decides the steps a force acts on, PhysScene.h).
 		void AddForce(const FVector& Force, bool bAllowSubstepping = true, bool bAccelChange = false);
@@ -148,6 +157,9 @@ namespace PhysicsTest
 		void AddAngularImpulseInRadians(const FVector& Impulse, bool bVelChange);
 		void WakeInstance();
 		void PutInstanceToSleep();
+		// UE: a dynamic body that is not asleep (BodyInstance.cpp:3580-3593 [V]); reads through FPhysicsInterface::IsSleeping
+		// (flush + pull, untimed). False for static and kinematic bodies and without a backend actor.
+		[[nodiscard]] bool IsInstanceAwake() const;
 		// Recomputes MassProperties with BodyUtils (static bodies too; engines ignore it for them).
 		void UpdateMassProperties();
 
@@ -179,6 +191,9 @@ namespace PhysicsTest
 		// Set by FPhysScene::SpawnBody: only scene-owned bodies (deque storage) may be deferred, released or used by
 		// constraints (a stack FBodyInstance would leave a dangling pointer in the batch).
 		const FPhysScene* SpawnedBy = nullptr;
+		// In the scene's deferred list (FPhysScene::DeferAddActor until the flush or RemoveBodyInstanceFromPendingLists):
+		// the duplicate-registration test is O(1) instead of a search of the list (M3.BoxPile 10k would be O(N^2)).
+		bool bDeferred = false;
 		friend class FPhysScene;
 	};
 }

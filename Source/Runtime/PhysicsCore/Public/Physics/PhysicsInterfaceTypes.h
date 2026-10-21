@@ -31,6 +31,7 @@ namespace PhysicsTest
 		Multiply = 2,
 		Max = 3,
 	};
+	[[nodiscard]] const char* ToString(EFrictionCombineMode Value);   // defined with the profile codecs (PhysicsSettings.cpp)
 
 	// UE: Chaos::EObjectStateType (Chaos/Particle/ObjectState.h:9-18 [V]); the values cross the ABI unchanged.
 	enum class EObjectStateType : uint8
@@ -57,6 +58,7 @@ namespace PhysicsTest
 		Sensitive,
 		Custom,
 	};
+	[[nodiscard]] const char* ToString(ESleepFamily Value);
 
 	// UE: EPhysicsType (BodySetupEnums.h).
 	enum class EPhysicsType : uint8

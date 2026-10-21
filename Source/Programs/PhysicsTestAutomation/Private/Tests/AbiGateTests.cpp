@@ -39,7 +39,8 @@ namespace
 		{
 			AbiGates::FAbiGateTarget Target;
 			std::string Error;
-			CAPTURE(Name);
+			const std::string NameText(Name);   // CAPTURE of a const char* would log the pointer as 1
+			CAPTURE(NameText);
 			REQUIRE_MESSAGE(AbiGates::PrepareAbiGateTarget(Name, Target, Error), Error);
 			const FGateReport Report = Run(Target);
 			MESSAGE(Report.Summary());
@@ -125,11 +126,54 @@ TEST_CASE("PhysicsTest.Abi.A7EffectiveKeys")
 	RunGateOnBothPaths([](const AbiGates::FAbiGateTarget& Target) { return AbiGates::RunA7EffectiveKeys(Target); });
 }
 
+// M3: every SDK backend of this build (the generated registry; Jolt from M3, Bullet / PhysX from M5) through its static
+// path, the same eight gates as Null (03_WorkPlan M3: "Jolt가 static 경로에서 A0~A7을 통과한다").
+TEST_CASE("PhysicsTest.Abi.SdkBackendsA0toA7")
+{
+	std::vector<std::string> SdkBackends;
+	for (const std::string& Name : FPhysicsBackendRegistry::Get().GetAvailableNames())
+	{
+		if (Name != "Null" && Name != "NullDll" && Name != "Chaos")
+		{
+			SdkBackends.push_back(Name);
+		}
+	}
+	MESSAGE("SDK backends in this build: " << SdkBackends.size());
+	using FGateFunction = FGateReport (*)(const AbiGates::FAbiGateTarget&);
+	const std::pair<const char*, FGateFunction> Gates[] = {
+		{ "A0", &AbiGates::RunA0Lifecycle },
+		{ "A1", &AbiGates::RunA1VersionHandshake },
+		{ "A2", &AbiGates::RunA2OtherThread },
+		{ "A3", &AbiGates::RunA3PhaseStateMachine },
+		{ "A4", &AbiGates::RunA4NegativeCases },
+		{ "A5", &AbiGates::RunA5CapacityAndStride },
+		{ "A6", &AbiGates::RunA6FloatingPointState },
+		{ "A7", &AbiGates::RunA7EffectiveKeys },
+	};
+	for (const std::string& Name : SdkBackends)
+	{
+		CAPTURE(Name);
+		for (const auto& [GateName, Run] : Gates)
+		{
+			const std::string GateText(GateName);
+			CAPTURE(GateText);
+			AbiGates::FAbiGateTarget Target;
+			std::string Error;
+			REQUIRE_MESSAGE(AbiGates::PrepareAbiGateTarget(Name, Target, Error), Error);
+			CHECK_FALSE(Target.Module->IsDll());   // the static path
+			const FGateReport Report = Run(Target);
+			MESSAGE(Report.Summary());
+			CHECK_MESSAGE(Report.Passed(), Report.Summary());
+		}
+	}
+}
+
 TEST_CASE("PhysicsTest.Abi.A10FrameModel")
 {
 	for (const char* Name : GAbiTargets)
 	{
-		CAPTURE(Name);
+		const std::string NameText(Name);   // CAPTURE of a const char* would log the pointer as 1
+		CAPTURE(NameText);
 		const FGateReport Report = AbiGates::RunA10FrameModel(Name);
 		MESSAGE(Report.Summary());
 		CHECK_MESSAGE(Report.Passed(), Report.Summary());
@@ -415,7 +459,8 @@ TEST_CASE("PhysicsTest.Abi.NullNativeFrameRules")
 	const double Pi = 3.14159265358979323846;
 	for (const char* Name : GAbiTargets)
 	{
-		CAPTURE(Name);
+		const std::string NameText(Name);   // CAPTURE of a const char* would log the pointer as 1
+		CAPTURE(NameText);
 		AbiGates::FAbiGateTarget Target;
 		std::string Error;
 		REQUIRE_MESSAGE(AbiGates::PrepareAbiGateTarget(Name, Target, Error), Error);

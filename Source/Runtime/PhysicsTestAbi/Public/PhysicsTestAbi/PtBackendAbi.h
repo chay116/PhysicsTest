@@ -15,7 +15,8 @@
      - buffers are owned by the caller. Too small: PT_E_CAPACITY, the required count (or bytes incl. the NUL) is
        written back and nothing else is written. GetLastErrorMessage and PrepareForSimulation truncate instead and
        return PT_W_TRUNCATED
-     - batches are all-or-nothing: an invalid element rejects the whole call before anything changes
+     - batches are all-or-nothing: an invalid element rejects the whole call before anything changes (a backend must not
+       fail a command it validated; if it does, the call returns PT_E_INTERNAL and the batch may be partially applied)
      - input structs carry StructSize; a value below this header's sizeof() is PT_E_INVALID_ARG (a larger one, from
        a newer host, is accepted and the unknown tail ignored) */
 #ifndef PT_BACKEND_ABI_H
@@ -146,9 +147,10 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 #define PT_SHAPEF_QUERY              (1u << 1)
 #define PT_SHAPEF_ALL                0x3u
 #define PT_JOINTF_DISABLE_COLLISION  (1u << 0)   /* PROVISIONAL(M9) */
-#define PT_READ_ALL          0u   /* dense: one state per created body, in index order (OutIndices may be NULL). A released
-                                     body reports ObjectState UNINITIALIZED with a zero pose (identity rotation) and zero
-                                     velocities */
+#define PT_READ_ALL          0u   /* dense: one state per created body, in index order. A released body reports ObjectState
+                                     UNINITIALIZED with a zero pose (identity rotation) and zero velocities. OutIndices may
+                                     be NULL; when it is not, the module writes OutIndices[i] = i for every state written
+                                     (the Kit does it for every Kit backend, M3) */
 #define PT_READ_ACTIVE_ONLY  1u   /* every live body whose state may have changed since the previous read: awake dynamic
                                      bodies, moved kinematic bodies and any body whose ObjectState changed. OutIndices
                                      is required (Capacity > 0); released bodies are never reported */
@@ -302,7 +304,16 @@ typedef struct PtActorCreateInfo {
 	double LinearDamping, AngularDamping;   /* UE semantics: v *= max(0, 1 - c*dt) */
 	double MaxAngularVelocity;       /* rad/s; <= 0 = unclamped */
 	double MaxLinearVelocity;        /* cm/s; <= 0 = unclamped */
-	double MaxDepenetrationVelocity; /* cm/s; the UE value (0 = no limit); < 0 = solver default (PhysX: PX_MAX_F32) */
+	double MaxDepenetrationVelocity; /* cm/s, UE 5.8.3 semantics (M3): < 0 = unset, the solver setting. FBodyInstance sends -1
+                                      unless bOverrideMaxDepenetrationVelocity (BodyInstance.cpp:3713-3722 [V]); Chaos then
+                                      uses SolverOptions.CollisionInitialOverlapDepenetrationVelocity, whose default -1 means
+                                      unlimited (1e10 cm/s; PBDRigidsSolver.cpp:3668-3672, :3700, PBDCollisionConstraints.h:
+                                      250-264 [V]). >= 0 = this body's rate; 0 = initially overlapping shapes are NOT pushed
+                                      apart (PBDCollisionContainerSolver.cpp:180-219 [V]); a pair uses the larger of its two
+                                      bodies' values (PBDCollisionConstraint.cpp:341-344 [V]). SDK backends: unset = the
+                                      engine's own behaviour (recorded); PhysX UE4Compat maps it to UE4's project rule (M5).
+                                      >= 0 on an engine without a per-body rate (Jolt): ignored, and the effective key
+                                      (jolt.max_depenetration_velocity = n/a) records it */
 	double SleepThresholdMultiplier, StabilizationThresholdMultiplier;
 	uint64_t UserTag;
 } PtActorCreateInfo;    /* 288 B */
@@ -376,11 +387,15 @@ typedef struct PtBodyCommand {
 
 typedef struct PtBodyState {
 	PtTransform ActorTransform;      /* body ORIGIN, not the COM */
-	PtVec3 LinearVelocity;           /* at COM, cm/s */
+	PtVec3 LinearVelocity;           /* cm/s. Dynamic: of the COM. Kinematic: of the actor ORIGIN, as Chaos computes it from
+                                      the particle X (ApplyKinematicTargets, PBDRigidsEvolutionGBF.cpp:1180-1239 [V]); the two
+                                      differ by w x (R * COM) for a rotating kinematic body with a COM offset (M3) */
 	PtVec3 AngularVelocity;          /* rad/s */
 	uint32_t ObjectState, Flags;
 } PtBodyState;          /* 112 B */
 
+/* ReadMassProperties: what the engine has. The principal frame (CenterOfMassLocal.Rotation) and the order of the
+   principal moments are the engine's (Jolt sorts them largest first), so compare R diag(I) R^T, not the diagonals. */
 typedef struct PtMassProperties { double Mass; PtVec3 InertiaDiagonal; PtTransform CenterOfMassLocal; } PtMassProperties;  /* 88 B */
 typedef struct PtFrameResult { uint32_t NumStepsTaken; uint32_t EngineErrorBits; } PtFrameResult;
 typedef struct PtStepStats {
@@ -389,6 +404,9 @@ typedef struct PtStepStats {
 	uint32_t EngineErrorBits, NumPhaseTimes;
 	int64_t PhaseTimeNs[8];
 } PtStepStats;          /* 96 B; reads that need no listeners are allowed in headline runs */
+/* What the backend knows of its own memory (bytes; -1 = the backend cannot tell, e.g. allocation counts without an
+   allocator hook; the Kit pre-fills the four counters with -1, so a field a backend does not set reads -1, not 0).
+   AllocatorKind: 0 CRT malloc, 2 an engine temp / arena allocator (Jolt: the per-scene temp block). */
 typedef struct PtMemoryStats { int64_t LiveBytes, PeakBytes, NumAllocs, NumFrees; uint32_t AllocatorKind, Reserved; } PtMemoryStats;
 
 /* ---- Debug snapshot (Chaos conventions): PROVISIONAL(M9) ---- */

@@ -5,9 +5,15 @@
 # static entry (PT_GetBackendApi_<Name>) directly, so no WHOLE_ARCHIVE is needed (02 4.5), and lists the DLL backends
 # the host may load (PtBackend_Null.dll for the DLL-path tests; Chaos from M2.5 / M13).
 add_subdirectory(NullBackend)
+if(PT_WITH_JOLT)
+	add_subdirectory(JoltBackend)
+endif()
 
 # Static backends: name;entry symbol;CMake target. DLL backends: name;file name (resolved next to the executable).
 set(PT_STATIC_BACKENDS "Null;PT_GetBackendApi_Null;PT::Backend::Null")
+if(PT_WITH_JOLT)
+	list(APPEND PT_STATIC_BACKENDS "Jolt;PT_GetBackendApi_Jolt;PT::Backend::Jolt")
+endif()
 set(PT_DLL_BACKENDS "NullDll;PtBackend_Null.dll")
 
 set(_pt_registry_decls "")

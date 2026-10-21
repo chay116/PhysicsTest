@@ -65,5 +65,10 @@ namespace PhysicsTest
 			InFunc(InHandle);
 			return true;
 		}
+
+	private:
+		// An impulse or velocity change writes the body's game-thread dynamics: forces the owning scene holds since a
+		// PutToSleep are pushed again (FPhysScene::MarkDynamicsDirty_AssumesLocked, a hook only this class may call).
+		static void MarkDynamicsDirty(const FPhysicsActorHandle& Handle);
 	};
 }

@@ -170,13 +170,38 @@ TEST_CASE("PhysicsTest.Core.ParseNumericRangeAndSign")
 	float Scale = 0.5f;
 	for (const char* Text : { "-Dt=inf", "-Dt=-INF", "-Dt=nan", "-Dt=infinity", "-Dt=1e999" })
 	{
-		CAPTURE(Text);
+		const std::string TextValue(Text);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(TextValue);
 		CHECK_FALSE(FParse::Value(Text, "Dt=", Dt));
 		CHECK_FALSE(FParse::Value(Text, "Dt=", Scale));
 	}
 	CHECK(Dt == 0.25);
 	CHECK(Scale == 0.5f);
 	CHECK(FParse::Value("-Dt=0.016666668", "Dt=", Dt));
+	CHECK(Dt == doctest::Approx(0.016666668));
+
+	// M3 (bench CLI): the number must be the whole value; unsigned values accept a 0x prefix.
+	Threads = 7;
+	CHECK_FALSE(FParse::Value("-Threads=4x", "Threads=", Threads));
+	CHECK_FALSE(FParse::Value("-Threads=1.5", "Threads=", Threads));
+	CHECK(Threads == 7u);
+	Signed = 3;
+	CHECK_FALSE(FParse::Value("-N=12abc", "N=", Signed));
+	CHECK(Signed == 3);
+	CHECK(FParse::Value("-Threads=4 -Frames=600", "Threads=", Threads));
+	CHECK(Threads == 4u);
+	CHECK(FParse::Value("-Cpu=2,3", "Cpu=", Threads));
+	CHECK(Threads == 2u);
+	CHECK(FParse::Value("-Affinity=0xFF", "Affinity=", Mask));
+	CHECK(Mask == 0xFFu);
+	CHECK(FParse::Value("-Affinity=0X55", "Affinity=", Mask));
+	CHECK(Mask == 0x55u);
+	CHECK_FALSE(FParse::Value("-Affinity=0x", "Affinity=", Mask));
+	CHECK_FALSE(FParse::Value("-Affinity=0xFG", "Affinity=", Mask));
+	CHECK(Mask == 0x55u);
+	CHECK(FParse::Value("-Affinity=010", "Affinity=", Mask));   // decimal, never octal
+	CHECK(Mask == 10u);
+	CHECK_FALSE(FParse::Value("-Dt=0.5s", "Dt=", Dt));
 	CHECK(Dt == doctest::Approx(0.016666668));
 }
 

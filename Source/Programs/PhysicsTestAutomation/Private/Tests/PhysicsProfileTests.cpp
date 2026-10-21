@@ -410,7 +410,8 @@ TEST_CASE("PhysicsTest.Profile.HarnessCVarsAreAFixedTable")
 	REQUIRE(Resolve(Base, Normalized, nullptr, "", Before, Error));
 	for (const IConsoleVariable* Variable : PhysicsCVars::GetHarnessConsoleVariables())
 	{
-		CAPTURE(Variable->GetName());
+		const std::string VariableName = Variable->GetName();   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(VariableName);
 		const FResolvedConfigValue* Value = Before.Find(std::string("ConsoleVariables.") + Variable->GetName());
 		REQUIRE(Value != nullptr);
 		CHECK(Value->Value == Variable->GetDefaultString());

@@ -4,15 +4,18 @@
 
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
+#include "Hash/Sha256.h"
 #include "Logging/LogMacros.h"
 #include "Misc/AssertionMacros.h"
 #include "Physics/AnalyticReference.h"
 #include "Physics/PhysicsBackend.h"
 #include "Physics/PhysicsConsoleVariables.h"
+#include "Physics/PhysicsDebugSnapshot.h"
 #include "Physics/PhysicsProfile.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 DEFINE_LOG_CATEGORY_STATIC(LogPhysScene, Log, All);
 
@@ -74,6 +77,122 @@ namespace PhysicsTest
 		{
 			return static_cast<uint64>(static_cast<double>(Ticks) * 1.0e9 * FPlatformTime::GetSecondsPerCycle64() + 0.5);
 		}
+
+		// Canonical byte stream for the run hashes (02 12.3): every value as a fixed-width little-endian field (doubles and
+		// floats by their bit pattern), so the hash never depends on struct padding, text formatting or the flag profile.
+		struct FHashWriter
+		{
+			FSHA256 Sha;
+
+			void Tag(const char* Text)
+			{
+				const uint32 Length = static_cast<uint32>(std::strlen(Text));
+				U32(Length);
+				Sha.Update(Text, Length);
+			}
+			void Str(const std::string& Text)
+			{
+				U32(static_cast<uint32>(Text.size()));
+				Sha.Update(Text.data(), Text.size());
+			}
+			void U32(const uint32 Value) { Sha.Update(&Value, sizeof(Value)); }
+			void I32(const int32 Value) { Sha.Update(&Value, sizeof(Value)); }
+			void U64(const uint64 Value) { Sha.Update(&Value, sizeof(Value)); }
+			void F64(const double Value)
+			{
+				uint64 Bits = 0;
+				std::memcpy(&Bits, &Value, sizeof(Bits));
+				U64(Bits);
+			}
+			void F32(const float Value)
+			{
+				uint32 Bits = 0;
+				std::memcpy(&Bits, &Value, sizeof(Bits));
+				U32(Bits);
+			}
+			void Vec(const PtVec3& V) { F64(V.X); F64(V.Y); F64(V.Z); }
+			void Vec(const FVector& V) { F64(V.X); F64(V.Y); F64(V.Z); }
+			void Quat(const PtQuat& Q) { F64(Q.X); F64(Q.Y); F64(Q.Z); F64(Q.W); }
+			void Transform(const PtTransform& T) { Quat(T.Rotation); Vec(T.Translation); }
+		};
+
+		// The engine-independent part of one flush (desc_sha256, DL43). Per-body solver iteration counts and the
+		// PT_BODY_OVERRIDE_ITERATIONS flag are left out: the physics profiles mark them EngineDefault (a backend variant may
+		// set them, 02 10), so they go to options_sha256 with the other engine-specific inputs.
+		void HashBatchDescription(FHashWriter& W, const FMarshalledActorBatch& Batch)
+		{
+			W.Tag("flush");
+			W.U32(static_cast<uint32>(Batch.NewMaterials.size()));
+			for (const PtPhysicalMaterial& M : Batch.NewMaterials)
+			{
+				W.F64(M.Friction);
+				W.F64(M.StaticFriction);
+				W.F64(M.Restitution);
+				W.F64(M.SleepLinearVelocityThreshold);
+				W.F64(M.SleepAngularVelocityThreshold);
+				W.U32(M.SleepCounterThreshold);
+				W.U32(M.FrictionCombineMode);
+				W.U32(M.RestitutionCombineMode);
+			}
+			W.U32(static_cast<uint32>(Batch.Actors.size()));
+			for (const PtActorCreateInfo& A : Batch.Actors)
+			{
+				W.U32(A.BodyIndex);
+				W.U32(A.Motion);
+				W.U32(A.Flags & ~PT_BODY_OVERRIDE_ITERATIONS);
+				W.U32(A.FirstShape);
+				W.U32(A.NumShapes);
+				W.U32(A.ObjectType);
+				W.U32(A.BlockMask);
+				W.Transform(A.ActorTransform);
+				W.Vec(A.InitialLinearVelocity);
+				W.Vec(A.InitialAngularVelocity);
+				W.F64(A.Mass);
+				W.Vec(A.InertiaDiagonal);
+				W.Transform(A.CenterOfMassLocal);
+				W.F64(A.LinearDamping);
+				W.F64(A.AngularDamping);
+				W.F64(A.MaxAngularVelocity);
+				W.F64(A.MaxLinearVelocity);
+				W.F64(A.MaxDepenetrationVelocity);
+				W.F64(A.SleepThresholdMultiplier);
+				W.F64(A.StabilizationThresholdMultiplier);
+			}
+			W.U32(static_cast<uint32>(Batch.Shapes.size()));
+			for (const PtShapeElem& E : Batch.Shapes)
+			{
+				W.Transform(E.LocalTransform);
+				W.U32(E.Type);
+				W.U32(E.MaterialIndex);
+				W.F64(E.Radius);
+				W.F64(E.HalfLength);
+				W.Vec(E.BoxHalfExtent);
+				W.U32(E.FirstVertex);
+				W.U32(E.NumVertices);
+				W.F64(E.ContactOffset);
+				W.F64(E.RestOffset);
+				W.U32(E.Flags);
+			}
+			W.U32(static_cast<uint32>(Batch.ConvexVertices.size()));
+			for (const PtVec3& V : Batch.ConvexVertices)
+			{
+				W.Vec(V);
+			}
+		}
+
+		// The engine-specific part of one flush (options_sha256): the per-body iteration counts.
+		void HashBatchOptions(FHashWriter& W, const FMarshalledActorBatch& Batch)
+		{
+			W.Tag("flush");
+			W.U32(static_cast<uint32>(Batch.Actors.size()));
+			for (const PtActorCreateInfo& A : Batch.Actors)
+			{
+				W.U32((A.Flags & PT_BODY_OVERRIDE_ITERATIONS) != 0 ? 1u : 0u);
+				W.U32(A.PositionIterations);
+				W.U32(A.VelocityIterations);
+				W.U32(A.ProjectionIterations);
+			}
+		}
 	}
 
 	struct FPhysScene::FImpl
@@ -105,6 +224,14 @@ namespace PhysicsTest
 		// 1 / ExternalSteps the forces of the pushing frame are scaled with (PhysicsSolverBase.cpp:623-646 [V]).
 		uint32 ExternalSteps = 0;
 		double ForceWeight = 1.0;
+
+		// The scene description as created (pointers cleared) and the engine options it was created with.
+		PtSceneDesc SceneDesc = {};
+		std::vector<std::pair<std::string, std::string>> SceneOptions;
+		// Running hashes of every flush (ComputeDescSha256 / ComputeOptionsSha256 finish copies of them).
+		FHashWriter DescFlushes;
+		FHashWriter OptionsFlushes;
+		uint32 NumFlushes = 0;
 
 		EPhysSceneFramePhase Phase = EPhysSceneFramePhase::Idle;
 		bool bIsSimulating = false;
@@ -446,10 +573,11 @@ namespace PhysicsTest
 		std::vector<PtKeyValue> Options;
 		if (Params.Config != nullptr)
 		{
-			for (const auto& [Key, Value] : Params.Config->SceneOptions)
-			{
-				Options.push_back(PtKeyValue{ Key.c_str(), Value.c_str() });
-			}
+			Impl->SceneOptions = Params.Config->SceneOptions;
+		}
+		for (const auto& [Key, Value] : Impl->SceneOptions)
+		{
+			Options.push_back(PtKeyValue{ Key.c_str(), Value.c_str() });
 		}
 		PtSceneDesc Desc = {};
 		Desc.StructSize = sizeof(PtSceneDesc);
@@ -475,6 +603,9 @@ namespace PhysicsTest
 		{
 			UE_LOG(LogPhysScene, Fatal, "scene '%s': %s", Impl->DebugName.c_str(), Error.c_str());
 		}
+		Impl->SceneDesc = Desc;
+		Impl->SceneDesc.DebugName = nullptr;
+		Impl->SceneDesc.Options = nullptr;
 		Impl->Forces.reserve(64);
 		Impl->KinematicTargets.reserve(64);
 	}
@@ -507,7 +638,12 @@ namespace PhysicsTest
 		Impl->VerifyConsoleVariables("SpawnBody");   // the mass below reads p.ComNudgeAffectsInertia
 		// Creation order is ActorHandle.Index (assigned by the flush); InstanceBodyIndex keeps UE's meaning (INDEX_NONE).
 		FBodyInstance& Body = Impl->BodyStorage.emplace_back(Template);
+		// The copy carries none of the template's registration: a template that is (or was) a body of a scene would
+		// otherwise make InitBody's TermBody unregister the copy from that scene, which may be gone.
 		Body.ActorHandle = FPhysicsActorHandle();
+		Body.Scene = nullptr;
+		Body.bDeferred = false;
+		Body.State.ObjectState = EObjectStateType::Uninitialized;
 		Body.SpawnedBy = this;
 		Impl->Bodies.push_back(&Body);
 		Body.InitBody(Setup, Transform, this);
@@ -532,7 +668,24 @@ namespace PhysicsTest
 		checkf(Impl->IsIdle(), "FPhysScene::DeferAddActor outside the Idle phase");
 		checkf(Body != nullptr && Body->GetPhysicsScene() == this, "FPhysScene::DeferAddActor: the body belongs to another scene");
 		checkf(Body->SpawnedBy == this, "FPhysScene::DeferAddActor: only bodies spawned by this scene (SpawnBody) can be added");
+		// One FBodyInstance never gets two backend actors (M2 review): Fatal, not a checkf, which the test preset compiles out.
+		if (Body->ActorHandle.IsValid() || Body->bDeferred)
+		{
+			UE_LOG(LogPhysScene, Fatal, "scene '%s': body '%s' is already %s; TermBody it before adding it again", Impl->DebugName.c_str(), Body->BodyName.c_str(),
+				Body->ActorHandle.IsValid() ? "in the backend" : "deferred");
+		}
+		Body->bDeferred = true;
 		Impl->DeferredBodies.push_back(Body);
+	}
+
+	void FPhysScene::RemoveBodyInstanceFromPendingLists_AssumesLocked(FBodyInstance* BodyInstance)
+	{
+		checkf(Impl->IsIdle(), "FPhysScene::RemoveBodyInstanceFromPendingLists_AssumesLocked outside the Idle phase");
+		if (BodyInstance != nullptr && BodyInstance->bDeferred)
+		{
+			std::erase(Impl->DeferredBodies, BodyInstance);
+			BodyInstance->bDeferred = false;
+		}
 	}
 
 	void FPhysScene::FlushDeferredActors()
@@ -550,11 +703,15 @@ namespace PhysicsTest
 			UE_LOG(LogPhysScene, Fatal, "scene '%s': cannot create the deferred bodies: %s", Impl->DebugName.c_str(), Error.c_str());
 		}
 		Impl->CheckBackend(Impl->Backend->CreateActors(Impl->DeferredBodies, Batch), "CreateMaterials / CreateActors");
+		HashBatchDescription(Impl->DescFlushes, Batch);
+		HashBatchOptions(Impl->OptionsFlushes, Batch);
+		++Impl->NumFlushes;
 		// Initial object states as the engine has them after step 5 (put to sleep), e.g. Sleeping for !bStartAwake.
 		uint32 Count = 0;
 		Impl->CheckBackend(Impl->Backend->PullBodyStates(PT_READ_ALL, Count), "ReadBodyStates");
-		for (const FBodyInstance* Body : Impl->DeferredBodies)
+		for (FBodyInstance* Body : Impl->DeferredBodies)
 		{
+			Body->bDeferred = false;
 			++Impl->Stats.NumBodies;
 			if (Body->IsStatic())
 			{
@@ -945,5 +1102,110 @@ namespace PhysicsTest
 		std::string Lines;
 		Impl->CheckBackend(Impl->Backend->DumpEffectiveSettings(Lines), "DumpEffectiveSettings");
 		return Lines;
+	}
+
+	bool FPhysScene::CaptureDebugSnapshot(FPhysicsDebugSnapshot& Out, const uint32 SnapshotFlags) const
+	{
+		checkf(Impl->IsIdle(), "FPhysScene::CaptureDebugSnapshot outside the Idle phase");
+		const PtResult Result = Impl->Backend->CaptureDebugSnapshot(SnapshotFlags, Out);
+		if (Result == PT_E_UNSUPPORTED)
+		{
+			Out.Reset();
+			return false;
+		}
+		Impl->CheckBackend(Result, "CaptureDebugSnapshot / ReadDebugSnapshot");
+		Out.FrameIndex = Impl->FrameCount;
+		Out.SimTime = Impl->SimTime;
+		return true;
+	}
+
+	std::string FPhysScene::ComputeDescSha256(const std::span<const float> FrameDeltaSeconds) const
+	{
+		checkf(Impl->DeferredBodies.empty(), "FPhysScene::ComputeDescSha256 with deferred bodies: call FlushDeferredActors first");
+		FHashWriter W = Impl->DescFlushes;   // the flushes so far, then the rest
+		W.Tag("physicstest.desc/1");
+		W.U32(Impl->NumFlushes);
+		// Constraints (data only until M9): bodies by creation order, frames, profile.
+		const auto BodyOrder = [this](const FBodyInstance* Body) -> uint32
+		{
+			const auto Found = std::find(Impl->Bodies.begin(), Impl->Bodies.end(), Body);
+			return Body == nullptr || Found == Impl->Bodies.end() ? PT_INDEX_NONE : static_cast<uint32>(Found - Impl->Bodies.begin());
+		};
+		W.Tag("constraints");
+		W.U32(static_cast<uint32>(Impl->Constraints.size()));
+		for (const FConstraintInstance* C : Impl->Constraints)
+		{
+			W.U32(BodyOrder(C->Body1));
+			W.U32(BodyOrder(C->Body2));
+			W.Vec(C->Pos1);
+			W.Vec(C->PriAxis1);
+			W.Vec(C->SecAxis1);
+			W.Vec(C->Pos2);
+			W.Vec(C->PriAxis2);
+			W.Vec(C->SecAxis2);
+			const FConstraintProfileProperties& P = C->ProfileInstance;
+			W.F32(P.LinearLimit.Limit);
+			W.U32(static_cast<uint32>(P.LinearLimit.XMotion) | (static_cast<uint32>(P.LinearLimit.YMotion) << 8) | (static_cast<uint32>(P.LinearLimit.ZMotion) << 16));
+			W.F32(P.ConeLimit.Swing1LimitDegrees);
+			W.F32(P.ConeLimit.Swing2LimitDegrees);
+			W.F32(P.TwistLimit.TwistLimitDegrees);
+			W.U32(static_cast<uint32>(P.ConeLimit.Swing1Motion) | (static_cast<uint32>(P.ConeLimit.Swing2Motion) << 8)
+				| (static_cast<uint32>(P.TwistLimit.TwistMotion) << 16));
+			W.U32(P.bDisableCollision ? 1u : 0u);
+		}
+		// Gravity and the dt sequence: NominalDeltaTime and the harness plan of every frame (from a fresh accumulator).
+		W.Tag("gravity");
+		W.Vec(FVector(0.0, 0.0, Impl->Settings.DefaultGravityZ));
+		W.Tag("dt");
+		W.F64(Impl->SceneDesc.NominalDeltaTime);
+		W.U32(static_cast<uint32>(Impl->TestSettings.TickMode));
+		W.U32(static_cast<uint32>(FrameDeltaSeconds.size()));
+		double Accumulator = 0.0;
+		for (const float FrameDt : FrameDeltaSeconds)
+		{
+			const FSetUpForFrameParams Params = FStepPlanner::MakeSetUpForFrameParams(FrameDt, Impl->Settings, Impl->TestSettings);
+			const FStepPlan Plan = FStepPlanner::PlanFrame(Params, Impl->AsyncDeltaTime, Impl->TestSettings.SubstepClampRule, Accumulator);
+			W.I32(Plan.NumSteps);
+			W.F32(Plan.StepDeltaTime);
+		}
+		return W.Sha.Final().ToString();
+	}
+
+	std::string FPhysScene::ComputeOptionsSha256() const
+	{
+		FHashWriter W = Impl->OptionsFlushes;
+		W.Tag("physicstest.options/1");
+		const PtSceneDesc& D = Impl->SceneDesc;
+		W.U32(D.RunMode);
+		W.U32(D.InstrumentFlags);
+		W.U32(D.SimFlags);
+		W.F64(D.AsyncFixedTimeStepSize);
+		W.F64(D.RestitutionThreshold);
+		W.F64(D.MaxLinearVelocity);
+		W.I32(D.PositionIterations);
+		W.I32(D.VelocityIterations);
+		W.I32(D.ProjectionIterations);
+		W.U32(D.NumThreads);
+		W.U32(D.MaxBodiesHint);
+		W.U32(D.MaxBodyPairsHint);
+		W.U32(D.MaxContactConstraintsHint);
+		W.U32(static_cast<uint32>(Impl->Driver));
+		W.U32(static_cast<uint32>(Impl->SceneOptions.size()));
+		for (const auto& [Key, Value] : Impl->SceneOptions)
+		{
+			W.Str(Key);
+			W.Str(Value);
+		}
+		return W.Sha.Final().ToString();
+	}
+
+	const PtSceneDesc& FPhysScene::GetSceneDesc() const
+	{
+		return Impl->SceneDesc;
+	}
+
+	const std::vector<std::pair<std::string, std::string>>& FPhysScene::GetSceneOptions() const
+	{
+		return Impl->SceneOptions;
 	}
 }

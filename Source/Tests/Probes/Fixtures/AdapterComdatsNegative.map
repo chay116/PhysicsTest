@@ -1,0 +1,17 @@
+ AdapterComdatsNegative (fixture of PhysicsTest.Probe.AdapterComdatsNegative: the M3 checker's evidence, cut down)
+
+ Preferred load address is 0000000140000000
+
+  Address         Publics by Value              Rva+Base               Lib:Object
+
+ 0001:00001000       ?StartFrame@FPhysScene_Jolt@JoltBackend@PhysicsTest@@UEAAHXZ 0000000140002000 f   PtBackendJolt:PhysScene_Jolt.cpp.obj
+ 0001:00001100       ?__global_delete@@YAXPEAX_K@Z 0000000140002100 f   PtBackendJolt:JoltBackend.cpp.obj
+ 0001:00001200       ?push_back@?$vector@IV?$allocator@I@std@@@std@@QEAAXAEBI@Z 0000000140002200 f i PtBackendJolt:PhysScene_Jolt.cpp.obj
+ 0001:00001300       ?Update@PhysicsSystem@JPH@@QEAA?AW4EPhysicsUpdateError@2@MHPEAVTempAllocator@2@PEAVJobSystem@2@@Z 0000000140002300 f   Jolt:PhysicsSystem.cpp.obj
+ 0001:00001400       ?abs@@YAMM@Z               0000000140002400 f i Jolt:ConvexShape.cpp.obj
+
+ entry point at        0001:00001000
+
+ Static symbols
+
+ 0001:00001500       ?ParseUInt@?A0x12345678@JoltBackend@PhysicsTest@@YA_NUFStringRef@Jolt@Abi@3@AEA_K@Z 0000000140002500 f   PtBackendJolt:PhysScene_Jolt.cpp.obj

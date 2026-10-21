@@ -141,6 +141,5 @@ namespace PhysicsTest
 	[[nodiscard]] const char* ToString(EPhysicsRunMode Value);
 	[[nodiscard]] const char* ToString(EMassRule Value);
 	[[nodiscard]] const char* ToString(EChaosThreadingMode Value);
-	[[nodiscard]] const char* ToString(EFrictionCombineMode Value);
-	[[nodiscard]] const char* ToString(ESleepFamily Value);
+	// ToString(EFrictionCombineMode) and ToString(ESleepFamily) are declared next to their enums (PhysicsInterfaceTypes.h).
 }

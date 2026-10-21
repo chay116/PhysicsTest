@@ -23,6 +23,10 @@ namespace PhysicsTest
 
 	void FBodyInstance::InitBody(const FBodySetup* Setup, const FTransform& Transform, FPhysScene* InRBScene)
 	{
+		if (Scene != nullptr)
+		{
+			TermBody();   // already registered (deferred or live): never two actors for one body
+		}
 		BodySetup = Setup;
 		Scene = InRBScene;
 		Scale3D = Transform.GetScale3D();
@@ -43,12 +47,16 @@ namespace PhysicsTest
 		{
 			Scene->ReleaseBody(this);   // ReleaseActors through the scene proxy (phase Idle)
 		}
+		else if (Scene != nullptr)
+		{
+			Scene->RemoveBodyInstanceFromPendingLists_AssumesLocked(this);   // deferred, not flushed yet: no actor
+		}
 		ActorHandle = FPhysicsActorHandle();
 		State.ObjectState = EObjectStateType::Uninitialized;
 		Scene = nullptr;
 	}
 
-	void FBodyInstance::SetBodyTransform(const FTransform& NewTransform, const ETeleportType Teleport)
+	void FBodyInstance::SetBodyTransform(const FTransform& NewTransform, const ETeleportType Teleport, const bool /*bAutoWake*/)
 	{
 		if (!ActorHandle.IsValid())
 		{
@@ -71,7 +79,7 @@ namespace PhysicsTest
 		}
 	}
 
-	void FBodyInstance::SetLinearVelocity(const FVector& NewVel, const bool bAddToCurrent)
+	void FBodyInstance::SetLinearVelocity(const FVector& NewVel, const bool bAddToCurrent, const bool /*bAutoWake*/)
 	{
 		if (ActorHandle.IsValid())
 		{
@@ -87,7 +95,7 @@ namespace PhysicsTest
 		}
 	}
 
-	void FBodyInstance::SetAngularVelocityInRadians(const FVector& NewAngVel, const bool bAddToCurrent)
+	void FBodyInstance::SetAngularVelocityInRadians(const FVector& NewAngVel, const bool bAddToCurrent, const bool /*bAutoWake*/)
 	{
 		if (ActorHandle.IsValid())
 		{
@@ -162,6 +170,12 @@ namespace PhysicsTest
 		{
 			FPhysicsInterface::PutToSleep_AssumesLocked(ActorHandle);
 		}
+	}
+
+	bool FBodyInstance::IsInstanceAwake() const
+	{
+		// UE: FPhysicsInterface::IsDynamic && !IsSleeping (BodyInstance.cpp:3580-3593 [V]).
+		return ActorHandle.IsValid() && IsDynamic() && !FPhysicsInterface::IsSleeping(ActorHandle);
 	}
 
 	void FBodyInstance::UpdateMassProperties()

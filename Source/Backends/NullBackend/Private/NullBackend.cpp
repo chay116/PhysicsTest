@@ -508,10 +508,12 @@ namespace PhysicsTest::NullBackend
 					{
 						Body.bHasKinematicTarget = false;
 					}
-					const PtVec3 OldP = Body.P;
+					// Chaos computes the kinematic velocity from the particle X, the actor ORIGIN (PBDRigidsEvolutionGBF.cpp:
+					// 1180-1239 [V]), not from the COM: the reported V of a kinematic body is the origin's (PtBodyState, M3).
+					const PtVec3 OldOrigin = GetActorPose(Body).Translation;
 					const PtQuat OldQ = Body.Q;
 					SetActorPose(Body, Pose);
-					Body.V = Scale(Sub(Body.P, OldP), 1.0 / Dt);
+					Body.V = Scale(Sub(Pose.Translation, OldOrigin), 1.0 / Dt);
 					Body.W = AngularVelocityBetween(OldQ, Body.Q, Dt);
 					Body.bDirty = true;
 				}
@@ -961,7 +963,7 @@ namespace PhysicsTest::NullBackend
 
 	PtResult FNullBackend::GetMemoryStats(PtMemoryStats& Out)
 	{
-		Out.AllocatorKind = 0;   // CRT malloc; per-scene numbers come from GetMemoryStats(Scene)
+		Out.AllocatorKind = 0;   // CRT malloc; the byte / allocation fields keep the Kit's -1 (per-scene numbers: GetMemoryStats(Scene))
 		return PT_OK;
 	}
 }

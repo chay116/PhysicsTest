@@ -6,6 +6,7 @@
 #include "Misc/AssertionMacros.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Physics/PhysicsDebugSnapshot.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -515,6 +516,13 @@ namespace PhysicsTest
 					"initialised with other init options; this combination needs its own process";
 				return nullptr;
 			}
+			if (Module->GetInitParams().MaxThreads != Params.MaxThreads)
+			{
+				// The thread budget T is process-wide (Chaos: -corelimit=T at PreInit); the module keeps its first one. A scene
+				// still passes its own PtSceneDesc::NumThreads.
+				UE_LOG(LogPhysicsBackend, Warning, "backend '%s' was initialised with MaxThreads %u; a request for %u reuses that initialisation",
+					Module->GetName().c_str(), Module->GetInitParams().MaxThreads, Params.MaxThreads);
+			}
 			return Module;
 		}
 		const PtResult Result = Module->InitGamePhys(Params);
@@ -701,7 +709,10 @@ namespace PhysicsTest
 			Actor.AngularDamping = Body.AngularDamping;
 			Actor.MaxAngularVelocity = Body.GetMaxAngularVelocityInRadians(Project);
 			Actor.MaxLinearVelocity = 0.0;   // UE has no linear velocity limit (CreateActor uses sqrt(FLT_MAX))
-			Actor.MaxDepenetrationVelocity = Body.bOverrideMaxDepenetrationVelocity ? Body.MaxDepenetrationVelocity : Project.MaxDepenetrationVelocity;
+			// UE 5.8.3 FBodyInstance::UpdateMaxDepenetrationVelocity sends the body's value only when it overrides, else -1 =
+			// "the solver setting" (BodyInstance.cpp:3713-3722 [V]); the project MaxDepenetrationVelocity is a PhysX-era key the
+			// Chaos path never reads (PtBackendAbi.h, docs/Abi.md 5.7; M2 review, fixed in M3).
+			Actor.MaxDepenetrationVelocity = Body.bOverrideMaxDepenetrationVelocity ? Body.MaxDepenetrationVelocity : -1.0;
 			Actor.SleepThresholdMultiplier = Body.GetSleepThresholdMultiplier();
 			Actor.StabilizationThresholdMultiplier = Body.StabilizationThresholdMultiplier;
 			Actor.UserTag = 0;
@@ -817,9 +828,59 @@ namespace PhysicsTest
 		return Api->GetStepStats(SceneId, &Out);
 	}
 
+	PtResult FPhysicsBackendScene::GetMemoryStats(PtMemoryStats& Out)
+	{
+		Out = PtMemoryStats();
+		return Api->GetMemoryStats(SceneId, &Out);
+	}
+
 	PtResult FPhysicsBackendScene::ComputeNativeStateHash(uint64& OutHash)
 	{
 		return Api->ComputeNativeStateHash(SceneId, &OutHash);
+	}
+
+	PtResult FPhysicsBackendScene::CaptureDebugSnapshot(const uint32 SnapshotFlags, FPhysicsDebugSnapshot& Out)
+	{
+		Out.Reset();
+		Out.Capabilities = Module->GetInfo().Capabilities;
+		PtDebugSnapshotRequest Request = {};
+		Request.StructSize = sizeof(PtDebugSnapshotRequest);
+		Request.Flags = SnapshotFlags;
+		Request.MaxContactPoints = 1u << 22;
+		Request.MaxNativeCommands = 1u << 20;
+		PtDebugSnapshotCounts Counts = {};
+		PtResult Result = Api->CaptureDebugSnapshot(SceneId, &Request, &Counts);
+		if (Result < 0)
+		{
+			return Result;
+		}
+		Out.Particles.resize(Counts.NumParticles);
+		Out.Contacts.resize(Counts.NumContactPoints);
+		Out.Joints.resize(Counts.NumJoints);
+		Out.NativeCommands.resize(Counts.NumNativeCommands);
+		Out.StringPool.assign(Counts.NumStringBytes, '\0');
+		PtDebugSnapshotBuffers Buffers = {};
+		Buffers.Particles = Out.Particles.empty() ? nullptr : Out.Particles.data();
+		Buffers.ParticleCapacity = Counts.NumParticles;
+		Buffers.ParticleStride = sizeof(PtParticleSnapshot);
+		Buffers.ContactPoints = Out.Contacts.empty() ? nullptr : Out.Contacts.data();
+		Buffers.ContactCapacity = Counts.NumContactPoints;
+		Buffers.ContactStride = sizeof(PtContactPoint);
+		Buffers.Joints = Out.Joints.empty() ? nullptr : Out.Joints.data();
+		Buffers.JointCapacity = Counts.NumJoints;
+		Buffers.JointStride = sizeof(PtJointSnapshot);
+		Buffers.NativeCommands = Out.NativeCommands.empty() ? nullptr : Out.NativeCommands.data();
+		Buffers.CommandCapacity = Counts.NumNativeCommands;
+		Buffers.CommandStride = sizeof(PtDebugDrawCmd);
+		Buffers.StringBytes = Out.StringPool.empty() ? nullptr : Out.StringPool.data();
+		Buffers.StringCapacity = Counts.NumStringBytes;
+		Result = Api->ReadDebugSnapshot(SceneId, &Buffers);
+		Out.bTruncated = Counts.bTruncated != 0;
+		if (Result < 0)
+		{
+			Out.Reset();
+		}
+		return Result;
 	}
 
 	PtResult FPhysicsBackendScene::DumpEffectiveSettings(std::string& OutJsonLines)

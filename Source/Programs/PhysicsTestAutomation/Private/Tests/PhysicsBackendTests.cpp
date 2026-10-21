@@ -146,6 +146,27 @@ TEST_CASE("PhysicsTest.Backend.MarshallingOfShapesAndBodies")
 	REQUIRE(Scene.GetBackendScene().ReadMassProperties(0, std::span<PtMassProperties>(&Mass, 1)) == PT_OK);
 	CHECK(Mass.Mass == Body->GetBodyMass());
 	CHECK(Mass.InertiaDiagonal.Y == Body->GetBodyInertiaTensor().Y);
+
+	// MaxDepenetrationVelocity, UE 5.8.3 semantics (M2 review (1), M3): -1 = the solver setting unless the body overrides
+	// it (BodyInstance.cpp:3713-3722 [V]); an override of 0 stays 0 (initial overlaps are not pushed apart).
+	CHECK(Actor.MaxDepenetrationVelocity == -1.0);
+	FBodyInstance Override = Template;
+	Override.bOverrideMaxDepenetrationVelocity = true;
+	Override.MaxDepenetrationVelocity = 0.0f;
+	FBodyInstance* Overriding = Scene.SpawnBody(Override, SetupPtr, FTransform(FVector(0.0, 0.0, 900.0)));
+	FMarshalledActorBatch OverrideBatch;
+	FBodyInstance* OverrideBodies[] = { Overriding };
+	REQUIRE_MESSAGE(Scene.GetBackendScene().MarshalBodies(OverrideBodies, 1, Scene.GetSettings(), OverrideBatch, Error), Error);
+	REQUIRE(OverrideBatch.Actors.size() == 1u);
+	CHECK(OverrideBatch.Actors[0].MaxDepenetrationVelocity == 0.0);
+	Override.MaxDepenetrationVelocity = 250.0f;
+	FBodyInstance* Fast = Scene.SpawnBody(Override, SetupPtr, FTransform(FVector(0.0, 0.0, 1300.0)));
+	OverrideBodies[0] = Fast;
+	REQUIRE_MESSAGE(Scene.GetBackendScene().MarshalBodies(OverrideBodies, 2, Scene.GetSettings(), OverrideBatch, Error), Error);
+	CHECK(OverrideBatch.Actors[0].MaxDepenetrationVelocity == 250.0);
+	Scene.FlushDeferredActors();
+	CHECK(Overriding->ActorHandle.IsValid());
+	CHECK(Fast->ActorHandle.IsValid());
 }
 
 TEST_CASE("PhysicsTest.Backend.MarshallingRejectsInvalidBodies")

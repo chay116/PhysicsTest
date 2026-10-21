@@ -18,6 +18,13 @@
 #                                         PT_BACKEND_NS (M2)
 #   PhysicsTest.Probe.KitNeedsBackendNs   a TU including the Kit without PT_BACKEND_NS stops with #error: compiled
 #                                         directly with its compile_commands.json line (no nested build)          (M2)
+#   PhysicsTest.Probe.HarnessSdkIsolation harness TUs (everything but backends, SDK smoke tests and the Jolt seam) have
+#                                         no SDK include path or definition and, in Shipped, no /arch             (M3)
+#   PhysicsTest.Probe.BenchNoRenderer     PhysicsTestBench.exe imports neither d3d11.dll nor dxgi.dll             (M3)
+#   PhysicsTest.Probe.AdapterComdats      the Automation and Bench linker maps take no shared COMDAT from an SDK adapter
+#                                         object (/arch:AVX2): adapter functions are backend-owned, SDK residue is a
+#                                         known list; report-only in Debug (M3 fix round 0)
+#   PhysicsTest.Probe.AdapterComdatsNegative  the same script fails on a fixture map with an adapter std::vector COMDAT
 
 pt_add_program(PtProbeThirdPartyIncludes
 	SOURCES ThirdPartyIncludesProbe.cpp
@@ -84,10 +91,15 @@ else()
 	message(WARNING "PhysicsTest.Probe.CheckModules disabled: python (${PT_PYTHON}) or dumpbin (${_pt_msvc_bin}) not found")
 endif()
 
+# Every static backend linked into PhysicsTestAutomation keeps its Kit symbols in its own inline namespace (Jolt from M3).
+set(_pt_kit_namespaces "Null$<SEMICOLON>AbiTwin")
+if(PT_WITH_JOLT)
+	string(APPEND _pt_kit_namespaces "$<SEMICOLON>Jolt")
+endif()
 pt_add_script_test(PhysicsTest.Probe.KitNamespaces
 	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckKitNamespaces.cmake"
-	ARGS "-DPT_MAP=$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map" "-DPT_ALLOWED=Null$<SEMICOLON>AbiTwin$<SEMICOLON>AutomationTest"
-		"-DPT_REQUIRED=Null$<SEMICOLON>AbiTwin")
+	ARGS "-DPT_MAP=$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map" "-DPT_ALLOWED=${_pt_kit_namespaces}$<SEMICOLON>AutomationTest"
+		"-DPT_REQUIRED=${_pt_kit_namespaces}")
 pt_add_script_test(PhysicsTest.Probe.BackendIsolation
 	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckBackendIsolation.cmake"
 	ARGS "-DPT_COMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json" "-DPT_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
@@ -103,8 +115,43 @@ pt_add_script_test(PhysicsTest.Probe.KitNeedsBackendNs
 	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckKitNeedsBackendNs.cmake"
 	ARGS "-DPT_COMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json" "-DPT_PROBE_DIR=${CMAKE_BINARY_DIR}/_probe/KitNeedsBackendNs")
 
+# ---- M3 --------------------------------------------------------------------------------------------------------------
+pt_add_script_test(PhysicsTest.Probe.HarnessSdkIsolation
+	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckHarnessSdkIsolation.cmake"
+	ARGS "-DPT_COMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json" "-DPT_SOURCE_DIR=${CMAKE_SOURCE_DIR}" "-DPT_BINARY_DIR=${CMAKE_BINARY_DIR}"
+		"-DPT_FLAG_PROFILE=${PT_FLAG_PROFILE}")
+if(EXISTS "${_pt_msvc_bin}/dumpbin.exe")
+	pt_add_script_test(PhysicsTest.Probe.BenchNoRenderer
+		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckNoRendererImports.cmake"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_DUMPBIN=${_pt_msvc_bin}/dumpbin.exe")
+else()
+	message(WARNING "PhysicsTest.Probe.BenchNoRenderer disabled: dumpbin (${_pt_msvc_bin}) not found")
+endif()
+
+# ODR / flag isolation at binary level (docs/Abi.md 5.13): a COMDAT the harness shares must never come from an /arch:AVX2
+# adapter object. Strict in the optimised presets; the Debug preset (/Od emits the SDK headers' std helpers out of line)
+# only reports.
+if(PT_WITH_JOLT)
+	set(_pt_adapter_owned "JPH@@|@JoltBackend@PhysicsTest@@|@Jolt@Abi@PhysicsTest@@")
+	if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+		set(_pt_adapter_strict OFF)
+	else()
+		set(_pt_adapter_strict ON)
+	endif()
+	pt_add_script_test(PhysicsTest.Probe.AdapterComdats
+		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake"
+		ARGS "-DPT_MAPS=$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.map"
+			-DPT_ADAPTER_LIBS=PtBackendJolt "-DPT_ADAPTER_OWNED=${_pt_adapter_owned}" -DPT_SDK_LIBS=Jolt "-DPT_SDK_OWNED=JPH@@" -DPT_STRICT=${_pt_adapter_strict})
+	add_test(NAME PhysicsTest.Probe.AdapterComdatsNegative
+		COMMAND "${CMAKE_COMMAND}" "-DPT_MAPS=${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AdapterComdatsNegative.map" -DPT_ADAPTER_LIBS=PtBackendJolt
+			"-DPT_ADAPTER_OWNED=${_pt_adapter_owned}" -DPT_SDK_LIBS=Jolt "-DPT_SDK_OWNED=JPH@@" -DPT_STRICT=ON -P "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake")
+	# Exactly the vector<uint32>::push_back of the fixture fails (the known SDK residue and the delete helper pass).
+	set_tests_properties(PhysicsTest.Probe.AdapterComdatsNegative PROPERTIES
+		PASS_REGULAR_EXPRESSION "1 shared COMDAT[(]s[)] supplied by an /arch-isolated object.*push_back@[?][$]vector@IV")
+endif()
+
 foreach(_test ThirdPartyIncludes NegativeScaleFatal HarnessCVars FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard CheckModules KitNamespaces
-		BackendIsolation KitNeedsBackendNs)
+		BackendIsolation KitNeedsBackendNs HarnessSdkIsolation BenchNoRenderer AdapterComdats AdapterComdatsNegative)
 	if(TEST PhysicsTest.Probe.${_test})
 		get_test_property(PhysicsTest.Probe.${_test} LABELS _labels)
 		if(_labels)

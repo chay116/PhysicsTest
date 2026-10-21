@@ -1,7 +1,7 @@
 // PhysicsProfile.cpp - profile / variant files and FProfileResolver (02_Architecture 10, DL18, DL44).
 // Values are parsed and re-exported through per-struct property tables, so every modelled key is validated, carries an
 // Origin, and hashes formatting-independently. UE text formats are accepted: True / False, enum names (optionally
-// "EType::Name"), struct text "(Key=Value,...)" for FVector / SolverOptions / ChaosSettings (unknown struct fields are
+// "EType::Name"), struct text "(Key=Value,...)" for SolverOptions / ChaosSettings (unknown struct fields are
 // ignored with a warning, as UE's ImportText would skip them).
 #include "Physics/PhysicsProfile.h"
 
@@ -321,10 +321,8 @@ namespace PhysicsTest
 		// Struct codecs, defined after the field tables below (declared here so the templates can see them).
 		bool ImportText(std::string_view Text, FChaosSolverConfiguration& Out, std::string& OutError);
 		bool ImportText(std::string_view Text, FChaosPhysicsSettings& Out, std::string& OutError);
-		bool ImportText(std::string_view Text, FVector& Out, std::string& OutError);
 		std::string ExportText(const FChaosSolverConfiguration& Value);
 		std::string ExportText(const FChaosPhysicsSettings& Value);
-		std::string ExportText(const FVector& Value);
 
 		// ---- property tables ----
 		struct FPropertyDesc
@@ -429,11 +427,6 @@ namespace PhysicsTest
 		const FPropertyDesc GChaosSettingsFields[] = {
 			PT_PROPERTY(FChaosPhysicsSettings, DefaultThreadingModel, "", false),
 		};
-		const FPropertyDesc GVectorFields[] = {
-			PT_PROPERTY(FVector, X, "", true),
-			PT_PROPERTY(FVector, Y, "", true),
-			PT_PROPERTY(FVector, Z, "", true),
-		};
 
 		bool ImportText(const std::string_view Text, FChaosSolverConfiguration& Out, std::string& OutError)
 		{
@@ -443,10 +436,6 @@ namespace PhysicsTest
 		{
 			return ImportStructText(Text, Out, GChaosSettingsFields, OutError);
 		}
-		bool ImportText(const std::string_view Text, FVector& Out, std::string& OutError)
-		{
-			return ImportStructText(Text, Out, GVectorFields, OutError);
-		}
 		std::string ExportText(const FChaosSolverConfiguration& Value)
 		{
 			return ExportStructText(Value, GSolverOptionsFields);
@@ -454,10 +443,6 @@ namespace PhysicsTest
 		std::string ExportText(const FChaosPhysicsSettings& Value)
 		{
 			return ExportStructText(Value, GChaosSettingsFields);
-		}
-		std::string ExportText(const FVector& Value)
-		{
-			return ExportStructText(Value, GVectorFields);
 		}
 
 		// [/Script/Engine.PhysicsSettings]: UPhysicsSettingsCore + UPhysicsSettings fields the harness models.

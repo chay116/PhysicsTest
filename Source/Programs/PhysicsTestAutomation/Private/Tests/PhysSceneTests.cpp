@@ -256,7 +256,8 @@ TEST_CASE("PhysicsTest.PhysScene.TickModesThroughThePlanner")
 		Config.TestSettings.TickMode = EPhysicsTickMode::Substepping;
 		Config.TestSettings.FrameDriver = Driver;
 		FPhysScene Scene = MakeScene(&Config);
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		CHECK(Scene.GetFrameDriver() == Driver);
 		std::vector<float> Steps;
 		Scene.OnPhysSceneStep = [&Steps](FPhysScene*, const float Dt) { Steps.push_back(Dt); };
@@ -330,8 +331,10 @@ TEST_CASE("PhysicsTest.PhysScene.FreeFallFixture")
 			FResolvedPhysicsConfig Config;
 			Config.TestSettings.FrameDriver = Driver;
 			FPhysScene Scene = MakeScene(&Config, Backend);
-			CAPTURE(Backend);
-			CAPTURE(ToString(Driver));
+			const std::string BackendText(Backend);
+			CAPTURE(BackendText);
+			const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+			CAPTURE(DriverText);
 			FBodyInstance* Sphere = Fixtures::FFreeFall::Build(Scene);
 			Scene.PrepareForSimulation();
 			CHECK(Sphere->GetBodyMass() == doctest::Approx(1.0).epsilon(1e-12));
@@ -527,7 +530,8 @@ TEST_CASE("PhysicsTest.PhysScene.SubstepDeltaTimePerDriver")
 		const double Dt = Driver == EFrameDriver::Native ? Plan.InternalStepDeltaTime : Analytic::EngineDeltaTime(Plan.StepDeltaTime);
 		const double Reference = Analytic::SemiImplicitEulerFreeFall(Fixtures::FFreeFall::Z0, 0.0, -980.0, Dt, 30).Z;
 		Z[Slot] = Sphere->GetUnrealWorldTransform().GetTranslation().Z;
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		CHECK(std::abs(Z[Slot] - Reference) <= 1e-9);
 		CHECK(Scene.GetSimTime() == doctest::Approx(30.0 * Dt).epsilon(1e-14));
 		++Slot;
@@ -612,7 +616,8 @@ TEST_CASE("PhysicsTest.PhysScene.ForceRulesPerDriver")
 			{
 				for (const bool bInterface : { false, true })
 				{
-					CAPTURE(ToString(Driver));
+					const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+					CAPTURE(DriverText);
 					CAPTURE(bAllowSubstepping);
 					CAPTURE(bInterface);
 					const FForceRun Run = RunForceFrames(EPhysicsTickMode::Substepping, ESubstepClampRule::UE5ChaosScene, Driver, OneFrame,
@@ -648,7 +653,8 @@ TEST_CASE("PhysicsTest.PhysScene.ForceRulesPerDriver")
 		// drivers. (A per-step broadcast would re-send the forces of earlier calls and accumulate 1 + 2 + 3 force-steps.)
 		for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 		{
-			CAPTURE(ToString(Driver));
+			const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+			CAPTURE(DriverText);
 			FResolvedPhysicsConfig Config;
 			Config.TestSettings.TickMode = EPhysicsTickMode::Substepping;
 			Config.TestSettings.FrameDriver = Driver;
@@ -692,7 +698,8 @@ TEST_CASE("PhysicsTest.PhysScene.ForceRulesPerDriver")
 		const std::vector<float> TwoFrames = { 1.0f / 60.0f, 1.0f / 60.0f };
 		for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 		{
-			CAPTURE(ToString(Driver));
+			const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+			CAPTURE(DriverText);
 			const FForceRun Run = RunForceFrames(EPhysicsTickMode::AsyncFixed, ESubstepClampRule::UE5ChaosScene, Driver, TwoFrames, Ramp);
 			REQUIRE(Run.Plan.NumSteps == 1);
 			// The step dt from the plan (the float AsyncFixedTimeStepSize as double; a literal 1.0f / 30.0f could be folded
@@ -750,7 +757,8 @@ TEST_CASE("PhysicsTest.PhysScene.KinematicTargetRulesPerDriver")
 	};
 	for (const FCase& Case : Cases)
 	{
-		CAPTURE(Case.Name);
+		const std::string CaseText(Case.Name);
+		CAPTURE(CaseText);
 		FResolvedPhysicsConfig Config;
 		Config.TestSettings.TickMode = Case.Mode;
 		Config.TestSettings.SubstepClampRule = Case.Rule;
@@ -791,7 +799,8 @@ TEST_CASE("PhysicsTest.PhysScene.KinematicTeleportThenTarget")
 	int32 Slot = 0;
 	for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 	{
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		FResolvedPhysicsConfig Config;
 		Config.TestSettings.TickMode = EPhysicsTickMode::Substepping;
 		Config.TestSettings.FrameDriver = Driver;
@@ -833,7 +842,8 @@ TEST_CASE("PhysicsTest.PhysScene.ZeroStepFramesReachTheBackend")
 	int32 Slot = 0;
 	for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 	{
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		FResolvedPhysicsConfig Config;
 		Config.TestSettings.TickMode = EPhysicsTickMode::Sync;
 		Config.TestSettings.FrameDriver = Driver;
@@ -880,7 +890,8 @@ TEST_CASE("PhysicsTest.PhysScene.ZeroStepFramesReachTheBackend")
 	// AsyncFixed 1/30 at 1/60 frames: the first frame pushes nothing, yet its velocity set is in the pulled state.
 	for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 	{
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		FResolvedPhysicsConfig Config;
 		Config.TestSettings.TickMode = EPhysicsTickMode::AsyncFixed;
 		Config.TestSettings.FrameDriver = Driver;
@@ -903,8 +914,10 @@ TEST_CASE("PhysicsTest.PhysScene.ForceAndSleepFollowIssueOrder")
 	{
 		for (const EPhysicsTickMode Mode : { EPhysicsTickMode::Sync, EPhysicsTickMode::Substepping })
 		{
-			CAPTURE(ToString(Driver));
-			CAPTURE(ToString(Mode));
+			const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+			CAPTURE(DriverText);
+			const std::string ModeText = ToString(Mode);   // a const char* CAPTURE logs the pointer as 1
+			CAPTURE(ModeText);
 			FResolvedPhysicsConfig Config;
 			Config.TestSettings.TickMode = Mode;
 			Config.TestSettings.FrameDriver = Driver;
@@ -930,7 +943,8 @@ TEST_CASE("PhysicsTest.PhysScene.ForceAndSleepFollowIssueOrder")
 	// dropped with the clean dynamics, in both drivers.
 	for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 	{
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		FResolvedPhysicsConfig Config;
 		Config.TestSettings.TickMode = EPhysicsTickMode::AsyncFixed;
 		Config.TestSettings.FrameDriver = Driver;
@@ -970,7 +984,8 @@ TEST_CASE("PhysicsTest.PhysScene.ReleasedBodyDropsPendingCommands")
 	// FPhysicsInterface commands must neither stop the frame (Fatal) nor discard another body's commands.
 	for (const EFrameDriver Driver : { EFrameDriver::Native, EFrameDriver::Harness })
 	{
-		CAPTURE(ToString(Driver));
+		const std::string DriverText = ToString(Driver);   // a const char* CAPTURE logs the pointer as 1
+		CAPTURE(DriverText);
 		FResolvedPhysicsConfig Config;
 		Config.TestSettings.FrameDriver = Driver;
 		FPhysScene Scene = MakeScene(&Config);

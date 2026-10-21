@@ -28,6 +28,7 @@ namespace PhysicsTest
 {
 	struct FBodyInstance;
 	struct FPhysicalMaterial;
+	struct FPhysicsDebugSnapshot;
 	struct FPhysicsSettingsCore;
 
 	// One generated registry entry (cmake/PTBackendRegistry.cpp.in): a static backend (StaticEntry) or a DLL file next to
@@ -135,7 +136,8 @@ namespace PhysicsTest
 		FPhysicsBackendModule* FindOrLoadModule(std::string_view Name, std::string& OutError);
 		// Loads and initialises once (InitGamePhys with Params). Process rules (02 6, A.8): at most one UE_RUNTIME module;
 		// a GLOBAL_SCENE_SETTINGS module accepts one set of init options per process (PhysX tolerances scale) - a request
-		// with other options is refused. Other modules reuse their first initialisation.
+		// with other options is refused. Other modules reuse their first initialisation; a later request with another
+		// MaxThreads budget logs a warning (the module keeps the first one; M2 review).
 		FPhysicsBackendModule* FindOrLoad(std::string_view Name, const FBackendInitParams& Params, std::string& OutError);
 		// Chaos: -ChaosDll=<path> on the command line or PT_CHAOS_DLL in the environment, and the file exists (M2.5 / M13).
 		[[nodiscard]] static bool IsChaosAvailable(std::string& OutReason);
@@ -200,7 +202,12 @@ namespace PhysicsTest
 		PtResult PullBodyStates(uint32 ReadFlags, uint32& OutCount);
 		PtResult ReadMassProperties(uint32 First, std::span<PtMassProperties> Out);
 		PtResult GetStepStats(PtStepStats& Out);
+		// GetMemoryStats of this scene (untimed; the bench manifest's memory group). -1 fields = the backend cannot tell.
+		PtResult GetMemoryStats(PtMemoryStats& Out);
 		PtResult ComputeNativeStateHash(uint64& OutHash);
+		// CaptureDebugSnapshot (counts) + ReadDebugSnapshot into buffers sized from the counts (untimed; PROVISIONAL(M9)).
+		// SnapshotFlags = PT_SNAP_*. PT_E_UNSUPPORTED when the backend has no snapshot.
+		PtResult CaptureDebugSnapshot(uint32 SnapshotFlags, FPhysicsDebugSnapshot& Out);
 		// JSON lines (two-call protocol). Empty string + error code on failure.
 		PtResult DumpEffectiveSettings(std::string& OutJsonLines);
 		PtResult SetOption(std::string_view Key, std::string_view Value);

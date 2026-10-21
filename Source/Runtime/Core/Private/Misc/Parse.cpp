@@ -91,6 +91,13 @@ namespace PhysicsTest
 			{
 				return false;
 			}
+			// Harness (M3, M1 review): the number must be the whole value - it ends the stream or is followed by a
+			// separator that also ends an unquoted string value (whitespace, ',' or ')') or a closing quote. "-Threads=4x" and
+			// "-Threads=1.5" are errors, not 4 and 1 (UE's Atoi would accept both).
+			if (*End != '\0' && !IsWhitespace(*End) && *End != ',' && *End != ')' && *End != '"')
+			{
+				return false;
+			}
 			OutValue = static_cast<T>(Parsed);
 			return true;
 		}
@@ -128,7 +135,9 @@ namespace PhysicsTest
 				return false;   // harness: a negative value for an unsigned option is an error, never a wrap-around
 			}
 			unsigned long long Parsed = 0;
-			if (!ParseNumber(Stream, Match, Parsed, [](const char* S, char** E) { return std::strtoull(S, E, 10); }))
+			// A 0x / 0X prefix reads hexadecimal (affinity masks: -Affinity=0x55); anything else is decimal (no octal).
+			const bool bHex = Digits[0] == '0' && (Digits[1] == 'x' || Digits[1] == 'X');
+			if (!ParseNumber(Stream, Match, Parsed, [bHex](const char* S, char** E) { return std::strtoull(S, E, bHex ? 16 : 10); }))
 			{
 				return false;
 			}

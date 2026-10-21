@@ -395,11 +395,17 @@ inline namespace PT_BACKEND_NS
 		// Backend-specific checks of one command (motion type, ...); runs for the whole batch before any command is
 		// applied, so a rejected batch changes nothing. The kit has already rejected commands to released bodies.
 		virtual PtResult ValidateBodyCommand(const PtBodyCommand& /*Cmd*/) { return PT_OK; }
+		// Batch atomicity rule (docs/Abi.md 5.5): every check that can reject a command belongs in ValidateBodyCommand.
+		// ApplyBodyCommand must not fail for a command that passed validation; if it does, the kit returns PT_E_INTERNAL
+		// and reports how many commands of the batch were already applied (the batch is then NOT all-or-nothing).
 		virtual PtResult ApplyBodyCommand(const PtBodyCommand& Cmd) = 0;
 		// Two-call protocol: Capacity < count -> OutCount = count, return PT_E_CAPACITY, write nothing.
 		// PT_READ_ALL is dense: GetNumBodies() states in index order, a released body as ObjectState UNINITIALIZED with a
 		// zero pose (identity rotation) and zero velocities (the kit fails the call with PT_E_INTERNAL on another count).
-		// PT_READ_ACTIVE_ONLY: live bodies only, OutIndices is non-NULL whenever Capacity > 0 (checked by the kit).
+		// After a successful PT_READ_ALL the kit writes OutIndices[i] = i itself when OutIndices is non-NULL (the ABI
+		// contract, M3), so a backend may ignore OutIndices for PT_READ_ALL.
+		// PT_READ_ACTIVE_ONLY: live bodies only, OutIndices is non-NULL whenever Capacity > 0 (checked by the kit); the
+		// backend writes the index of every state.
 		virtual PtResult ReadBodyStates(uint32_t ReadFlags, uint32_t* OutIndices, PtBodyState* Out, uint32_t Capacity, uint32_t& OutCount) = 0;
 		// The range holds live bodies only (checked by the kit).
 		virtual PtResult ReadMassProperties(uint32_t First, uint32_t Num, PtMassProperties* Out) = 0;
@@ -410,6 +416,7 @@ inline namespace PT_BACKEND_NS
 		virtual PtResult SetOption(FStringRef /*Key*/, FStringRef /*Value*/) { return PT_E_UNSUPPORTED; }
 		// Called twice per DumpEffectiveSettings (measure, then write): the output must be deterministic.
 		virtual PtResult DumpEffectiveSettings(FTextWriter& Out) = 0;
+		// Out arrives with LiveBytes / PeakBytes / NumAllocs / NumFrees = -1 (unknown): set only what the backend knows.
 		virtual PtResult GetMemoryStats(PtMemoryStats& /*Out*/) { return PT_E_UNSUPPORTED; }
 
 		EScenePhase GetPhase() const { return Phase; }              // maintained by the kit
@@ -470,6 +477,7 @@ inline namespace PT_BACKEND_NS
 		virtual void DestroyScene(IPhysicsBackendScene* Scene) = 0;
 		virtual PtResult SetModuleOption(FStringRef /*Key*/, FStringRef /*Value*/) { return PT_E_UNSUPPORTED; }
 		virtual PtResult DumpModuleSettings(FTextWriter& /*Out*/) { return PT_OK; }
+		// As the scene's: the -1 (unknown) fields stay -1 unless the backend sets them.
 		virtual PtResult GetMemoryStats(PtMemoryStats& /*Out*/) { return PT_OK; }
 		FKitServices& GetKit() const { return *Kit; }
 
@@ -1460,7 +1468,11 @@ inline namespace PT_BACKEND_NS
 					const PtResult Result = Scene->ApplyBodyCommand(View[Index]);
 					if (Result < 0)
 					{
-						return Result;
+						// The backend broke the batch atomicity rule (IPhysicsBackendScene::ApplyBodyCommand): a validated command
+						// failed. Commands [0, Index) are already applied.
+						return Kit.SetLastError(PT_E_INTERNAL, "ApplyBodyCommands: command %u (type %u, body %u) failed with %d after validation; the "
+							"first %u commands of the batch were applied (backend bug: checks belong in ValidateBodyCommand)", Index, View[Index].Type,
+							View[Index].Body, Result, Index);
 					}
 				}
 				return PT_OK;
@@ -1502,6 +1514,14 @@ inline namespace PT_BACKEND_NS
 				if (Result == PT_E_CAPACITY)
 				{
 					return Kit.SetLastError(PT_E_CAPACITY, "ReadBodyStates: %u states needed, capacity %u", Count, Capacity);
+				}
+				if (Result >= 0 && ReadFlags == PT_READ_ALL && OutIndices != nullptr)
+				{
+					// The dense read's indices are 0 .. N-1 by definition; the kit writes them for every backend (M3).
+					for (uint32_t Index = 0; Index < Count; ++Index)
+					{
+						OutIndices[Index] = Index;
+					}
 				}
 				return Result;
 			});
@@ -1703,7 +1723,13 @@ inline namespace PT_BACKEND_NS
 				{
 					return Kit.SetLastError(PT_E_INVALID_ARG, "GetMemoryStats: Out is NULL");
 				}
+				// -1 = "the backend cannot tell" (PtMemoryStats): a field the backend leaves alone reads as unknown, never as a
+				// counted 0 (as GetStepStats pre-fills its counters).
 				PtMemoryStats Stats = {};
+				Stats.LiveBytes = -1;
+				Stats.PeakBytes = -1;
+				Stats.NumAllocs = -1;
+				Stats.NumFrees = -1;
 				PtResult Result = PT_OK;
 				if (SceneOrZero == 0)
 				{

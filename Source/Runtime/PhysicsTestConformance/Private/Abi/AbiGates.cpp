@@ -245,11 +245,30 @@ namespace PhysicsTest::AbiGates
 		PtDebugSnapshotRequest Request = {};
 		Request.StructSize = sizeof(PtDebugSnapshotRequest);
 		PtDebugSnapshotCounts Counts = {};
+		memset(&Counts, 0x5A, sizeof(Counts));
 		PtDebugSnapshotBuffers Buffers = {};
 		uint64 Hash = 0xDEADu;
 		PtMemoryStats Memory = {};
 		Memory.LiveBytes = 0x5A5A;
 		const PtVec3 Gravity = { 0.0, 0.0, -980.0 };
+		// Byte copies of every output sentinel: a rejected call must leave each output byte as it was (M2 review: States and
+		// Mass were filled but never compared).
+		const auto Bytes = [](const void* Data, const size_t Size)
+		{
+			const unsigned char* Begin = static_cast<const unsigned char*>(Data);
+			return std::vector<unsigned char>(Begin, Begin + Size);
+		};
+		const auto Same = [&Bytes](const void* Data, const size_t Size, const std::vector<unsigned char>& Sentinel) { return Bytes(Data, Size) == Sentinel; };
+		const std::vector<unsigned char> InfoSentinel = Bytes(&Info, sizeof(Info));
+		const std::vector<unsigned char> TextSentinel = Bytes(Text, sizeof(Text));
+		const std::vector<unsigned char> TextBufferSentinel = Bytes(&TextBuffer, sizeof(TextBuffer));
+		const std::vector<unsigned char> FrameSentinel = Bytes(&Frame, sizeof(Frame));
+		const std::vector<uint32> IndicesSentinel = Indices;
+		const std::vector<unsigned char> StatesSentinel = Bytes(States.data(), States.size() * sizeof(PtBodyState));
+		const std::vector<unsigned char> MassSentinel = Bytes(Mass, sizeof(Mass));
+		const std::vector<unsigned char> StatsSentinel = Bytes(&Stats, sizeof(Stats));
+		const std::vector<unsigned char> CountsSentinel = Bytes(&Counts, sizeof(Counts));
+		const std::vector<unsigned char> MemorySentinel = Bytes(&Memory, sizeof(Memory));
 		const std::vector<FCall> Calls = {
 			{ "GetInfo", [&] { return Api.GetInfo(&Info); } },
 			{ "InitGamePhys", [&] { return Api.InitGamePhys(&Init); } },
@@ -296,6 +315,16 @@ namespace PhysicsTest::AbiGates
 				&& TextBuffer.Length == 0xDEADu && static_cast<unsigned char>(Text[0]) == 0x5A && Stats.NumActiveBodies == 0x5A5A && Memory.LiveBytes == 0x5A5A
 				&& Indices[0] == 0xDEADu,
 			"no output parameter was written by a rejected call");
+		// Every byte of every output buffer (M3: the A2 review minor).
+		R.Check(Same(&Info, sizeof(Info), InfoSentinel), "PtBackendInfo output unchanged (every byte)");
+		R.Check(Same(Text, sizeof(Text), TextSentinel) && Same(&TextBuffer, sizeof(TextBuffer), TextBufferSentinel), "text bytes and PtTextBuffer unchanged");
+		R.Check(Same(&Frame, sizeof(Frame), FrameSentinel), "PtFrameResult unchanged");
+		R.Check(Indices == IndicesSentinel, "ReadBodyStates OutIndices unchanged (all 16)");
+		R.Check(Same(States.data(), States.size() * sizeof(PtBodyState), StatesSentinel), "ReadBodyStates OutStates unchanged (all 16, every byte)");
+		R.Check(Same(Mass, sizeof(Mass), MassSentinel), "ReadMassProperties output unchanged");
+		R.Check(Same(&Stats, sizeof(Stats), StatsSentinel), "PtStepStats unchanged");
+		R.Check(Same(&Counts, sizeof(Counts), CountsSentinel), "PtDebugSnapshotCounts unchanged");
+		R.Check(Same(&Memory, sizeof(Memory), MemorySentinel), "PtMemoryStats unchanged");
 		// The owner thread sees no change.
 		R.Check(LastError(Api) == ErrorBefore, "the last error is unchanged");
 		R.Check(SameStates(ReadAllStates(Api, Scene), StatesBefore), "every body state is unchanged (count, pose, velocity, object state)");

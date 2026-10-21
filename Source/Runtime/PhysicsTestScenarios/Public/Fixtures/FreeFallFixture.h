@@ -1,7 +1,9 @@
 // FreeFallFixture.h - the free-fall fixture of 03_WorkPlan M2: a sphere of radius 50 cm, 1 kg (bOverrideMass), at
 // z0 = 1000 cm, damping 0, falling under the scene gravity (-980 cm/s^2) for 60 frames of FixedStep 1/60.
 // Expected: z60 = 501.8332813705 cm within 1e-9 against dt_engine = (double)(float)(1/60) (DL23). The same fixture is the
-// M3 scene S00.FreeFall and the M2.5 spike's SP3 check, so it is built through the FPhysScene API only.
+// M3 scene S00.FreeFall (it moved from PT::Conformance to PT::Scenarios in M3, so that the scenario library can use it
+// without a Conformance <-> Scenarios cycle; 02 4.5) and the M2.5 spike's SP3 check, so it is built through the
+// FPhysScene API only.
 #pragma once
 
 #include "CoreTypes.h"
@@ -23,9 +25,13 @@ namespace PhysicsTest
 			static constexpr double Tolerance = 1e-9;               // cm
 
 			// Spawns the body into Scene (and flushes the deferred actors). The scene must use FixedStep 1/60, gravity -980.
-			static FBodyInstance* Build(FPhysScene& Scene);
+			// BaseTemplate: the body defaults to start from (a profile's [BodyInstanceDefaults], S00.FreeFall); the fixture
+			// then pins what it defines (simulated, 1 kg override, damping 0, gravity on). nullptr = FBodyInstance defaults.
+			static FBodyInstance* Build(FPhysScene& Scene, const FBodyInstance* BaseTemplate = nullptr);
 			// The analytic semi-implicit Euler reference after Steps steps of the float StepDeltaTime (dt_engine).
 			[[nodiscard]] static double ExpectedZ(int32 Steps, float StepDeltaTime, double GravityZ = -980.0);
+			// The matching velocity reference (cm/s): v_n = n g dt_engine (S00 criterion |v60 + 980.00005| <= 1e-2).
+			[[nodiscard]] static double ExpectedVz(int32 Steps, float StepDeltaTime, double GravityZ = -980.0);
 		};
 	}
 }

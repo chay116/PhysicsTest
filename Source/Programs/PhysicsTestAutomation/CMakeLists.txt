@@ -1,6 +1,6 @@
 # PhysicsTestAutomation.exe - doctest unit tests (M1+) and the ABI gates (M2+) (02_Architecture 1, 4.5, 14.1).
-# Links the backend registry (static Null) and the AbiTwin test backend; PtBackend_Null.dll is built next to the exe for
-# the DLL-path gates. Later milestones add PT::PhysicsDebugDraw and WHOLE_ARCHIVE(PT::Scenarios).
+# Links the backend registry (static Null, Jolt from M3) and the AbiTwin test backend; PtBackend_Null.dll is built next to
+# the exe for the DLL-path gates. M3 adds every scenario (pt_link_scenarios) and PT::Benchmark; M4 adds PT::PhysicsDebugDraw.
 pt_add_program(PhysicsTestAutomation
 	SOURCES
 		Private/PhysicsTestAutomationMain.cpp
@@ -14,8 +14,11 @@ pt_add_program(PhysicsTestAutomation
 		Private/Tests/PhysicsProfileTests.cpp
 		Private/Tests/PhysicsTypesTests.cpp
 		Private/Tests/PhysSceneTests.cpp
+		Private/Tests/ScenarioTests.cpp
+		Private/Tests/SdkBackendTests.cpp
 		Private/Tests/StepPlannerTests.cpp
-	DEPS PT::Core PT::PhysicsCore PT::Conformance PT::BackendRegistry PT::Backend::Null PT::BackendCommon PtBackendAbiTwin PT::Doctest PT::BuildInfo)
+	DEPS PT::Core PT::PhysicsCore PT::Conformance PT::Benchmark PT::BackendRegistry PT::Backend::Null PT::BackendCommon PtBackendAbiTwin PT::Doctest PT::BuildInfo)
+pt_link_scenarios(PhysicsTestAutomation)   # the M3 scenes (WHOLE_ARCHIVE)
 # The profile tests read the repository's Config/ (overridable with -ConfigDir=).
 target_compile_definitions(PhysicsTestAutomation PRIVATE "PT_CONFIG_DIR=\"${CMAKE_SOURCE_DIR}/Config\"")
 # Test TUs that include the Kit / BackendCommon headers use their own inline namespace (A.4), distinct from the linked
@@ -30,7 +33,7 @@ set_tests_properties(PhysicsTest.Automation PROPERTIES LABELS "unit")
 
 # One CTest entry per test area (PhysicsTest.<Area>.*), so a failure names its area. doctest exits 0 when a filter
 # matches nothing, so each entry also requires a non-empty, all-passing summary line.
-foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend)
+foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend)
 	add_test(NAME PhysicsTest.Unit.${_area} COMMAND PhysicsTestAutomation "-tc=PhysicsTest.${_area}.*")
 	set_tests_properties(PhysicsTest.Unit.${_area} PROPERTIES
 		LABELS "unit"

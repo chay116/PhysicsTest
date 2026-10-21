@@ -1,4 +1,5 @@
-// PhysScene.h - FPhysScene, the only scene (02_Architecture 6, 9.1, A.9). [MVP M1 skeleton; M2 drives the C ABI; M3 hashes]
+// PhysScene.h - FPhysScene, the only scene (02_Architecture 6, 9.1, A.9). [MVP M1 skeleton; M2 drives the C ABI; M3 run hashes
+// and the debug snapshot read]
 // Folds UWorld's physics part, FPhysScene_Chaos and the host side of FChaosScene into one object that owns its assets:
 // materials, body setups, bodies and constraints live in std::deque storage, so pointers handed out stay valid.
 //
@@ -60,18 +61,21 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsEngine/PhysicsSettings.h"
+#include "PhysicsTestAbi/PtBackendAbi.h"
 
 #include <deque>
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace PhysicsTest
 {
 	struct FResolvedPhysicsConfig;
 	struct FBackendInfo;
+	struct FPhysicsDebugSnapshot;
 	class FPhysicsBackendScene;
 	class FPhysScene;
 
@@ -125,8 +129,14 @@ namespace PhysicsTest
 		FBodyInstance* SpawnBody(const FBodyInstance& Template, const FBodySetup* Setup, const FTransform& Transform);
 		// Data only until the M9 joints: stored and counted, never sent to a backend. Bodies must be this scene's.
 		FConstraintInstance* SpawnConstraint(const FConstraintInstance& Template, FBodyInstance* Body1, FBodyInstance* Body2);
-		// Only bodies spawned by this scene (SpawnBody) can be deferred.
+		// Only bodies spawned by this scene (SpawnBody) can be deferred, once: a body that is already deferred or already has
+		// a backend actor is Fatal (one FBodyInstance never gets two actors; FBodyInstance::InitBody terminates a previous
+		// registration first).
 		void DeferAddActor(FBodyInstance* Body);
+		// UE5 FPhysScene_Chaos::RemoveBodyInstanceFromPendingLists_AssumesLocked (PhysScene_Chaos.h:230 [V], minus SceneType):
+		// drops a body that was deferred but not flushed yet, so the next FlushDeferredActors does not create an actor for it.
+		// FBodyInstance::TermBody calls it. No effect for a body that is not pending.
+		void RemoveBodyInstanceFromPendingLists_AssumesLocked(FBodyInstance* BodyInstance);
 		// [T_create] All deferred bodies in creation order, as one batch (see above).
 		void FlushDeferredActors();
 		// Releases the body's backend actor (ReleaseActors; phase Idle). FBodyInstance::TermBody calls it.
@@ -158,17 +168,6 @@ namespace PhysicsTest
 		// FBodyInstance::SetBodyTransform (bAllowSubstepping true, as UE5) and FPhysicsInterface::SetKinematicTarget_AssumesLocked
 		// (false) end here. bAllowSubstepping matters only for the Harness driver's UE4PhysSubstep rule.
 		void SetKinematicTarget_AssumesLocked(FBodyInstance* BodyInstance, const FTransform& TargetTM, bool bAllowSubstepping);
-		// Harness: FPhysicsInterface::SetGlobalPose_AssumesLocked of a kinematic body (the teleport itself is queued there).
-		// UE5 makes the teleport pose the kinematic target with zero velocity (ChaosEngineInterface.cpp:2550-2557 [V]): the
-		// body's pending target becomes the pose, and a later target of the frame starts from it (Harness interpolation).
-		void TeleportKinematic_AssumesLocked(FBodyInstance* BodyInstance, const FTransform& Pose);
-		// Harness: UE's game-thread dynamics dirty flag for the forces the scene holds (ParticleHandle.h:3755-3766 [V]).
-		// FPhysicsInterface::PutToSleep_AssumesLocked marks the body's pending forces clean - the push drops them, as UE
-		// never pushes them - and a later force, torque or impulse on the body marks them dirty again ("the old forces will
-		// remain and the new ones will accumulate").
-		void MarkDynamicsClean_AssumesLocked(const FBodyInstance* BodyInstance);
-		void MarkDynamicsDirty_AssumesLocked(const FBodyInstance* BodyInstance);
-
 		FOnPhysScenePreTick OnPhysScenePreTick;
 		FOnPhysSceneStep OnPhysSceneStep;
 		FOnPhysScenePostTick OnPhysScenePostTick;
@@ -195,8 +194,40 @@ namespace PhysicsTest
 		// Untimed backend reads (Idle only).
 		[[nodiscard]] uint64 ComputeNativeStateHash() const;
 		[[nodiscard]] std::string DumpEffectiveSettings() const;
+		// Debug snapshot (untimed, Idle; PROVISIONAL(M9) ABI): particles and, when the backend collects them (Jolt: viz runs
+		// or PT_INSTR_CONTACTS), contact points in the Chaos convention. False when the backend has no snapshot
+		// (PT_E_UNSUPPORTED, e.g. Null); a failing backend call is Fatal.
+		bool CaptureDebugSnapshot(FPhysicsDebugSnapshot& Out, uint32 SnapshotFlags = PT_SNAP_PARTICLES | PT_SNAP_CONTACTS) const;
+
+		// ---- run hashes (02 12.3, DL43) ----
+		// desc_sha256: only engine-independent inputs - every material, shape, actor create info and convex vertex the
+		// flushes sent (as marshalled, the same bytes for every backend), the constraints, the gravity and the dt sequence:
+		// NominalDeltaTime plus the harness plan (steps and step dt) of each frame dt in FrameDeltaSeconds, planned with this
+		// scene's tick mode from a fresh accumulator. Equal for every engine and variant of one scene and profile.
+		[[nodiscard]] std::string ComputeDescSha256(std::span<const float> FrameDeltaSeconds) const;
+		// options_sha256: the PtSceneDesc fields outside desc_sha256 (run mode, instrumentation, sim flags, async dt,
+		// restitution threshold, velocity limit, iterations, threads, capacity hints, engine options in order) and the
+		// frame driver. May differ per engine and variant.
+		[[nodiscard]] std::string ComputeOptionsSha256() const;
+		// The PtSceneDesc this scene was created with (pointers cleared) and its engine options, for manifests.
+		[[nodiscard]] const PtSceneDesc& GetSceneDesc() const;
+		[[nodiscard]] const std::vector<std::pair<std::string, std::string>>& GetSceneOptions() const;
 
 	private:
+		// Harness: FPhysicsInterface::SetGlobalPose_AssumesLocked of a kinematic body (the teleport itself is queued there).
+		// UE5 makes the teleport pose the kinematic target with zero velocity (ChaosEngineInterface.cpp:2550-2557 [V]): the
+		// body's pending target becomes the pose, and a later target of the frame starts from it (Harness interpolation).
+		void TeleportKinematic_AssumesLocked(FBodyInstance* BodyInstance, const FTransform& Pose);
+		// Harness: UE's game-thread dynamics dirty flag for the forces the scene holds (ParticleHandle.h:3755-3766 [V]).
+		// FPhysicsInterface::PutToSleep_AssumesLocked marks the body's pending forces clean - the push drops them, as UE
+		// never pushes them - and a later force, torque or impulse on the body marks them dirty again ("the old forces will
+		// remain and the new ones will accumulate").
+		void MarkDynamicsClean_AssumesLocked(const FBodyInstance* BodyInstance);
+		void MarkDynamicsDirty_AssumesLocked(const FBodyInstance* BodyInstance);
+		// These three hooks exist for FPhysicsInterface only (M2 review): a caller outside it could drop or restore held
+		// forces, or rewrite a pending kinematic target, without the queued command that A10's two-driver invariant needs.
+		friend class FPhysicsInterface;
+
 		struct FImpl;
 		std::unique_ptr<FImpl> Impl;
 	};

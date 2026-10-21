@@ -392,7 +392,9 @@ typedef struct PtActorCreateInfo {
   double LinearDamping, AngularDamping;   /* UE semantics: v *= max(0, 1 - c*dt) */
   double MaxAngularVelocity;       /* rad/s; <= 0 = unclamped */
   double MaxLinearVelocity;        /* cm/s; <= 0 = unclamped */
-  double MaxDepenetrationVelocity; /* < 0 = solver default (PhysX: PX_MAX_F32) */
+  double MaxDepenetrationVelocity; /* cm/s, UE 5.8.3 (M3): < 0 = unset (the solver setting), >= 0 = this body's rate,
+                                      0 = do not push initial overlaps apart. PhysX UE4Compat maps unset to UE4's project
+                                      rule (M5); an engine without a per-body rate ignores it (effective key) */
   double SleepThresholdMultiplier, StabilizationThresholdMultiplier;
   uint64_t UserTag;
 } PtActorCreateInfo;    /* 288 B */
@@ -1703,6 +1705,8 @@ public:
 - 게이트 단계: A0~A7, A9는 M2, A10과 G1~G7, G9, G12는 M6 [MVP]. G0 교차검증, G8(DET1), G10a, G11은 확장 M7, G10b는 확장 M10이다.
 - 적합성 스탬프 키와 comparability key는 확장 M10이다.
 
+> M3 구현은 아래 두 초안(`PhysicsTestScenario.h`, `BenchmarkRunner.h`)과 시그니처가 다르다. `BuildScene(FPhysScene&, const FScenarioContext&)`, 파라미터 선언·검증(`GetParamDescs`, `ResolveParams`, `EScenarioParamType`, `GetSeed`), 용량 힌트(`GetCapacity`), `GetDescription`/`GetDefaultFrames`, 정규 JSON(`MakeCanonicalJson`/`ComputeSceneSha256`), `FBenchRunSpec::FromCommandLine`의 bool + 오류 문자열, `FTimingRecorder::Record(timing, sim time, awake)`, static `FClockBuckets`, manifest를 `FRunManifest` 없이 러너 안에서 만드는 것 등이다. 목록과 이유는 [Progress.md](../Progress.md) M3 §3 #17이다. 정본은 소스 헤더다.
+
 ```cpp
 // File: Source/Runtime/PhysicsTestScenarios/Public/PhysicsTestScenario.h   [MVP M3 (S00, M1.SingleBoxDrop, M3.BoxPile); gate scenes M6]
 namespace PhysicsTest {
@@ -1922,8 +1926,12 @@ class FPhysScene_Jolt final : public PhysicsTest::Abi::IPhysicsBackendScene {
   //   CombinePairRestitution; one coefficient per pair -> material.static_friction_rule=dynamic_only.
   // Islands: PT_CAP_NATIVE_ISLANDS not declared (GetIslandIndexInternal is internal); the viewer uses FIslandBuilder.
   // Sleep off (Normalized): BodyCreationSettings::mAllowSleeping = false.
-  // Step: PhysicsSystem::Update(dt, 1, TempAllocatorImpl, JobSystemThreadPool(T-1)); EPhysicsUpdateError checked every step.
-  // Sync: GetBodyInterfaceNoLock + GetActiveBodies. Prepare: OptimizeBroadPhase.
+  // Step: PhysicsSystem::Update(dt, 1, FJoltTempAllocator, JobSystemThreadPool(T-1)); EPhysicsUpdateError checked every step.
+  //   (M3: the harness temp allocator, not TempAllocatorImpl, which aborts on overflow; deferred impulses / forces are
+  //   applied right before Update, docs/Abi.md 7.1.)
+  // Sync: GetBodyInterfaceNoLock + GetActiveBodiesUnsafe (M3: no vector copy in T_pull). Prepare: OptimizeBroadPhase +
+  //   temp block pre-fault.
+  // Contacts (viz only): lock-free listener, atomic slots in a pre-sized JPH::Array (M3; the draft said mutex).
 };
 }
 ```
