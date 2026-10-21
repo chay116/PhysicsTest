@@ -14,16 +14,24 @@ target_link_options(PhysicsTestBench PRIVATE "/MAP:$<TARGET_FILE_DIR:PhysicsTest
 add_test(NAME PhysicsTest.Bench.List COMMAND PhysicsTestBench -List)
 set_tests_properties(PhysicsTest.Bench.List PROPERTIES LABELS "bench" PASS_REGULAR_EXPRESSION "M3[.]BoxPile")
 
-# 03 M3: M1.SingleBoxDrop a/b and M3.BoxPile 1k/5k under UEParity and Normalized write the three outputs; Null and the SDK
-# backend agree on desc_sha256; shape.wrapping is 0. 30-frame runs (the 600-frame runs are a manual step, Progress.md M3).
+# 03 M3 / M5: M1.SingleBoxDrop a/b and M3.BoxPile 1k/5k under UEParity and Normalized write the three outputs; Null and
+# every SDK backend and PhysX variant agree on desc_sha256 (M5: "jolt, bullet, physx 변형 4종에서 씬·프로필마다 같다");
+# shape.wrapping is 0. 30-frame runs (the 600-frame runs are a manual step, Progress.md M3 / M5). Every run is a fresh
+# process, so the PhysX SdkDefault runs (their own PxTolerancesScale) never meet a UE4Compat PxPhysics.
+set(_pt_bench_backends "")
 if(PT_WITH_JOLT)
-	set(_pt_bench_backend Jolt)
-else()
-	set(_pt_bench_backend "")
+	list(APPEND _pt_bench_backends Jolt)
 endif()
+if(PT_WITH_BULLET)
+	list(APPEND _pt_bench_backends Bullet)
+endif()
+if(PT_WITH_PHYSX)
+	list(APPEND _pt_bench_backends PhysX/UE4Compat PhysX/UE4Compat-TGS PhysX/UE4Compat-Stab PhysX/SdkDefault)
+endif()
+string(REPLACE ";" "," _pt_bench_backends "${_pt_bench_backends}")
 pt_add_script_test(PhysicsTest.Bench.M3Matrix
 	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunBenchMatrix.cmake"
-	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${CMAKE_BINARY_DIR}/_bench/M3Matrix" "-DPT_BACKEND=${_pt_bench_backend}"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${CMAKE_BINARY_DIR}/_bench/M3Matrix" "-DPT_BACKEND=${_pt_bench_backends}"
 		-DPT_FRAMES=30
 	LABELS "bench")
 
@@ -108,5 +116,15 @@ if(PT_WITH_JOLT)
 			"-DPT_ARGS=-Backend=Jolt|-Scenario=M3.BoxPile|-Frames=5|-ini:PhysicsTest:[PhysicsTest.Backend.Jolt]:TempAllocatorBytes=1048576|-InjectEngineErrorBits=0x200|-Out=${CMAKE_BINARY_DIR}/_bench/ExitEngineErrorOverCapacity"
 			"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitEngineErrorOverCapacity/manifest.json"
 			"-DPT_EXPECT_FILE_REGEX=.status.: .engine_error.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 512"
+		LABELS "bench")
+endif()
+if(PT_WITH_BULLET)
+	# M5: a Bullet manifold pool below the pile's needs falls back to the heap: capacity bit 0x1 (errors.capacity_bits 0x3:
+	# manifold 0x1, collision algorithm 0x2) -> exit 5.
+	pt_add_script_test(PhysicsTest.Bench.ExitCapacityBullet SCRIPT "${_pt_exit_script}"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=5 "-DPT_EXPECT_REGEX=status capacity_exceeded"
+			"-DPT_ARGS=-Backend=Bullet|-Scenario=M3.BoxPile|-Frames=60|-ini:PhysicsTest:[PhysicsTest.Backend.Bullet]:ManifoldPoolSize=64|-Out=${CMAKE_BINARY_DIR}/_bench/ExitCapacityBullet"
+			"-DPT_EXPECT_FILE=${CMAKE_BINARY_DIR}/_bench/ExitCapacityBullet/manifest.json"
+			"-DPT_EXPECT_FILE_REGEX=.status.: .capacity_exceeded.*.capacity_error_bits_declared.: 3,.*.capacity_error_bits.: [1-9][0-9]*,.*.other_error_bits.: 0"
 		LABELS "bench")
 endif()

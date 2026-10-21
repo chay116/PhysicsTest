@@ -202,13 +202,14 @@ namespace PhysicsTest::JoltBackend
 		Out.AppendEffective("jolt.version", Text, "", static_cast<double>(JPH_VERSION_MAJOR * 10000 + JPH_VERSION_MINOR * 100 + JPH_VERSION_PATCH), "",
 			"COMPILE_TIME");
 		Out.AppendEffective("jolt.module_config_string", JPH::GetConfigurationString(), "", nan(""), "", "COMPILE_TIME");
+		// The host's input and the adapter's own counters are SET_ONLY (docs/Abi.md 5.14; M5 round 0).
 		snprintf(Text, sizeof(Text), "%u", MaxThreads);
-		Out.AppendEffective("jolt.max_threads", Text, "threads", static_cast<double>(MaxThreads), "threads", "READBACK");
+		Out.AppendEffective("jolt.max_threads", Text, "threads", static_cast<double>(MaxThreads), "threads", "SET_ONLY");
 		snprintf(Text, sizeof(Text), "%u", NumLiveScenes);
-		Out.AppendEffective("jolt.live_scenes", Text, "scenes", static_cast<double>(NumLiveScenes), "scenes", "READBACK");
+		Out.AppendEffective("jolt.live_scenes", Text, "scenes", static_cast<double>(NumLiveScenes), "scenes", "SET_ONLY");
 		const uint32 Asserts = GNumJoltAsserts.load(std::memory_order_relaxed);
 		snprintf(Text, sizeof(Text), "%u", Asserts);
-		Out.AppendEffective("jolt.asserts", Text, "asserts", static_cast<double>(Asserts), "asserts", "READBACK");
+		Out.AppendEffective("jolt.asserts", Text, "asserts", static_cast<double>(Asserts), "asserts", "SET_ONLY");
 		return PT_OK;
 	}
 

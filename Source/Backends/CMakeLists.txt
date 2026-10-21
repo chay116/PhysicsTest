@@ -8,11 +8,33 @@ add_subdirectory(NullBackend)
 if(PT_WITH_JOLT)
 	add_subdirectory(JoltBackend)
 endif()
+if(PT_WITH_BULLET)
+	add_subdirectory(BulletBackend)
+endif()
+if(PT_WITH_PHYSX)
+	add_subdirectory(PhysXBackend)
+endif()
 
 # Static backends: name;entry symbol;CMake target. DLL backends: name;file name (resolved next to the executable).
 set(PT_STATIC_BACKENDS "Null;PT_GetBackendApi_Null;PT::Backend::Null")
 if(PT_WITH_JOLT)
 	list(APPEND PT_STATIC_BACKENDS "Jolt;PT_GetBackendApi_Jolt;PT::Backend::Jolt")
+endif()
+# M5: Bullet and PhysX join the registry when their own CMakeLists.txt sets the target property PT_IN_BACKEND_REGISTRY ON
+# (OFF while the backend is the M5 stub whose CreateScene returns PT_E_UNSUPPORTED). Every registered SDK backend runs
+# through the shared suites unchanged (SdkBackendTests, SdkBackendsA0toA7, ScenarioTests) and appears in the bench and the
+# viewer, so a backend that cannot create a scene yet stays out. PhysicsTest.<Engine>Backend.Registered checks both states.
+if(PT_WITH_BULLET)
+	get_target_property(_pt_in_registry PtBackendBullet PT_IN_BACKEND_REGISTRY)
+	if(_pt_in_registry)
+		list(APPEND PT_STATIC_BACKENDS "Bullet;PT_GetBackendApi_Bullet;PT::Backend::Bullet")
+	endif()
+endif()
+if(PT_WITH_PHYSX)
+	get_target_property(_pt_in_registry PtBackendPhysX PT_IN_BACKEND_REGISTRY)
+	if(_pt_in_registry)
+		list(APPEND PT_STATIC_BACKENDS "PhysX;PT_GetBackendApi_PhysX;PT::Backend::PhysX")
+	endif()
 endif()
 set(PT_DLL_BACKENDS "NullDll;PtBackend_Null.dll")
 

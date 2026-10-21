@@ -143,7 +143,7 @@ Chaos 행까지:
 | U, 선택적 조기 | M2.5 스파이크 (약 2 pd): InitGamePhys 순서, 구 1개짜리 FChaosScene, Development·Test 빌드 | M5~M6 기간 | 전제: UE 5.8.3 소스 트리 (확인됨, §3 M0), D: 여유 10 GB 이상 (현재 348 GB [V]) |
 | U, 나중 | M13 Chaos 백엔드 본체 (6~10 pd) | 핵심은 M6 이후, 조인트·스냅샷·네이티브 드로는 M9 이후 | 동결된 ABI 위에서 구현한다 |
 | U, 시스템 설정 | 벤치 세션 동안 전원 계획을 High performance 또는 Ultimate로 전환 (01 Q9) | M8 smoke부터 권장, M11 필수 | 러너는 읽어서 기록만 하고 바꾸지 않는다 |
-| U, 확인 | UE 4.27 소스로 [M] 키 대조 (01 Q10): filter word 배치, contact offset clamp 공식, 반복 8/1, UseDelta pre-clamp, D6 actor swap, 정지마찰 = 동적마찰 | M11 전 권장 | 모든 [M] 값은 증거 태그가 붙은 ini 키라서 코드 변경 없이 바꾼다. M10 이후에 바꾸면 해당 변형의 스탬프만 다시 만든다 |
+| U, 확인 | UE 4.27 소스로 [M] 키 대조 (01 Q10): filter word 배치, 필터 셰이더의 두 결과(상호 차단하지 않는 쌍 eKILL/eSUPPRESS `NonBlockingPairFilter`, kinematic-static 쌍 억제 조건 `KinematicStaticPairFilter`, M5 수정 라운드 0), contact offset clamp 공식, 반복 8/1, UseDelta pre-clamp, D6 actor swap, 정지마찰 = 동적마찰 | M11 전 권장 | 모든 [M] 값은 증거 태그가 붙은 ini 키라서 코드 변경 없이 바꾼다. M10 이후에 바꾸면 해당 변형의 스탬프만 다시 만든다 |
 | U, 결정 | 저장소·결과 공개 여부와 UE EULA 확인 (01 Q1) | 공개 전 | 기본값은 비공개. M11 리포트도 비공개다 |
 | U, 결정 | 디버거 선택 (01 Q7) | M0 | VS Code + C/C++(cppvsdbg), VS 2022 IDE, 이미 설치된 CLion 중 하나 |
 | U, 결정 | 질량 규칙 기본값 (Q4), UEParity restitution 임계 매핑 (Q11), 하네스 /fp:fast 유지 (Q12), MatchedAVX2 Chaos 빌드 (Q15), Jolt 임펄스 로컬 패치 (Q8) | M9·M11 전 | 기본값은 [04_DecisionLog.md](04_DecisionLog.md)의 미결 질문 기본값을 따른다 |
@@ -491,7 +491,7 @@ Chaos 행까지:
   - 셰이프: `btSphereShape`, `btBoxShape`, `btCapsuleShapeZ`. 박스 마진은 상수가 아니라 셰이프마다 `setSafeMargin`이 정한 min(0.04 m, 0.1 × 최소 half extent)이다 (btBoxShape.cpp:25, btConvexInternalShape.h:66-81 [V]). `getMargin()`으로 읽어 `shape.box_margin`에 셰이프별로 기록한다.
   - COM: 요소가 하나이고 ComLocal이 사실상 항등이면 `btBoxShape`를 그대로 쓴다. 그 밖에만 `btCompoundShape`(자식을 inv(ComLocal)·Elem에 배치, 읽을 때 ActorTM 복원).
   - 필터 group = 1 << ObjectType, mask = BlockMask. 전역 결합 콜백(`GLOBAL_SCENE_SETTINGS`).
-  - UEParity 각속도 62.83 rad/s는 내부 pre-tick 콜백으로 흉내낸다. 하드코딩 한계 π/(2·dt) = 94.2 rad/s (btRigidBody.cpp:380-385 [V])는 COMPILE_TIME으로 기록한다.
+  - UEParity 각속도 62.83 rad/s는 내부 pre-tick 콜백으로 흉내낸다. Bullet 자신의 한계는 COMPILE_TIME으로 기록한다. (M5 정정 [V]: 처음 적은 π/(2·dt) = 94.2 rad/s, btRigidBody.cpp:380-385는 `btDiscreteDynamicsWorld`가 부르지 않는 `integrateVelocities`의 값이다. 걸리는 한계는 `btTransformUtil::integrateTransform`의 스텝 회전 π/4(47.1 rad/s)이고 속도가 아니라 회전각을 줄인다. [02_Architecture.md](02_Architecture.md) §8.4)
   - Normalized sleep 끔은 `DISABLE_DEACTIVATION`.
   - kinematic은 `CF_KINEMATIC_OBJECT` + 보간 transform + 속도. 매니폴드 → Chaos 규약 스냅샷, `getIslandTag`.
   - 디버그 드로어는 bench와 behavior 모드에서는 붙이지 않는다. 드로어가 붙으면 `stepSimulation`이 `gDisableDeactivation`을 덮어쓰기 때문이다 (btDiscreteDynamicsWorld.cpp:418-421 [V]). viz 모드 드로어는 M9에서 다룬다.
@@ -557,7 +557,7 @@ Chaos 행까지:
   - 나머지 씬의 설정은 [02_Architecture.md](02_Architecture.md)의 게이트 표를 따른다.
 - **게이트와 허용치**
   - 모든 해석 기준값은 `dt_engine`으로 계산한다. ±1e-9 같은 허용치는 그 기준값에 대해서만 쓴다 (Null). float 엔진은 G1의 2e-3 cm를 쓴다.
-  - 엔진별 허용치는 실행 전에 `tolerances.json`에 사유와 함께 미리 등록한다. 예: PhysX UE4Compat contact offset 2 cm에 따른 이른 접촉, Bullet 마진, Bullet 94.2 rad/s.
+  - 엔진별 허용치는 실행 전에 `tolerances.json`에 사유와 함께 미리 등록한다. 예: PhysX UE4Compat contact offset 2 cm에 따른 이른 접촉, Bullet 마진, Bullet 각속도 문턱 47.1 rad/s(스텝 회전 π/4, M5 정정).
   - G9는 리졸브된 프로필 값과 `DumpEffectiveSettings` READBACK 값의 직접 비교다 (preflight 통합은 M7).
   - `PhysicsTestBench -Conformance`는 실제 컴파일된 백엔드 코드로 게이트 스위트를 돌려 `conformance.json`을 쓴다. 이것을 스탬프 키로 묶어 실행 전 거부에 쓰는 일은 M10이다.
   - G0(빌드), G8(DET1), G10a(벤치 위생), G10b(단일 스레드 증명), G11(결과 중립 knob)은 여기서 하지 않는다. G0·G8·G10a·G11은 M7, G10b는 M10이다.
@@ -591,7 +591,7 @@ Chaos 행까지:
   - G4: 법선 속도 비로 잰 e가 엔진별 등록 허용치(기본 ±0.02) 이내. 보조로 apex 비 0.64, 바닥 e = 0일 때 Average 0.16 / Multiply 0 / Max 0.64.
   - G5: 정지 거리 250.947 cm ±1% (`dt_engine` 기준 이산해. 연속해 255.10은 오답). 30° 경사에서 μ ≥ 0.6은 정지, μ ≤ 0.55는 미끄러짐.
   - G6: Normalized에서 정지 600 프레임 동안 잠든 바디 0. UEParity `S08.StartAsleep`: `bStartAwake = false` 박스가 생성 직후와 60 프레임 뒤 모두 Sleeping이고 z가 변하지 않는다. 다른 박스는 떨어진다.
-  - G7: UEParity 62.83 ±0.01 rad/s. Normalized는 해제 (Bullet 94.2는 등록된 예외).
+  - G7: UEParity 62.83 ±0.01 rad/s. Normalized는 해제 (Bullet의 47.1 rad/s 위 회전각 축소는 등록된 예외, M5 정정).
   - G9: READBACK 키 전부가 리졸브된 값과 같다. `M3.BoxPile` 1k에서 `shape.wrapping` 합계가 0이다.
   - G12: Jolt update error 0, PhysX error callback 0, Bullet 풀 heap fallback 0.
 - `PhysicsTestBench -Conformance`가 위 조합마다 `conformance.json`을 남긴다.

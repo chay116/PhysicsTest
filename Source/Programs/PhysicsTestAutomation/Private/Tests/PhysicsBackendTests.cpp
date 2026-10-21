@@ -5,6 +5,7 @@
 
 #include "Physics/EffectiveSettings.h"
 #include "Physics/PhysicsBackend.h"
+#include "Physics/PhysicsDebugSnapshot.h"
 #include "PhysScene.h"
 
 #include "Misc/PtThirdPartyIncludesStart.h"
@@ -12,10 +13,14 @@
 #include "Misc/PtThirdPartyIncludesEnd.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
 using namespace PhysicsTest;
+
+// The AbiTwin test backend's static entry (Source/Tests/AbiTwin; not in the registry).
+extern "C" const PtBackendApi* PT_CALL PT_GetBackendApi_AbiTwin(uint32_t RequestedAbiMajor);
 
 namespace
 {
@@ -227,4 +232,63 @@ TEST_CASE("PhysicsTest.Backend.EffectiveSettingsParser")
 	CHECK(std::find(Required.begin(), Required.end(), "jolt.config_string") != Required.end());
 	REQUIRE(ParseEffectiveSettings(Twice, Settings, Error));
 	CHECK(FindMissingEffectiveKeys(Settings, Info).size() == Required.size());
+}
+
+// M5 (M4 carry-over (2)), host side: a particle whose BodyIndex is PT_INDEX_NONE or not a body of this scene is a backend
+// bug. FPhysicsBackendScene::CaptureDebugSnapshot drops it before any consumer sees it, counts it (NumRejectedParticles),
+// sets NumBodies and logs once per scene. The AbiTwin test backend reports one valid particle per body plus PT_INDEX_NONE,
+// the body count and 0x7FFFFFFE (M5 round 0).
+TEST_CASE("PhysicsTest.Backend.SnapshotRejectsBadBodyIndices")
+{
+	std::string Error;
+	std::unique_ptr<FPhysicsBackendModule> Module = FPhysicsBackendModule::CreateStatic("AbiTwin", &PT_GetBackendApi_AbiTwin, Error);
+	REQUIRE_MESSAGE(Module != nullptr, Error);
+	Module->GetApi().TermGamePhys();   // the twin's kit state is process-wide (Abi.KitGuards uses it raw): start terminated
+	REQUIRE(Module->InitGamePhys(FBackendInitParams()) == PT_OK);
+	{
+		PtSceneDesc Desc = {};
+		Desc.StructSize = sizeof(PtSceneDesc);
+		Desc.RunMode = PT_RUN_VIZ;
+		Desc.Gravity = PtVec3{ 0.0, 0.0, -980.0 };
+		Desc.NominalDeltaTime = 1.0 / 60.0;
+		Desc.AsyncFixedTimeStepSize = PT_ASYNC_DT_SYNC;
+		Desc.RestitutionThreshold = -1.0;
+		Desc.NumThreads = 1;
+		Desc.DebugName = "SnapshotRejectsBadBodyIndices";
+		std::unique_ptr<FPhysicsBackendScene> Scene = FPhysicsBackendScene::Create(*Module, Desc, Error);
+		REQUIRE_MESSAGE(Scene != nullptr, Error);
+		// Two static bodies through the host's own marshalling (the setup and the material from a Null scene's stores).
+		FPhysScene Store = MakeScene();
+		FBodySetup Setup;
+		Setup.AggGeom.BoxElems.emplace_back(100.0);
+		const FBodySetup* SetupPtr = Store.CreateBodySetup(std::move(Setup));
+		const FPhysicalMaterial* Material = Store.CreatePhysicalMaterial(FPhysicalMaterial());
+		FBodyInstance Bodies[2];
+		for (FBodyInstance& Body : Bodies)
+		{
+			Body.bStatic = true;
+			Body.bSimulatePhysics = false;
+			Body.BodySetup = SetupPtr;
+			Body.PhysMaterialOverride = Material;
+		}
+		FBodyInstance* Pointers[] = { &Bodies[0], &Bodies[1] };
+		FMarshalledActorBatch Batch;
+		REQUIRE_MESSAGE(Scene->MarshalBodies(Pointers, 0, Store.GetSettings(), Batch, Error), Error);
+		REQUIRE(Scene->CreateActors(Pointers, Batch) == PT_OK);
+		REQUIRE(Scene->GetNumBodies() == 2u);
+		for (int32 Capture = 0; Capture < 2; ++Capture)
+		{
+			CAPTURE(Capture);
+			FPhysicsDebugSnapshot Snapshot;
+			REQUIRE(Scene->CaptureDebugSnapshot(PT_SNAP_PARTICLES, Snapshot) == PT_OK);
+			CHECK(Snapshot.NumBodies == 2u);
+			CHECK(Snapshot.NumRejectedParticles == 3u);   // PT_INDEX_NONE, 2 (one past the last body), 0x7FFFFFFE
+			REQUIRE(Snapshot.Particles.size() == 2u);
+			CHECK(Snapshot.Particles[0].BodyIndex == 0u);
+			CHECK(Snapshot.Particles[1].BodyIndex == 1u);
+			CHECK(GetBodyIndexBound(Snapshot) == 2u);
+			CHECK(Scene->GetNumSnapshotIndexErrorLogs() == 1u);   // logged on the first capture only
+		}
+	}
+	CHECK(Module->TermGamePhys() == PT_OK);
 }

@@ -418,15 +418,17 @@ namespace PhysicsTest::DebugDraw
 
 	void BuildParticleLookup(const FPhysicsDebugSnapshot& Snapshot, std::vector<int32>& OutParticleOfBody)
 	{
-		uint32 NumBodies = 0;
-		for (const PtParticleSnapshot& Particle : Snapshot.Particles)
-		{
-			NumBodies = Particle.BodyIndex + 1 > NumBodies ? Particle.BodyIndex + 1 : NumBodies;
-		}
+		// Sized from the snapshot's body-index bound, never from a reported index (M5): a particle outside it (PT_INDEX_NONE,
+		// a garbage index) has no slot.
+		const uint32 NumBodies = GetBodyIndexBound(Snapshot);
 		OutParticleOfBody.assign(NumBodies, INDEX_NONE);
 		for (size_t Slot = 0; Slot < Snapshot.Particles.size(); ++Slot)
 		{
-			OutParticleOfBody[Snapshot.Particles[Slot].BodyIndex] = static_cast<int32>(Slot);
+			const uint32 BodyIndex = Snapshot.Particles[Slot].BodyIndex;
+			if (BodyIndex < NumBodies)
+			{
+				OutParticleOfBody[BodyIndex] = static_cast<int32>(Slot);
+			}
 		}
 	}
 
@@ -1005,6 +1007,7 @@ namespace PhysicsTest::DebugDraw
 			Particle.ObjectState = static_cast<uint8>(Body->State.ObjectState);
 			Particle.NativeIslandId = -1;
 			Out.Particles.push_back(Particle);
+			Out.NumBodies = Particle.BodyIndex + 1 > Out.NumBodies ? Particle.BodyIndex + 1 : Out.NumBodies;   // host handles: valid
 		}
 	}
 }

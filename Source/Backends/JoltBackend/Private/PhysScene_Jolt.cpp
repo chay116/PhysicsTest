@@ -17,8 +17,8 @@ namespace PhysicsTest::JoltBackend
 
 	namespace
 	{
-		// The one unit conversion of this backend (D1): cm -> m.
-		constexpr Abi::FUnitScale GScale = Abi::GMetres;
+		// The one unit conversion of this backend (D1, BackendCommon's unit-scale table): cm -> m.
+		constexpr Abi::FUnitScale GScale = Abi::GetEngineUnitScale(Abi::EEngineUnits::Jolt);
 		// "Unclamped" velocity limits: Jolt always clamps (MotionProperties::ClampLinearVelocity / ClampAngularVelocity square
 		// the limit in float), so "no limit" is a value far beyond any reachable speed whose square stays finite in float.
 		constexpr float GUnclampedLinearVelocity = 1.0e7f;    // m/s
@@ -1544,8 +1544,16 @@ namespace PhysicsTest::JoltBackend
 		Out.AppendEffective("contact.offset_rule", "speculative contacts within mSpeculativeContactDistance (no contact offset)", "", NaN, "", "COMPILE_TIME");
 		snprintf(Text, sizeof(Text), "%.9g m", static_cast<double>(Settings.mSpeculativeContactDistance));
 		Out.AppendEffective("contact.speculative_distance", Text, "m", GScale.ToCm(static_cast<double>(Settings.mSpeculativeContactDistance)), "cm", "READBACK");
-		Out.AppendEffective("material.friction_combine", "UE combine mode per pair (larger mode wins), PtCombine dynamic value", "", NaN, "", "COMPILE_TIME");
-		Out.AppendEffective("material.restitution_combine", "UE combine mode per pair (larger mode wins), PtCombine", "", NaN, "", "COMPILE_TIME");
+		// The combine functions the PhysicsSystem holds (PhysicsSystem::GetCombineFriction / GetCombineRestitution): READBACK
+		// (M5 round 0; they were COMPILE_TIME).
+		const bool bUEFriction = System->GetCombineFriction() == &CombineFrictionUE;
+		const bool bUERestitution = System->GetCombineRestitution() == &CombineRestitutionUE;
+		Out.AppendEffective("material.friction_combine",
+			bUEFriction ? "UE combine mode per pair (larger mode wins), PtCombine dynamic value (PhysicsSystem::GetCombineFriction)" : "other (not the UE combine function)",
+			"", NaN, "", "READBACK");
+		Out.AppendEffective("material.restitution_combine",
+			bUERestitution ? "UE combine mode per pair (larger mode wins), PtCombine (PhysicsSystem::GetCombineRestitution)" : "other (not the UE combine function)", "",
+			NaN, "", "READBACK");
 		Out.AppendEffective("material.static_friction_rule", "dynamic_only", "", NaN, "", "COMPILE_TIME");
 		Out.AppendEffective("body.damping_formula", "v *= max(0, 1 - c*dt) per step (Jolt MotionProperties)", "", NaN, "", "COMPILE_TIME");
 
@@ -1628,15 +1636,21 @@ namespace PhysicsTest::JoltBackend
 			: (Options.TempAllocatorBytes > 0 ? Options.TempAllocatorBytes
 				: GTempBaseBytes + static_cast<uint64>(MaxContactConstraints) * GTempBytesPerContactConstraint + static_cast<uint64>(MaxBodies) * GTempBytesPerBody);
 		snprintf(Text, sizeof(Text), "%llu%s", static_cast<unsigned long long>(TempBytes), TempAllocator ? "" : " (allocated at PrepareForSimulation / first step)");
-		Out.AppendEffective("jolt.temp_allocator_bytes", Text, "bytes", static_cast<double>(TempBytes), "bytes", TempAllocator ? "READBACK" : "SET_ONLY");
+		// FJoltTempAllocator is the adapter's own allocator: its size, peak and fallbacks are adapter counts, SET_ONLY
+		// (docs/Abi.md 5.14; M5 round 0).
+		Out.AppendEffective("jolt.temp_allocator_bytes", Text, "bytes", static_cast<double>(TempBytes), "bytes", "SET_ONLY");
 		snprintf(Text, sizeof(Text), "%llu", static_cast<unsigned long long>(TempAllocator ? TempAllocator->GetPeakUsage() : 0));
-		Out.AppendEffective("jolt.temp_allocator_peak_bytes", Text, "bytes", static_cast<double>(TempAllocator ? TempAllocator->GetPeakUsage() : 0), "bytes", "READBACK");
+		Out.AppendEffective("jolt.temp_allocator_peak_bytes", Text, "bytes", static_cast<double>(TempAllocator ? TempAllocator->GetPeakUsage() : 0), "bytes", "SET_ONLY");
 		snprintf(Text, sizeof(Text), "%llu (%llu bytes from the heap)", static_cast<unsigned long long>(TempAllocator ? TempAllocator->GetNumFallbacks() : 0),
 			static_cast<unsigned long long>(TempAllocator ? TempAllocator->GetFallbackBytes() : 0));
 		Out.AppendEffective("jolt.temp_allocator_fallbacks", Text, "allocations", static_cast<double>(TempAllocator ? TempAllocator->GetNumFallbacks() : 0),
-			"allocations", "READBACK");
-		snprintf(Text, sizeof(Text), "bodies %u, body pairs %u, contact constraints %u (PhysicsSystem::Init)", MaxBodies, MaxBodyPairs, MaxContactConstraints);
-		Out.AppendEffective("jolt.capacity", Text, "bodies", static_cast<double>(MaxBodies), "bodies", "SET_ONLY");
+			"allocations", "SET_ONLY");
+		// The body capacity as the engine holds it (PhysicsSystem::GetMaxBodies, PhysicsSystem.h:225 [V]); Jolt has no getter for
+		// the pair and contact constraint capacities, which are the values passed to PhysicsSystem::Init.
+		const uint32 EngineMaxBodies = System->GetMaxBodies();
+		snprintf(Text, sizeof(Text), "bodies %u (PhysicsSystem::GetMaxBodies), body pairs %u, contact constraints %u (passed to PhysicsSystem::Init)", EngineMaxBodies,
+			MaxBodyPairs, MaxContactConstraints);
+		Out.AppendEffective("jolt.capacity", Text, "bodies", static_cast<double>(EngineMaxBodies), "bodies", "READBACK");
 		snprintf(Text, sizeof(Text), "%.9g m", static_cast<double>(Settings.mPenetrationSlop));
 		Out.AppendEffective("jolt.penetration_slop", Text, "m", GScale.ToCm(static_cast<double>(Settings.mPenetrationSlop)), "cm", "READBACK");
 		snprintf(Text, sizeof(Text), "%.9g", static_cast<double>(Settings.mBaumgarte));
@@ -1645,9 +1659,9 @@ namespace PhysicsTest::JoltBackend
 			NaN, "", "COMPILE_TIME");
 		Out.AppendEffective("jolt.inertia_conditioning", "n/a: PT_BODY_INERTIA_CONDITIONING ignored", "", NaN, "", "COMPILE_TIME");
 		snprintf(Text, sizeof(Text), "%u", NumStartAsleepSkipped);
-		Out.AppendEffective("jolt.start_asleep_skipped", Text, "bodies", static_cast<double>(NumStartAsleepSkipped), "bodies", "READBACK");
+		Out.AppendEffective("jolt.start_asleep_skipped", Text, "bodies", static_cast<double>(NumStartAsleepSkipped), "bodies", "SET_ONLY");
 		snprintf(Text, sizeof(Text), "0x%x", TotalErrorBits);
-		Out.AppendEffective("jolt.update_error_bits", Text, "bits", static_cast<double>(TotalErrorBits), "bits", "READBACK");
+		Out.AppendEffective("jolt.update_error_bits", Text, "bits", static_cast<double>(TotalErrorBits), "bits", "SET_ONLY");   // accumulated by the adapter
 		// Which engine error bits mean "a capacity was exceeded" (the bench's exit code 5, docs/Abi.md 5.14); the others
 		// (0x200 assert) are engine errors (exit code 3).
 		snprintf(Text, sizeof(Text), "0x%x (ManifoldCacheFull 0x1 | BodyPairCacheFull 0x2 | ContactConstraintsFull 0x4 | temp allocator fallback 0x100)",

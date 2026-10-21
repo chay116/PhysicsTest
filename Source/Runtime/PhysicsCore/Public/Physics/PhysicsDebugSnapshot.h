@@ -21,6 +21,13 @@ namespace PhysicsTest
 		// M4: the backend has no snapshot (PT_E_UNSUPPORTED, e.g. Null) and the particles come from the host's pulled body
 		// states instead (DebugDraw::CaptureSnapshot): no contacts, bounds and COM from the harness data model.
 		bool bFromHostState = false;
+		// M5 (M4 carry-over (2)): the exclusive bound of the scene's body indices when captured (the host's body count), so
+		// that a consumer never sizes an array from a backend-reported index. The host capture drops particles whose
+		// BodyIndex is PT_INDEX_NONE or >= NumBodies (NumRejectedParticles counts them, a backend bug logged once per scene).
+		// 0 = unknown (a hand-made snapshot): GetBodyIndexBound derives it from the particles, ignoring PT_INDEX_NONE and
+		// implausibly large indices (M5 round 0).
+		uint32 NumBodies = 0;
+		uint32 NumRejectedParticles = 0;
 		std::vector<PtParticleSnapshot> Particles;
 		std::vector<PtContactPoint> Contacts;
 		std::vector<PtJointSnapshot> Joints;
@@ -35,6 +42,8 @@ namespace PhysicsTest
 			Capabilities = 0;
 			bTruncated = false;
 			bFromHostState = false;
+			NumBodies = 0;
+			NumRejectedParticles = 0;
 			Particles.clear();
 			Contacts.clear();
 			Joints.clear();
@@ -43,4 +52,31 @@ namespace PhysicsTest
 			HarnessIslandIndex.clear();
 		}
 	};
+
+	// A hand-made snapshot (NumBodies 0) is expected to number its bodies densely: an index at or above
+	// 2 x particles + GHandMadeBodyIndexSlack is a garbage value, skipped like PT_INDEX_NONE, so it can never size an array
+	// (M5 round 0: 0x7FFFFFFE would have asked for gigabytes).
+	inline constexpr uint64 GHandMadeBodyIndexSlack = 64;
+
+	// The size of a body-index-indexed array for this snapshot: NumBodies when the capture set it (the host capture always
+	// does), else one past the largest plausible particle BodyIndex (hand-made snapshots: PT_INDEX_NONE and indices at or
+	// above 2 x particles + GHandMadeBodyIndexSlack excluded, so the bound is O(particles)). Consumers skip particles whose
+	// BodyIndex is not below it (M5: BuildParticleLookup, FIslandBuilder::Build / GatherIslands).
+	inline uint32 GetBodyIndexBound(const FPhysicsDebugSnapshot& Snapshot)
+	{
+		if (Snapshot.NumBodies > 0)
+		{
+			return Snapshot.NumBodies;
+		}
+		const uint64 Plausible = 2u * static_cast<uint64>(Snapshot.Particles.size()) + GHandMadeBodyIndexSlack;
+		uint32 Bound = 0;
+		for (const PtParticleSnapshot& Particle : Snapshot.Particles)
+		{
+			if (Particle.BodyIndex != PT_INDEX_NONE && Particle.BodyIndex < Plausible && Particle.BodyIndex + 1 > Bound)
+			{
+				Bound = Particle.BodyIndex + 1;
+			}
+		}
+		return Bound;
+	}
 }

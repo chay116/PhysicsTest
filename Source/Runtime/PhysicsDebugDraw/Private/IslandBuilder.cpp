@@ -58,11 +58,9 @@ namespace PhysicsTest
 	void FIslandBuilder::Build(FPhysicsDebugSnapshot& InOut, const std::span<FConstraintInstance* const> Joints)
 	{
 		InOut.HarnessIslandIndex.assign(InOut.Particles.size(), INDEX_NONE);
-		uint32 NumBodies = 0;
-		for (const PtParticleSnapshot& Particle : InOut.Particles)
-		{
-			NumBodies = std::max(NumBodies, Particle.BodyIndex + 1);
-		}
+		// Sized from the snapshot's body-index bound, never from a reported index (M5): a particle outside it (PT_INDEX_NONE,
+		// a garbage index) is no node and gets no island.
+		const uint32 NumBodies = GetBodyIndexBound(InOut);
 		if (NumBodies == 0)
 		{
 			return;
@@ -71,7 +69,11 @@ namespace PhysicsTest
 		std::vector<int32> ParticleOfBody(NumBodies, INDEX_NONE);
 		for (size_t Slot = 0; Slot < InOut.Particles.size(); ++Slot)
 		{
-			ParticleOfBody[InOut.Particles[Slot].BodyIndex] = static_cast<int32>(Slot);
+			const uint32 BodyIndex = InOut.Particles[Slot].BodyIndex;
+			if (BodyIndex < NumBodies)
+			{
+				ParticleOfBody[BodyIndex] = static_cast<int32>(Slot);
+			}
 		}
 		const auto IsNode = [&](const uint32 Body)
 		{
@@ -96,9 +98,12 @@ namespace PhysicsTest
 				Sets.Union(Body0, Body1);
 			}
 		};
+		// An edge is a touching point (Phi <= 0) or one the solver used (PT_CONTACT_ACTIVE: an impulse > 0, M5). Jolt's
+		// ACTIVE_APPROX is Phi <= 0, so its graph is unchanged; a resting PhysX point has Phi ~ +0 (float) with an impulse
+		// and a Bullet point may end a step at Phi > 0 after pushing - both still join their bodies.
 		for (const PtContactPoint& Contact : InOut.Contacts)
 		{
-			if (Contact.Phi <= 0.0)
+			if (Contact.Phi <= 0.0 || (Contact.Flags & (PT_CONTACT_ACTIVE | PT_CONTACT_ACTIVE_APPROX)) != 0)
 			{
 				AddEdge(Contact.Body0, Contact.Body1);
 			}
@@ -116,7 +121,7 @@ namespace PhysicsTest
 		for (size_t Slot = 0; Slot < InOut.Particles.size(); ++Slot)
 		{
 			const uint32 Body = InOut.Particles[Slot].BodyIndex;
-			if (InGraph[Body] != 0)
+			if (Body < NumBodies && InGraph[Body] != 0)
 			{
 				InOut.HarnessIslandIndex[Slot] = static_cast<int32>(Sets.Find(Body));
 			}
@@ -130,17 +135,13 @@ namespace PhysicsTest
 		{
 			return;
 		}
-		// Island ids are body indices: a dense map from id to the output slot.
-		uint32 NumBodies = 0;
-		for (const PtParticleSnapshot& Particle : Snapshot.Particles)
-		{
-			NumBodies = std::max(NumBodies, Particle.BodyIndex + 1);
-		}
+		// Island ids are body indices below the snapshot's bound (Build): a dense map from id to the output slot.
+		const uint32 NumBodies = GetBodyIndexBound(Snapshot);
 		std::vector<int32> SlotOfIsland(NumBodies, INDEX_NONE);
 		for (size_t Slot = 0; Slot < Snapshot.Particles.size(); ++Slot)
 		{
 			const int32 Id = Snapshot.HarnessIslandIndex[Slot];
-			if (Id == INDEX_NONE)
+			if (Id < 0 || static_cast<uint32>(Id) >= NumBodies)
 			{
 				continue;
 			}

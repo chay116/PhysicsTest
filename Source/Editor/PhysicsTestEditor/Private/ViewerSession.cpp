@@ -156,6 +156,8 @@ namespace PhysicsTest
 		if (Classified != EViewerOpenResult::Opened)
 		{
 			OutMessage = "'" + InSelection.Backend + "': " + Reason;
+			UE_LOG(LogViewerSession, Display, "open %s / %s: %s - %s", InSelection.Backend.c_str(), InSelection.BackendProfile.empty() ? "-" : InSelection.BackendProfile.c_str(),
+				ToString(Classified), OutMessage.c_str());
 			return Classified;
 		}
 		if (Registry.FindOrLoad(InSelection.Backend, InitParams, Error) == nullptr)
@@ -163,6 +165,8 @@ namespace PhysicsTest
 			State.bInitGamePhysRefused = true;
 			Classified = ClassifyBackendSwitch(State, Reason);
 			OutMessage = "'" + InSelection.Backend + "': " + Reason + ": " + Error;
+			UE_LOG(LogViewerSession, Display, "open %s / %s: %s - %s", InSelection.Backend.c_str(), InSelection.BackendProfile.empty() ? "-" : InSelection.BackendProfile.c_str(),
+				ToString(Classified), OutMessage.c_str());
 			return Classified;
 		}
 
@@ -324,6 +328,17 @@ namespace PhysicsTest
 		// Value switches (prefix match) and flags (whole token).
 		static constexpr std::string_view ValuePrefixes[] = { "-ini:", "-ExecCmds=", "-ConfigDir=", "-ResX=", "-ResY=", "-ChaosDll=", "-UI=" };
 		static constexpr std::string_view Flags[] = { "-NoVSync", "-D3DDebug", "-NoUI" };
+		// M5: a headless process is an automated run, so its relaunch stays headless and keeps the run control (it must
+		// never open a window, and its caller waits for the frames and the screenshot it asked for). A windowed process
+		// drops them: the user's relaunch is interactive. -ViewerCmds is never carried over (the relaunch carries the
+		// selection, not the script that led to it).
+		static constexpr std::string_view HeadlessValuePrefixes[] = { "-Frames=", "-WarmupFrames=", "-Screenshot=", "-PerfReport=", "-Camera=" };
+		static constexpr std::string_view HeadlessFlags[] = { "-Headless", "-Paused", "-Exit", "-WaitGpu" };
+		const auto IsFlag = [&StartsWithNoCase](const std::string& Token, const std::string_view Flag)
+		{
+			return Token.size() == Flag.size() && StartsWithNoCase(Token, Flag);
+		};
+		const bool bHeadless = std::any_of(Tokens.begin(), Tokens.end(), [&IsFlag](const std::string& Token) { return IsFlag(Token, "-Headless"); });
 		std::string Forwarded;
 		for (const std::string& Token : Tokens)
 		{
@@ -334,7 +349,18 @@ namespace PhysicsTest
 			}
 			for (const std::string_view Flag : Flags)
 			{
-				bKeep = bKeep || (Token.size() == Flag.size() && StartsWithNoCase(Token, Flag));
+				bKeep = bKeep || IsFlag(Token, Flag);
+			}
+			if (bHeadless)
+			{
+				for (const std::string_view Prefix : HeadlessValuePrefixes)
+				{
+					bKeep = bKeep || StartsWithNoCase(Token, Prefix);
+				}
+				for (const std::string_view Flag : HeadlessFlags)
+				{
+					bKeep = bKeep || IsFlag(Token, Flag);
+				}
 			}
 			if (bKeep)
 			{

@@ -63,5 +63,15 @@ inline namespace PT_BACKEND_NS
 	{
 		return CombineValues(M0.Restitution, M1.Restitution, ResolveCombineMode(M0.RestitutionCombineMode, M1.RestitutionCombineMode));
 	}
+
+	// The two combine modes of a body's material in 4 bits, for engines whose combine callback sees only the two collision
+	// objects (Bullet's gCalculateCombined*Callback gets the btCollisionObjects, btManifoldResult.h:37 [V]): bits 0-1 friction
+	// mode, bits 2-3 restitution mode (PT_COMBINE_* are 0..3). The raw F / R values travel in the engine's own per-object fields.
+	inline uint8 PackCombineModes(const uint8 FrictionMode, const uint8 RestitutionMode)
+	{
+		return static_cast<uint8>((FrictionMode & 3u) | ((RestitutionMode & 3u) << 2u));
+	}
+	inline uint8 GetPackedFrictionMode(const uint32 Packed) { return static_cast<uint8>(Packed & 3u); }
+	inline uint8 GetPackedRestitutionMode(const uint32 Packed) { return static_cast<uint8>((Packed >> 2u) & 3u); }
 }
 }

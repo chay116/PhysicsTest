@@ -25,6 +25,8 @@
 #                                         object (/arch:AVX2): adapter functions are backend-owned, SDK residue is a
 #                                         known list; report-only in Debug (M3 fix round 0)
 #   PhysicsTest.Probe.AdapterComdatsNegative  the same script fails on a fixture map with an adapter std::vector COMDAT
+#   PhysicsTest.Probe.AdapterComdatsBullet / AdapterComdatsPhysX  the same rule for the Bullet and PhysX adapters (no
+#                                         /arch, but the only TUs with their SDK's headers and defines)            (M5)
 
 pt_add_program(PtProbeThirdPartyIncludes
 	SOURCES ThirdPartyIncludesProbe.cpp
@@ -91,10 +93,17 @@ else()
 	message(WARNING "PhysicsTest.Probe.CheckModules disabled: python (${PT_PYTHON}) or dumpbin (${_pt_msvc_bin}) not found")
 endif()
 
-# Every static backend linked into PhysicsTestAutomation keeps its Kit symbols in its own inline namespace (Jolt from M3).
+# Every static backend linked into PhysicsTestAutomation keeps its Kit symbols in its own inline namespace (Jolt from M3;
+# Bullet and PhysX from M5: Automation links them directly for their own test areas, registered or not).
 set(_pt_kit_namespaces "Null$<SEMICOLON>AbiTwin")
 if(PT_WITH_JOLT)
 	string(APPEND _pt_kit_namespaces "$<SEMICOLON>Jolt")
+endif()
+if(PT_WITH_BULLET)
+	string(APPEND _pt_kit_namespaces "$<SEMICOLON>Bullet")
+endif()
+if(PT_WITH_PHYSX)
+	string(APPEND _pt_kit_namespaces "$<SEMICOLON>PhysX")
 endif()
 pt_add_script_test(PhysicsTest.Probe.KitNamespaces
 	SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckKitNamespaces.cmake"
@@ -135,19 +144,19 @@ endif()
 # ODR / flag isolation at binary level (docs/Abi.md 5.13): a COMDAT the harness shares must never come from an /arch:AVX2
 # adapter object. Strict in the optimised presets; the Debug preset (/Od emits the SDK headers' std helpers out of line)
 # only reports.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+	set(_pt_adapter_strict OFF)
+else()
+	set(_pt_adapter_strict ON)
+endif()
+# Every exe that links the adapters: Automation and Bench, and with PT_WITH_VIEWER (dbg, dev) the viewer and its tests.
+set(_pt_adapter_maps "$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.map")
+if(PT_WITH_VIEWER)
+	string(APPEND _pt_adapter_maps "$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestViewer>/PhysicsTestViewer.map"
+		"$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestViewerTests>/PhysicsTestViewerTests.map")
+endif()
 if(PT_WITH_JOLT)
 	set(_pt_adapter_owned "JPH@@|@JoltBackend@PhysicsTest@@|@Jolt@Abi@PhysicsTest@@")
-	if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-		set(_pt_adapter_strict OFF)
-	else()
-		set(_pt_adapter_strict ON)
-	endif()
-	# Every exe that links the adapter: Automation and Bench, and with PT_WITH_VIEWER (dbg, dev) the viewer and its tests.
-	set(_pt_adapter_maps "$<TARGET_FILE_DIR:PhysicsTestAutomation>/PhysicsTestAutomation.map$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.map")
-	if(PT_WITH_VIEWER)
-		string(APPEND _pt_adapter_maps "$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestViewer>/PhysicsTestViewer.map"
-			"$<SEMICOLON>$<TARGET_FILE_DIR:PhysicsTestViewerTests>/PhysicsTestViewerTests.map")
-	endif()
 	pt_add_script_test(PhysicsTest.Probe.AdapterComdats
 		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake"
 		ARGS "-DPT_MAPS=${_pt_adapter_maps}"
@@ -159,9 +168,27 @@ if(PT_WITH_JOLT)
 	set_tests_properties(PhysicsTest.Probe.AdapterComdatsNegative PROPERTIES
 		PASS_REGULAR_EXPRESSION "1 shared COMDAT[(]s[)] supplied by an /arch-isolated object.*push_back@[?][$]vector@IV")
 endif()
+# M5: the Bullet and PhysX adapters have no /arch, but they are still the only TUs that see their SDK's headers and defines,
+# so the rule is the same: every function the map attributes to an adapter object is backend-owned. Bullet has no
+# namespace, so a Bullet name (bt + capital) counts as owned. The SDK libraries are not listed (PT_SDK_LIBS): Bullet's own
+# objects supply only Bullet-named or Bullet-internal helpers, PhysX's hundreds of global-namespace functions
+# (CompanionPrunerAABBTree, *TraceSegmentReport, ...); neither SDK has /arch, so a COMDAT they share runs the same code.
+if(PT_WITH_BULLET)
+	pt_add_script_test(PhysicsTest.Probe.AdapterComdatsBullet
+		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake"
+		ARGS "-DPT_MAPS=${_pt_adapter_maps}" -DPT_ADAPTER_LIBS=PtBackendBullet
+			"-DPT_ADAPTER_OWNED=@BulletBackend@PhysicsTest@@|@Bullet@Abi@PhysicsTest@@|bt[A-Z]" -DPT_STRICT=${_pt_adapter_strict})
+endif()
+if(PT_WITH_PHYSX)
+	pt_add_script_test(PhysicsTest.Probe.AdapterComdatsPhysX
+		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake"
+		ARGS "-DPT_MAPS=${_pt_adapter_maps}" -DPT_ADAPTER_LIBS=PtBackendPhysX
+			"-DPT_ADAPTER_OWNED=physx@@|@PhysXBackend@PhysicsTest@@|@PhysX@Abi@PhysicsTest@@|^PT_PhysXTest_" -DPT_STRICT=${_pt_adapter_strict})
+endif()
 
 foreach(_test ThirdPartyIncludes NegativeScaleFatal HarnessCVars FlagLeak BuildFlags RefsClean LongestObjectPath PinGuard CheckModules KitNamespaces
-		BackendIsolation KitNeedsBackendNs HarnessSdkIsolation BenchNoRenderer AutomationNoRenderer AdapterComdats AdapterComdatsNegative)
+		BackendIsolation KitNeedsBackendNs HarnessSdkIsolation BenchNoRenderer AutomationNoRenderer AdapterComdats AdapterComdatsNegative
+		AdapterComdatsBullet AdapterComdatsPhysX)
 	if(TEST PhysicsTest.Probe.${_test})
 		get_test_property(PhysicsTest.Probe.${_test} LABELS _labels)
 		if(_labels)

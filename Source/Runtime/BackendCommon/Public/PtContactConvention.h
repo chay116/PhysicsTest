@@ -1,7 +1,10 @@
-// PtContactConvention.h - Chaos contact convention for debug snapshots (02_Architecture 8.1, A.4). [MVP M2]
+// PtContactConvention.h - Chaos contact convention for debug snapshots (02_Architecture 8.1, A.4). [MVP M2, M5]
 // Chaos: the normal lies on Body1 and points toward Body0, Phi < 0 is penetrating (ContactPoint.h:49-53 [V]); Body0 is
 // the more mobile body (Dynamic > Kinematic > Static), ties go to the lower index. Jolt reports the opposite normal
-// direction and a positive penetration depth; CanonicalizeContact turns any native report into this convention.
+// direction and a positive penetration depth (both flags of CanonicalizeContact set). Bullet's manifold point already has
+// Chaos' signs: m_normalWorldOnB lies on body B and points toward body A, and getDistance() < 0 penetrates, with
+// m_positionWorldOnA = m_positionWorldOnB + m_normalWorldOnB * distance (btManifoldPoint.h [V]); so A -> Body0,
+// B -> Body1 and neither flag. CanonicalizeContact turns any native report into this convention.
 #pragma once
 
 #include "PhysicsTestAbi/PtBackendAbi.h"
@@ -19,6 +22,12 @@ inline namespace PT_BACKEND_NS
 	inline constexpr uint8 GMobilityStatic = 0;
 	inline constexpr uint8 GMobilityKinematic = 1;
 	inline constexpr uint8 GMobilityDynamic = 2;
+
+	// The rank of a PT_MOTION_* value (an unknown motion ranks as static: it never becomes Body0 by mobility).
+	inline uint8 GetMobilityRank(const uint32 Motion)
+	{
+		return Motion == PT_MOTION_DYNAMIC ? GMobilityDynamic : (Motion == PT_MOTION_KINEMATIC ? GMobilityKinematic : GMobilityStatic);
+	}
 
 	// bNativeNormalTowardBody1: the native normal points from Body0 to Body1 (it is negated).
 	// bNativeDepthPositive: the native value is a penetration depth (> 0 = penetrating; Phi = -depth).

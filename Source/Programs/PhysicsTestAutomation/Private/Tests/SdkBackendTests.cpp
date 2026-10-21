@@ -23,7 +23,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 using namespace PhysicsTest;
@@ -40,10 +43,13 @@ namespace
 		return StringConv::Utf8ToPath(PT_CONFIG_DIR);
 	}
 
-	FResolvedPhysicsConfig LoadSdkConfig(const std::string& Backend, const std::string& Profile)
+	// Variant "" = <Backend>.Default when that file exists, else the variant marked DefaultForEngine (PhysX: UE4Compat), else none
+	// (the bench's resolution without -BackendProfile=).
+	FResolvedPhysicsConfig LoadSdkConfig(const std::string& Backend, const std::string& Profile, const std::string& Variant = {})
 	{
 		FBenchRunSpec Spec;
 		Spec.Backend = Backend;
+		Spec.BackendProfile = Variant;
 		Spec.PhysicsProfile = Profile;
 		Spec.ConfigDir = SdkTestConfigDir();
 		FResolvedPhysicsConfig Config;
@@ -106,6 +112,82 @@ namespace
 		INFO(Error);
 		REQUIRE(bParsed);
 		return Settings;
+	}
+
+	// R diag(I) R^T: the comparable inertia (an engine may re-diagonalise and order the principal moments its own way).
+	void InertiaTensor(const FQuat& Rotation, const FVector& Diagonal, double (&Out)[3][3])
+	{
+		const FVector Axes[3] = { Rotation.GetAxisX(), Rotation.GetAxisY(), Rotation.GetAxisZ() };
+		const double Moments[3] = { Diagonal.X, Diagonal.Y, Diagonal.Z };
+		for (int Row = 0; Row < 3; ++Row)
+		{
+			for (int Column = 0; Column < 3; ++Column)
+			{
+				Out[Row][Column] = 0.0;
+				for (int Axis = 0; Axis < 3; ++Axis)
+				{
+					const double A[3] = { Axes[Axis].X, Axes[Axis].Y, Axes[Axis].Z };
+					Out[Row][Column] += Moments[Axis] * A[Row] * A[Column];
+				}
+			}
+		}
+	}
+
+	// Frobenius relative error of the engine's inertia tensor against the harness body's.
+	double InertiaTensorRelError(const FBodyInstance& Body, const PtMassProperties& Engine)
+	{
+		double Harness[3][3];
+		double Read[3][3];
+		InertiaTensor(Body.MassProperties.RotationOfMass, Body.MassProperties.InertiaTensor, Harness);
+		InertiaTensor(FQuat(Engine.CenterOfMassLocal.Rotation.X, Engine.CenterOfMassLocal.Rotation.Y, Engine.CenterOfMassLocal.Rotation.Z, Engine.CenterOfMassLocal.Rotation.W),
+			FVector(Engine.InertiaDiagonal.X, Engine.InertiaDiagonal.Y, Engine.InertiaDiagonal.Z), Read);
+		double Difference = 0.0;
+		double Norm = 0.0;
+		for (int Row = 0; Row < 3; ++Row)
+		{
+			for (int Column = 0; Column < 3; ++Column)
+			{
+				Difference += (Read[Row][Column] - Harness[Row][Column]) * (Read[Row][Column] - Harness[Row][Column]);
+				Norm += Harness[Row][Column] * Harness[Row][Column];
+			}
+		}
+		return std::sqrt(Difference / Norm);
+	}
+
+	// Config/Profiles/Backend/<Backend>.<Variant>.ini -> the variant names (the viewer's Engines list); none = { "" }.
+	std::vector<std::string> SdkVariantNames(const std::string& Backend)
+	{
+		std::vector<std::string> Names;
+		const std::string Prefix = Backend + ".";
+		std::error_code Error;
+		for (const std::filesystem::directory_entry& Entry : std::filesystem::directory_iterator(SdkTestConfigDir() / "Profiles" / "Backend", Error))
+		{
+			const std::string Stem = StringConv::PathToUtf8(Entry.path().stem());
+			if (Entry.path().extension() == ".ini" && Stem.size() > Prefix.size() && Stem.compare(0, Prefix.size(), Prefix) == 0)
+			{
+				Names.push_back(Stem.substr(Prefix.size()));
+			}
+		}
+		std::sort(Names.begin(), Names.end());
+		if (Names.empty())
+		{
+			Names.emplace_back();
+		}
+		return Names;
+	}
+
+	// A GLOBAL_SCENE_SETTINGS module (PhysX: one PxTolerancesScale per process) that is idle and initialised with other init
+	// options than Wanted is terminated, so that the next scene initialises it with Wanted (M5).
+	void PrepareGlobalSettingsModule(const std::string& Backend, const std::vector<std::pair<std::string, std::string>>& Wanted)
+	{
+		std::string Error;
+		FPhysicsBackendModule* Module = FPhysicsBackendRegistry::Get().FindOrLoadModule(Backend, Error);
+		REQUIRE_MESSAGE(Module != nullptr, Error);
+		if (Module->IsInitialized() && (Module->GetInfo().ModuleFlags & PT_MODULE_GLOBAL_SCENE_SETTINGS) != 0 && Module->GetInitParams().InitOptions != Wanted)
+		{
+			REQUIRE(Module->GetNumLiveScenes() == 0);
+			REQUIRE(Module->TermGamePhys() == PT_OK);
+		}
 	}
 }
 
@@ -215,8 +297,12 @@ TEST_CASE("PhysicsTest.SdkBackend.ShapeWrapping")
 		const FEffectiveSetting* Wrapping = FindSetting(Settings, "shape.wrapping");
 		REQUIRE(Wrapping != nullptr);
 		MESSAGE(Backend << " wrapper control: " << Wrapping->Native);
-		CHECK(Wrapping->Canonical >= 3.0);
-		CHECK(Wrapping->Native.find("axis_remap 1") != std::string::npos);
+		// A capsule needs an axis remap only where the engine capsule is not along UE's Z (Jolt Y, PhysX X); Bullet's
+		// btCapsuleShapeZ needs none (D1 amendment, DL47). PhysX has no wrapper objects and counts the same conditions
+		// (several elements = compound, harness COM != PhysX geometric COM = offset_com, U2PSphylBasis = axis_remap; M5).
+		const bool bZCapsule = Backend == "Bullet";
+		CHECK(Wrapping->Canonical >= (bZCapsule ? 2.0 : 3.0));
+		CHECK(Wrapping->Native.find(bZCapsule ? "axis_remap 0" : "axis_remap 1") != std::string::npos);
 		CHECK(Wrapping->Native.find("compound 1") != std::string::npos);
 		// Only the nudged box needs a COM decorator: the compound's COM, computed by the engine in float, equals the
 		// harness COM within float resolution (M3 fix round: a 1e-6 cm test in float metres wrapped every compound).
@@ -275,7 +361,14 @@ TEST_CASE("PhysicsTest.SdkBackend.SingleBoxDropRestingContact")
 				}
 				++NumBoxGround;
 				CHECK(Contact.Body0 == 1u);   // Body0 = the more mobile body (the dynamic box)
-				CHECK(std::isnan(Contact.NormalImpulse));   // Q8: Jolt exposes no impulse
+				if (Scene->GetBackendInfo().Has(PT_CAP_CONTACT_NORMAL_IMPULSE))
+				{
+					CHECK(Contact.NormalImpulse >= 0.0);   // Bullet: the last solve's impulse (kg cm/s)
+				}
+				else
+				{
+					CHECK(std::isnan(Contact.NormalImpulse));   // Q8: n/a (Jolt exposes no impulse; PhysX's per-point impulse is M9)
+				}
 				MinPhi = std::min(MinPhi, Contact.Phi);
 				MaxPhi = std::max(MaxPhi, Contact.Phi);
 				MinNormalZ = std::min(MinNormalZ, Contact.Normal.Z);
@@ -543,23 +636,6 @@ TEST_CASE("PhysicsTest.SdkBackend.CommandsMatchNull")
 // returns a permuted diagonal with a matching rotation, so the comparable quantity is the tensor R diag(I) R^T.
 TEST_CASE("PhysicsTest.SdkBackend.MassReadbackIsATensor")
 {
-	const auto Tensor = [](const FQuat& Rotation, const FVector& Diagonal, double (&Out)[3][3])
-	{
-		const FVector Axes[3] = { Rotation.GetAxisX(), Rotation.GetAxisY(), Rotation.GetAxisZ() };
-		const double Moments[3] = { Diagonal.X, Diagonal.Y, Diagonal.Z };
-		for (int Row = 0; Row < 3; ++Row)
-		{
-			for (int Column = 0; Column < 3; ++Column)
-			{
-				Out[Row][Column] = 0.0;
-				for (int Axis = 0; Axis < 3; ++Axis)
-				{
-					const double A[3] = { Axes[Axis].X, Axes[Axis].Y, Axes[Axis].Z };
-					Out[Row][Column] += Moments[Axis] * A[Row] * A[Column];
-				}
-			}
-		}
-	};
 	for (const std::string& Backend : SdkBackendNames())
 	{
 		CAPTURE(Backend);
@@ -577,22 +653,7 @@ TEST_CASE("PhysicsTest.SdkBackend.MassReadbackIsATensor")
 		Scene.FlushDeferredActors();
 		PtMassProperties Engine = {};
 		REQUIRE(Scene.GetBackendScene().ReadMassProperties(Body->ActorHandle.Index, std::span<PtMassProperties>(&Engine, 1)) == PT_OK);
-		double Harness[3][3];
-		double Read[3][3];
-		Tensor(Body->MassProperties.RotationOfMass, Body->MassProperties.InertiaTensor, Harness);
-		Tensor(FQuat(Engine.CenterOfMassLocal.Rotation.X, Engine.CenterOfMassLocal.Rotation.Y, Engine.CenterOfMassLocal.Rotation.Z, Engine.CenterOfMassLocal.Rotation.W),
-			FVector(Engine.InertiaDiagonal.X, Engine.InertiaDiagonal.Y, Engine.InertiaDiagonal.Z), Read);
-		double Difference = 0.0;
-		double Norm = 0.0;
-		for (int Row = 0; Row < 3; ++Row)
-		{
-			for (int Column = 0; Column < 3; ++Column)
-			{
-				Difference += (Read[Row][Column] - Harness[Row][Column]) * (Read[Row][Column] - Harness[Row][Column]);
-				Norm += Harness[Row][Column] * Harness[Row][Column];
-			}
-		}
-		const double RelError = std::sqrt(Difference / Norm);
+		const double RelError = InertiaTensorRelError(*Body, Engine);
 		const bool bPermuted = Engine.InertiaDiagonal.X != doctest::Approx(Body->MassProperties.InertiaTensor.X).epsilon(1e-5);
 		MESSAGE(Backend << ": harness diagonal (" << Body->MassProperties.InertiaTensor.X << ", " << Body->MassProperties.InertiaTensor.Y << ", "
 			<< Body->MassProperties.InertiaTensor.Z << "), engine diagonal (" << Engine.InertiaDiagonal.X << ", " << Engine.InertiaDiagonal.Y << ", "
@@ -668,4 +729,304 @@ TEST_CASE("PhysicsTest.SdkBackend.JoltAssertOutsideUpdateIsAnEngineError")
 	CHECK(FPhysicsBackendScene::Create(*Module, Desc, Error) == nullptr);
 	CHECK(Error.find("unknown scene option") != std::string::npos);
 	MESSAGE("as a CreateScene option: " << Error);
+}
+
+// Checkpoint A (03_WorkPlan 1.6, item 2) for every SDK engine and every backend variant file (Jolt, Bullet, PhysX UE4Compat /
+// -TGS / -Stab / SdkDefault): S00.FreeFall |z60 - 501.83328| <= 2e-3 cm; the resting contact of M1.SingleBoxDrop a
+// (Normalized, 300 frames, viz run: the listener exists) has normal . (+Z) > 0.999; the engine's mass and inertia readback
+// of the box equal the harness values within 1e-5 (relative; the inertia as the tensor R diag(I) R^T). One MESSAGE line
+// per row is the table of docs/Checkpoints.md. A GLOBAL_SCENE_SETTINGS module is re-initialised between variants with
+// other init options (PhysX SdkDefault) and left with its default (no) init options.
+TEST_CASE("PhysicsTest.SdkBackend.CheckpointAConventions")
+{
+	int32 NumRows = 0;
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		for (const std::string& Variant : SdkVariantNames(Backend))
+		{
+			const std::string Row = Backend + (Variant.empty() ? std::string() : "/" + Variant);
+			CAPTURE(Row);
+			FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, "Normalized", Variant);
+			PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+			double Z60 = 0.0;
+			{
+				std::unique_ptr<FPhysScene> FreeFall = MakeScenarioScene("S00.FreeFall", {}, Backend, Config);
+				for (int32 Frame = 0; Frame < Fixtures::FFreeFall::Frames; ++Frame)
+				{
+					FreeFall->Tick(Config.TestSettings.FixedDeltaTime);
+				}
+				Z60 = FreeFall->GetBodies()[0]->State.BodyTM.GetTranslation().Z;
+			}
+			CHECK(std::abs(Z60 - 501.83328) <= 2e-3);
+
+			Config.TestSettings.RunMode = EPhysicsRunMode::Viz;
+			std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("M1.SingleBoxDrop", { { "Case", "a" } }, Backend, Config);
+			for (int32 Frame = 0; Frame < 300; ++Frame)
+			{
+				Scene->Tick(Config.TestSettings.FixedDeltaTime);
+			}
+			const FBodyInstance& Box = *Scene->GetBodies()[1];
+			const uint32 GroundIndex = Scene->GetBodies()[0]->ActorHandle.Index;
+			FPhysicsDebugSnapshot Snapshot;
+			REQUIRE(Scene->CaptureDebugSnapshot(Snapshot));
+			int32 NumPoints = 0;
+			double MinNormalZ = 1e30;
+			for (const PtContactPoint& Contact : Snapshot.Contacts)
+			{
+				if (Contact.Body0 == Box.ActorHandle.Index && Contact.Body1 == GroundIndex)
+				{
+					++NumPoints;
+					MinNormalZ = std::min(MinNormalZ, Contact.Normal.Z);
+				}
+			}
+			CHECK(NumPoints >= 1);
+			CHECK(MinNormalZ > 0.999);
+
+			PtMassProperties Engine = {};
+			REQUIRE(Scene->GetBackendScene().ReadMassProperties(Box.ActorHandle.Index, std::span<PtMassProperties>(&Engine, 1)) == PT_OK);
+			const double MassRelError = std::abs(Engine.Mass - Box.MassProperties.Mass) / Box.MassProperties.Mass;
+			const double InertiaRelError = InertiaTensorRelError(Box, Engine);
+			CHECK(MassRelError <= 1e-5);
+			CHECK(InertiaRelError <= 1e-5);
+			MESSAGE(Row << ": S00 z60 = " << Z60 << " cm (|dz| = " << std::abs(Z60 - 501.83328) << " cm); M1 a resting contact " << NumPoints
+				<< " points, min normal.z = " << MinNormalZ << ", box z = " << Box.State.BodyTM.GetTranslation().Z << " cm; mass " << Engine.Mass
+				<< " kg (harness " << Box.MassProperties.Mass << " kg, relative error " << MassRelError << "), inertia tensor relative error "
+				<< InertiaRelError);
+			++NumRows;
+		}
+	}
+	CHECK(NumRows >= static_cast<int32>(SdkBackendNames().size()));
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		PrepareGlobalSettingsModule(Backend, {});
+	}
+}
+
+// M5 round 0 (the PhysX kept-contact bug): a body put to sleep by PT_CMD_PUT_TO_SLEEP keeps the points of its last step,
+// each exactly once and flagged PT_CONTACT_SLEEPING, for as long as it sleeps. M1.SingleBoxDrop a under UEParity in a viz
+// run: the box rests awake at frame 40 (it falls asleep by itself later), the command puts it to sleep between two frames,
+// and 5 and then 30 frames later the snapshot still holds the box-ground points of the step before the command - the same
+// count, never doubled (PhysX listed every point twice before M5 round 0).
+TEST_CASE("PhysicsTest.SdkBackend.PutToSleepKeepsEachContactOnce")
+{
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		CAPTURE(Backend);
+		FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, "UEParity");
+		PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+		Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the contact listener exists in viz runs
+		std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("M1.SingleBoxDrop", { { "Case", "a" } }, Backend, Config);
+		if (!Scene->GetBackendInfo().Has(PT_CAP_CONTACT_POINTS))
+		{
+			MESSAGE(Backend << " declares no contact points: skipped");
+			continue;
+		}
+		FBodyInstance& Box = *Scene->GetBodies()[1];
+		const uint32 BoxIndex = Box.ActorHandle.Index;
+		const uint32 GroundIndex = Scene->GetBodies()[0]->ActorHandle.Index;
+		for (int32 Frame = 0; Frame < 40; ++Frame)
+		{
+			Scene->Tick(Config.TestSettings.FixedDeltaTime);
+		}
+		REQUIRE(Box.State.ObjectState == EObjectStateType::Dynamic);   // resting, still awake
+		const auto CountBoxGround = [&](uint32& OutSleeping)
+		{
+			FPhysicsDebugSnapshot Snapshot;
+			REQUIRE(Scene->CaptureDebugSnapshot(Snapshot));
+			uint32 Count = 0;
+			OutSleeping = 0;
+			for (const PtContactPoint& Contact : Snapshot.Contacts)
+			{
+				if ((Contact.Body0 == BoxIndex && Contact.Body1 == GroundIndex) || (Contact.Body0 == GroundIndex && Contact.Body1 == BoxIndex))
+				{
+					++Count;
+					OutSleeping += (Contact.Flags & PT_CONTACT_SLEEPING) != 0u ? 1u : 0u;
+				}
+			}
+			return Count;
+		};
+		uint32 Sleeping = 0;
+		const uint32 Before = CountBoxGround(Sleeping);
+		CHECK(Before >= 1u);
+		CHECK(Sleeping == 0u);
+		Box.PutInstanceToSleep();
+		REQUIRE(Scene->GetBackendScene().FlushCommands() == PT_OK);
+		for (const int32 Frames : { 5, 30 })
+		{
+			for (int32 Frame = 0; Frame < Frames; ++Frame)
+			{
+				Scene->Tick(Config.TestSettings.FixedDeltaTime);
+			}
+			const uint32 After = CountBoxGround(Sleeping);
+			MESSAGE(Backend << ": " << Before << " box-ground points before PUT_TO_SLEEP, " << After << " (" << Sleeping << " flagged sleeping) after "
+				<< Frames << " more frames, state " << static_cast<int32>(Box.State.ObjectState));
+			CHECK(Box.State.ObjectState == EObjectStateType::Sleeping);
+			CHECK(After == Before);
+			CHECK(Sleeping == After);
+		}
+	}
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		PrepareGlobalSettingsModule(Backend, {});
+	}
+}
+
+// M5 round 0, an open item for the M6 ABI freeze (docs/Abi.md 7.1, 9): what a velocity written to a SLEEPING body does,
+// without PT_CMDF_AUTO_WAKE (SET_LINEAR_VELOCITY) and through SET_BODY_STATE. The three behaviours today, pinned here so that
+// a change is seen:
+//   kept   the body stays asleep and moves with the velocity once woken (Null, Jolt)
+//   lost   the body stays asleep and wakes with no velocity: Bullet zeroes the velocities of an ISLAND_SLEEPING body every
+//          step (btDiscreteDynamicsWorld::updateActivationState, btDiscreteDynamicsWorld.cpp:605-620 [V])
+//   wakes  the non-zero velocity wakes the body at once (PhysX: setLinearVelocity wakes whatever autowake says,
+//          NpRigidDynamic.cpp:253 [V])
+TEST_CASE("PhysicsTest.SdkBackend.VelocityOfASleepingBody")
+{
+	std::vector<std::string> Backends = SdkBackendNames();
+	Backends.insert(Backends.begin(), "Null");
+	for (const std::string& Backend : Backends)
+	{
+		CAPTURE(Backend);
+		const FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, "UEParity");   // sleep allowed
+		PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+		FPhysSceneInitParams InitParams;
+		InitParams.DebugName = "SleepingVelocity";
+		InitParams.BackendName = Backend;
+		InitParams.Config = &Config;
+		FPhysScene Scene(InitParams);
+		FBodySetup Box;
+		Box.AggGeom.BoxElems.emplace_back(40.0);
+		const FBodySetup* BoxSetup = Scene.CreateBodySetup(std::move(Box));
+		FBodyInstance Template;
+		FProfileResolver::ApplyBodyInstanceDefaults(Config, Template);
+		Template.bSimulatePhysics = true;
+		Template.bEnableGravity = false;
+		const FTransform Poses[2] = { FTransform(FVector(0.0, 0.0, 5000.0)), FTransform(FVector(0.0, 1000.0, 5000.0)) };
+		FBodyInstance* Bodies[2] = { Scene.SpawnBody(Template, BoxSetup, Poses[0]), Scene.SpawnBody(Template, BoxSetup, Poses[1]) };
+		Scene.FlushDeferredActors();
+		const float Dt = Config.TestSettings.FixedDeltaTime;
+		for (FBodyInstance* Body : Bodies)
+		{
+			Body->PutInstanceToSleep();
+		}
+		Scene.Tick(Dt);
+		Scene.Tick(Dt);
+		REQUIRE(Bodies[0]->State.ObjectState == EObjectStateType::Sleeping);
+		REQUIRE(Bodies[1]->State.ObjectState == EObjectStateType::Sleeping);
+		// 0: SET_LINEAR_VELOCITY without PT_CMDF_AUTO_WAKE; 1: SET_BODY_STATE at its own pose with the same velocity.
+		PtBodyCommand SetVelocity = {};
+		SetVelocity.Type = PT_CMD_SET_LINEAR_VELOCITY;
+		SetVelocity.Body = Bodies[0]->ActorHandle.Index;
+		SetVelocity.Transform.Rotation.W = 1.0;
+		SetVelocity.Vector = PtVec3{ 100.0, 0.0, 0.0 };
+		Scene.GetBackendScene().EnqueueCommand(SetVelocity);
+		PtBodyCommand SetState = {};
+		SetState.Type = PT_CMD_SET_BODY_STATE;
+		SetState.Body = Bodies[1]->ActorHandle.Index;
+		SetState.Transform.Rotation.W = 1.0;
+		SetState.Transform.Translation = PtVec3{ Poses[1].GetTranslation().X, Poses[1].GetTranslation().Y, Poses[1].GetTranslation().Z };
+		SetState.Vector = PtVec3{ 100.0, 0.0, 0.0 };
+		Scene.GetBackendScene().EnqueueCommand(SetState);
+		for (int32 Frame = 0; Frame < 3; ++Frame)
+		{
+			Scene.Tick(Dt);
+		}
+		const bool bAsleep[2] = { Bodies[0]->State.ObjectState == EObjectStateType::Sleeping, Bodies[1]->State.ObjectState == EObjectStateType::Sleeping };
+		for (FBodyInstance* Body : Bodies)
+		{
+			Body->WakeInstance();
+		}
+		for (int32 Frame = 0; Frame < 3; ++Frame)
+		{
+			Scene.Tick(Dt);
+		}
+		std::string Behaviour[2];
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			CAPTURE(Index);
+			const double Vx = Bodies[Index]->State.LinearVelocity.X;
+			Behaviour[Index] = !bAsleep[Index] ? "wakes" : (Vx > 50.0 ? "kept" : "lost");
+			if (Behaviour[Index] == "lost")
+			{
+				CHECK(std::abs(Vx) < 1e-3);
+			}
+			else
+			{
+				CHECK(Vx == doctest::Approx(100.0).epsilon(0.01));   // UEParity linear damping 0.01 1/s
+			}
+		}
+		MESSAGE(Backend << ": SET_LINEAR_VELOCITY on a sleeping body (no AUTO_WAKE): " << Behaviour[0] << "; SET_BODY_STATE: " << Behaviour[1]);
+		const std::string Expected = Backend == "Bullet" ? "lost" : (Backend == "PhysX" ? "wakes" : "kept");
+		CHECK(Behaviour[0] == Expected);
+		CHECK(Behaviour[1] == Expected);
+	}
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		PrepareGlobalSettingsModule(Backend, {});
+	}
+}
+
+// 03 M5 3a and docs/Abi.md 5.14 across the SDK backends (M5 round 0): the material combine rules are read back from the
+// engine (PhysX PxMaterial, Jolt PhysicsSystem::GetCombine*, Bullet's global callbacks), and what the host passed in or the
+// adapter counted itself is never READBACK.
+TEST_CASE("PhysicsTest.SdkBackend.ReadbackIsReadFromTheEngine")
+{
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		CAPTURE(Backend);
+		const FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, "UEParity");
+		PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+		std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("M1.SingleBoxDrop", { { "Case", "a" } }, Backend, Config);
+		const std::vector<FEffectiveSetting> Settings = ReadEffective(*Scene);
+		for (const char* Key : { "material.friction_combine", "material.restitution_combine", "shape.wrapping" })
+		{
+			const FEffectiveSetting* Setting = FindSetting(Settings, Key);
+			const std::string KeyText(Key);
+			CAPTURE(KeyText);
+			REQUIRE(Setting != nullptr);
+			CHECK(Setting->Source == "READBACK");
+		}
+		for (const FEffectiveSetting& Setting : Settings)
+		{
+			const bool bCounter = Setting.Key.ends_with(".start_asleep_skipped") || (Setting.Key.ends_with("error_bits") && Setting.Key != "errors.capacity_bits");
+			if (bCounter)
+			{
+				CAPTURE(Setting.Key);
+				CHECK(Setting.Source == "SET_ONLY");
+			}
+		}
+		// Module level: the host's MaxThreads, the adapter's scene / assert / initialisation counters, the Kit's MXCSR restores
+		// (PhysX reads its live scenes from PxPhysics::getNbScenes: READBACK).
+		const PtBackendApi& Api = Scene->GetBackendScene().GetApi();
+		PtTextBuffer Query = {};
+		Api.DumpEffectiveSettings(0, &Query);
+		std::string Text(Query.Length > 0 ? Query.Length : 1u, '\0');
+		PtTextBuffer Buffer = { Text.data(), static_cast<uint32_t>(Text.size()), 0 };
+		REQUIRE(Api.DumpEffectiveSettings(0, &Buffer) == PT_OK);
+		Text.resize(Buffer.Length > 0 ? Buffer.Length - 1 : 0);
+		std::vector<FEffectiveSetting> Module;
+		std::string Error;
+		REQUIRE_MESSAGE(ParseEffectiveSettings(Text, Module, Error), Error);
+		int32 NumChecked = 0;
+		for (const FEffectiveSetting& Setting : Module)
+		{
+			const bool bInputOrCounter = Setting.Key == "kit.mxcsr_restores" || Setting.Key.ends_with(".max_threads") || Setting.Key.ends_with(".asserts")
+				|| Setting.Key.ends_with(".initializations") || (Setting.Key.ends_with(".live_scenes") && Backend != "PhysX");
+			if (bInputOrCounter)
+			{
+				CAPTURE(Setting.Key);
+				CHECK(Setting.Source == "SET_ONLY");
+				++NumChecked;
+			}
+			if (Setting.Key == "physx.live_scenes")
+			{
+				CHECK(Setting.Source == "READBACK");
+				CHECK(Setting.Canonical >= 1.0);
+			}
+		}
+		CHECK(NumChecked >= 3);   // max_threads, live_scenes or initializations, kit.mxcsr_restores
+	}
+	for (const std::string& Backend : SdkBackendNames())
+	{
+		PrepareGlobalSettingsModule(Backend, {});
+	}
 }

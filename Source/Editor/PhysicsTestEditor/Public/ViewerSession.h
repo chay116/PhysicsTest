@@ -12,7 +12,9 @@
 //   - InitGamePhys of a ONE_PER_PROCESS / NO_REINIT module refuses in this process;
 //   - a ONE_PER_PROCESS / NO_REINIT module is already initialised with another MaxThreads (the thread budget is fixed at
 //     InitGamePhys, Chaos' -corelimit is process-wide; the registry would only warn and keep the first one).
-// The app then relaunches itself with MakeCommandLine(selection, GetForwardedSwitches(command line)) and exits.
+// The app then relaunches itself with MakeCommandLine(selection, GetForwardedSwitches(command line)) and exits (Engines
+// panel button or the console command "restart"; a -Headless process waits for the relaunched one and returns its exit
+// code, M5).
 #pragma once
 
 #include "BenchmarkRunner.h"
@@ -33,7 +35,7 @@ namespace PhysicsTest
 	struct FViewerSelection
 	{
 		std::string Backend = "Jolt";
-		std::string BackendProfile;          // "" = <Backend>.Default when that file exists, else none
+		std::string BackendProfile;          // "" = <Backend>.Default, else the DefaultForEngine variant, else none
 		std::string PhysicsProfile = "Normalized";
 		std::string Scenario = "M1.SingleBoxDrop";
 		FScenarioParams Params;              // only the overrides; the scenario's defaults fill the rest
@@ -104,8 +106,10 @@ namespace PhysicsTest
 		[[nodiscard]] static std::string MakeCommandLine(const FViewerSelection& Selection, const std::string& Extra);
 		// The switches of CommandLine that configure the session rather than select it, verbatim (quoting kept), for the
 		// restarted process: -ini:..., -ExecCmds=, -ConfigDir=, -ResX=, -ResY=, -NoVSync, -D3DDebug,
-		// -ChaosDll=, -UI=, -NoUI. The selection (-Backend, -Profile, ...) comes from MakeCommandLine; run control
-		// (-Headless, -Frames, -Exit, -Paused, -WarmupFrames, -Screenshot, -PerfReport, -Camera) is not carried over.
+		// -ChaosDll=, -UI=, -NoUI. The selection (-Backend, -Profile, ...) comes from MakeCommandLine. Run control (-Headless,
+		// -Frames, -Exit, -Paused, -WarmupFrames, -Screenshot, -PerfReport, -Camera, -WaitGpu) is carried over only from a
+		// -Headless process (M5: an automated run's relaunch stays headless and finishes the run it was asked for); a
+		// windowed process's relaunch is interactive and drops it. -ViewerCmds is never carried over.
 		[[nodiscard]] static std::string GetForwardedSwitches(const char* CommandLine);
 		// Config/Profiles/Backend/<Backend>.<Variant>.ini -> the variant names; Config/Profiles/<Name>.ini -> the profile names.
 		[[nodiscard]] static std::vector<std::string> ListBackendVariants(const std::string& Backend);

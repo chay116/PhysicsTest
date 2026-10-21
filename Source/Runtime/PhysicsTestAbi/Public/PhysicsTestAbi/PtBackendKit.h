@@ -912,7 +912,8 @@ inline namespace PT_BACKEND_NS
 			}
 			char Text[32];
 			snprintf(Text, sizeof(Text), "%u", Kit.NumFpStateRestores);
-			Out.AppendEffective("kit.mxcsr_restores", Text, "calls", static_cast<double>(Kit.NumFpStateRestores), "calls", "READBACK");
+			// The Kit's own count: SET_ONLY, as every adapter counter (docs/Abi.md 5.14).
+			Out.AppendEffective("kit.mxcsr_restores", Text, "calls", static_cast<double>(Kit.NumFpStateRestores), "calls", "SET_ONLY");
 			return Result;
 		}
 

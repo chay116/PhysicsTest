@@ -115,6 +115,9 @@ namespace PhysicsTest
 		std::string Engine;   // "PhysX", "Jolt", "Bullet", "Chaos", "Null"
 		std::string Name;     // "UE4Compat", ...
 		std::string Label;    // e.g. "UE4 settings on PhysX 5.11"
+		// [PhysicsTest.Variant] DefaultForEngine=True: the variant a run of Engine resolves when it names none and there is no
+		// <Engine>.Default.ini (M5 round 0: PhysX.UE4Compat). At most one variant file per engine may set it.
+		bool bDefaultForEngine = false;
 		FConfigFile Ini;
 		std::vector<std::string> FidelityNotes;
 

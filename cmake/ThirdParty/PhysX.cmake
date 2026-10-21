@@ -42,12 +42,14 @@ endif()
 # PhysXPvdSDK is a link dependency of PhysX and PhysXExtensions in every configuration
 # (physx/source/compiler/cmake/PhysX.cmake:397-400, PhysXExtensions.cmake:319-324), so it cannot be Debug-only;
 # in release its code is compiled out (PX_SUPPORT_PVD=0).
-# OPEN (decided in M5, docs/Progress.md M0 follow-ups): the PhysX libraries are built with per-configuration macros
-# (Debug: PX_DEBUG=1 PX_CHECKED=1 PX_SUPPORT_PVD=1; Release: PX_SUPPORT_PVD=0; physx/source/compiler/cmake/windows/
-# CMakeLists.txt:109-112), but consumers only get the two below, so an adapter TU sees PX_DEBUG = PX_CHECKED = 0
-# (PxPreprocessor.h defaults) while the dbg libraries are PX_CHECKED. Forward them $<CONFIG>-dependently or document
-# why not when the PhysX adapter arrives; the dev/test choice of PhysX "release" (UE4 Development may have linked
-# PROFILE) is a UE4Compat question for the user (04_DecisionLog Q19).
+# Decided in M5 (the PhysX adapter, Source/Backends/PhysXBackend/Private/PhysXIncludes.h): the PhysX libraries are built
+# with per-configuration macros (Debug: PX_DEBUG=1 PX_CHECKED=1 PX_SUPPORT_PVD=1; Release: PX_SUPPORT_PVD=0;
+# physx/source/compiler/cmake/windows/CMakeLists.txt:109-112), consumers get only the two below, so an adapter TU sees
+# PX_DEBUG = PX_CHECKED = 0 (PxPreprocessor.h defaults). They are deliberately NOT forwarded: no public PhysX header
+# changes a type layout on them - they only gate inline parameter checks, PX_WARN_ONCE, PX_ASSERT and profile zones
+# (PxErrors.h:60-90, PxAssert.h, PxProfileZone.h, PxPhysXCommonConfig.h:11) - so the adapter sees release-style inline
+# helpers in every configuration while the dbg libraries keep their own checks. The dev/test choice of PhysX "release"
+# (UE4 Development may have linked PROFILE) is a UE4Compat question for the user (04_DecisionLog Q19).
 add_library(pt_physx INTERFACE)
 add_library(PT::PhysX ALIAS pt_physx)
 target_link_libraries(pt_physx INTERFACE physx_lib)

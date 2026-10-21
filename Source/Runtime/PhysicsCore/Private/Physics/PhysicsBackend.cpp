@@ -14,6 +14,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -918,6 +919,24 @@ namespace PhysicsTest
 		if (Result < 0)
 		{
 			Out.Reset();
+			return Result;
+		}
+		// M5 (M4 carry-over (2)): a particle must name a body of this scene. PT_INDEX_NONE or an index beyond the bodies
+		// created here is a backend bug; the particle is dropped (the consumers index arrays by body) and logged once.
+		const uint32 NumBodies = GetNumBodies();
+		Out.NumBodies = NumBodies;
+		const auto Invalid = std::remove_if(Out.Particles.begin(), Out.Particles.end(),
+			[NumBodies](const PtParticleSnapshot& Particle) { return Particle.BodyIndex >= NumBodies; });
+		Out.NumRejectedParticles = static_cast<uint32>(Out.Particles.end() - Invalid);
+		if (Out.NumRejectedParticles > 0)
+		{
+			if (NumSnapshotIndexErrorLogs == 0)
+			{
+				UE_LOG(LogPhysicsBackend, Error, "scene %llu (%s): CaptureDebugSnapshot returned %u particle(s) with a BodyIndex outside [0, %u) (PT_INDEX_NONE "
+					"or not a body of this scene); dropped (logged once per scene)", static_cast<unsigned long long>(SceneId), Module->GetName().c_str(), Out.NumRejectedParticles, NumBodies);
+				++NumSnapshotIndexErrorLogs;
+			}
+			Out.Particles.erase(Invalid, Out.Particles.end());
 		}
 		return Result;
 	}

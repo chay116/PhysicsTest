@@ -255,7 +255,49 @@ namespace PhysicsTest
 			AddLog("                        the profile or with -ExecCmds= / -ini: on the command line");
 			AddLog("  stat ChaosCounters    toggle the Stats panel");
 			AddLog("  pause | play | step | reset | screenshot | frame");
+			AddLog("  open <Backend> [<Variant>|-]  this selection on another backend / variant (as Apply; - = default)");
+			AddLog("  restart               relaunch with the last selection that needed a restart (as the Engines button)");
 			AddLog("  cvars [filter]        list console variables");
+			return true;
+		}
+		if (Lower == "open" || Lower.rfind("open ", 0) == 0)
+		{
+			// open <Backend> [<Variant>|-]: the selection of the running scene (else the Engines panel's) with another backend /
+			// variant; ProcessRequests opens it like Apply (RestartRequired included).
+			std::vector<std::string> Words;
+			size_t Cursor = 4;
+			while (Cursor < Line.size())
+			{
+				const size_t Begin = Line.find_first_not_of(" \t", Cursor);
+				if (Begin == std::string::npos)
+				{
+					break;
+				}
+				const size_t End = Line.find_first_of(" \t", Begin);
+				Words.push_back(Line.substr(Begin, End == std::string::npos ? std::string::npos : End - Begin));
+				Cursor = End == std::string::npos ? Line.size() : End;
+			}
+			if (Words.empty() || Words.size() > 2)
+			{
+				AddLog("  usage: open <Backend> [<Variant>|-]");
+				return false;
+			}
+			FViewerSelection Wanted = Session.HasScene() ? Session.GetSelection() : Pending;
+			Wanted.Backend = Words[0];
+			Wanted.BackendProfile = Words.size() > 1 && Words[1] != "-" ? Words[1] : std::string();
+			RequestedOpen = Wanted;
+			bOpenRequested = true;
+			bConfigListsStale = true;
+			return true;
+		}
+		if (Lower == "restart")
+		{
+			if (LastOpenResult != EViewerOpenResult::RestartRequired)
+			{
+				AddLog("  nothing to restart: the last open was " + std::string(ToString(LastOpenResult)));
+				return false;
+			}
+			RequestRestart();
 			return true;
 		}
 		if (Lower == "stat chaoscounters")
@@ -330,6 +372,14 @@ namespace PhysicsTest
 		bOpenRequested = false;
 		OutSelection = RequestedOpen;
 		return true;
+	}
+
+	void FPhysicsTestEditor::RequestRestart()
+	{
+		// The new selection plus this process's session switches (-ini:, -ExecCmds, -ConfigDir, -ResX/-ResY, -NoVSync, ...;
+		// a -Headless process also keeps its run control, GetForwardedSwitches).
+		RestartCommandLine = FViewerSession::MakeCommandLine(LastRequested, FViewerSession::GetForwardedSwitches(FCommandLine::Get()));
+		bRestartRequested = true;
 	}
 
 	bool FPhysicsTestEditor::ConsumeRestartRequest(std::string& OutCommandLine)

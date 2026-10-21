@@ -679,19 +679,19 @@ Tick(DeltaSeconds) ...   (§9)
 
 | 항목 | Null | Jolt | PhysX | Bullet | Chaos (예상) |
 |---|---|---|---|---|---|
-| CONTACT_POINTS | - | viz | viz | O | O |
-| CONTACT_NORMAL_IMPULSE / FRICTION_IMPULSE | - | -/- | O/- | O/O | O/? |
+| CONTACT_POINTS | - | viz | viz | viz (캡처 때 매니폴드를 읽음) | O |
+| CONTACT_NORMAL_IMPULSE / FRICTION_IMPULSE | - | -/- | -/- (M5: 점별 impulse는 ACTIVE 판정에만 쓰고 값은 NaN. 값은 M9) | O/O | O/? |
 | CONTACT_ACTIVE_EXACT | - | - (근사) | O | O | O |
 | NATIVE_ISLANDS | - | - (내부 API `MotionProperties::GetIslandIndexInternal()`뿐이고 스텝 단위, MotionProperties.h:258 [V]. 하네스 `FIslandBuilder`를 쓴다) | - | O (`getIslandTag`) | O |
 | NATIVE_FRAME_MODEL | **O** (FStepPlanner 의미, §7.7) | - | - | - | O |
-| NATIVE_DEBUG_DRAW | - | - | O (viz) | viz 전용: viz run에만 드로어를 붙이고, 드로어의 `DBG_NoDeactivation`을 프로필의 sleep 설정과 맞춘다 (btDiscreteDynamicsWorld.cpp:418-421 [V]) | Dev만 |
+| NATIVE_DEBUG_DRAW | - | - | M9 (M5는 선언하지 않음) | M9: viz run에만 드로어를 붙이고, 드로어의 `DBG_NoDeactivation`을 프로필의 sleep 설정과 맞춘다 (btDiscreteDynamicsWorld.cpp:418-421 [V]). M5는 드로어를 붙이지 않는다 | Dev만 |
 | PHASE_TIMERS | - | - | - | - | O |
 | MULTITHREADED | - | O | O | - | O |
 
 **module flag**
 - Chaos: ONE_PER_PROCESS, NO_REINIT, UE_RUNTIME, SPAWNS_THREADS_AT_INIT. Dev 빌드는 DEBUG_DRAW_COMPILED도 켠다.
-- Bullet: GLOBAL_SCENE_SETTINGS (전역 combine 콜백).
-- PhysX: GLOBAL_SCENE_SETTINGS (프로세스당 PxPhysics 하나와 tolerance scale 하나). 같은 scale의 변형들은 한 프로세스에 함께 둘 수 있다 (§6).
+- Bullet: GLOBAL_SCENE_SETTINGS (전역 combine 콜백). M5: 전역값은 모듈 init 옵션 `[PhysicsTest.Backend.Bullet.Init]` `CombineRule`(UE/Bullet), `DeactivationTime`, `ContactBreakingThreshold`이고, `Bullet.Default.ini`는 `.Init` 섹션을 두지 않는다 (변형 없는 Bullet과 init 옵션이 같아야 한 프로세스를 쓴다).
+- PhysX: GLOBAL_SCENE_SETTINGS (프로세스당 PxPhysics 하나와 tolerance scale 하나). 같은 scale의 변형들은 한 프로세스에 함께 둘 수 있다 (§6). M5: 레지스트리가 init 옵션을 문자열로 비교하므로 UE4Compat 계열은 init 키를 적지 않고(백엔드 기본값이 (100, 1000)), SdkDefault만 `ToleranceScale=(Length=1,Speed=10)`을 적는다. 그래서 변형 없는 PhysX와 UE4Compat·-TGS·-Stab이 한 프로세스를 쓰고 SdkDefault는 RestartRequired다.
 
 ### 7.6 버전과 동결
 
@@ -752,30 +752,30 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
 
 ### 8.1 공통 (BackendCommon) [MVP M2~M5]
 
-- **`PtUnitScale`:** L은 cm당 네이티브 길이다. Chaos와 PhysX-UE4Compat은 1, Jolt·Bullet·PhysX-SdkDefault는 0.01 (D1).
+- **`PtUnitScale`:** L은 cm당 네이티브 길이다. Chaos와 PhysX-UE4Compat은 1, Jolt·Bullet·PhysX-SdkDefault는 0.01 (D1). M5: 이 표는 `EEngineUnits` + constexpr `GetEngineUnitScale`이고, Jolt·Bullet은 이 값으로만 변환한다. PhysX는 변형 키 `LengthScale`을 쓰고 effective 키가 표의 어느 칸인지 적는다 (CreateScene이 PxTolerancesScale과의 일치를 검사한다, §8.2 M5 메모).
   - ×L: 길이, 속도, 가속도, 힘, 선형 임펄스
   - ×L²: 관성, 토크, 각임펄스
   - ×1: 질량, 각도, damping
 - **캡슐 축 재매핑:**
-  - UE Z → PhysX X (`U2PSphylBasis`), Jolt Y (`RotatedTranslatedShape`).
+  - UE Z → PhysX X (`U2PSphylBasis` = BackendCommon `CapsuleAxisRemapUE4SphylBasis()`, 180° about (1,0,1)/√2), Jolt Y (`RotatedTranslatedShape`).
   - Bullet은 `btCapsuleShapeZ`(btCapsuleShape.h:128-131 [V])를 써서 재매핑하지 않는다. 이것은 **D1 보정**이다. D1 원안은 "Bullet Y"(기본 `btCapsuleShape`)였다. 물리적으로 같고 변환 지점이 하나 줄어든다. 결정 로그에 기록하며 `S03.CapsuleRest` 게이트로 확인한다.
 - **COM 래핑은 필요할 때만 한다:**
   - 요소가 하나이고 `ComLocal`이 항등에 가까우면(|t| < 1e-6 cm, |q·identity| > 1 − 1e-9) 네이티브 프리미티브를 그대로 쓴다 (`btBoxShape`, Jolt `BoxShape` 등).
   - 그 밖의 경우에만 compound(Bullet)나 `OffsetCenterOfMassShape`(Jolt)를 쓴다.
   - 이유: 헤드라인 씬(`M3.BoxPile`, `M2b.Pyramid1240`)은 COM이 중심인 균일 큐브다. 모든 바디를 감싸면 compound 디스패치와 자식 변환 비용이 Bullet·Jolt에만 붙는다.
-  - effective 키 `shape.wrapping`에 종류별 개수(compound, offset_com, axis_remap)를 기록한다. `M3.BoxPile`은 0이어야 한다 (G9).
+  - effective 키 `shape.wrapping`에 종류별 개수(compound, local_transform, offset_com, axis_remap)를 기록한다. `M3.BoxPile`은 0이어야 한다 (G9). M5: compound만 있는 엔진(Bullet)은 `ClassifyCompoundWrapping`이 종류를 정한다. 래퍼 객체가 없는 PhysX는 같은 조건을 엔진의 actor에서 읽는다 (§8.2 M5 메모).
 - **접촉 정규화 (Chaos 규약):**
   - normal은 Body1 위에 있고 Body0을 향한다. Phi < 0이면 관통 (ContactPoint.h:49-53 [V]).
   - Body0은 더 가동성이 큰 쪽이다 (Dynamic > Kinematic > Static, 동률이면 작은 index).
-  - Jolt는 normal과 depth 부호를 반전한다.
-  - impulse를 얻을 수 없으면 NaN으로 둔다.
-- **damping:** Chaos와 Jolt는 `v *= max(0, 1 - c·dt)`. Bullet은 `c_b = 1 - (1 - c·dt)^(1/dt)`로 변환한다.
+  - Jolt는 normal과 depth 부호를 반전한다. Bullet 매니폴드 점은 이미 Chaos 부호다 (`m_normalWorldOnB`는 B 위에서 A를 향하고 `getDistance() < 0`이 관통, btManifoldPoint.h [V]. A → Body0, B → Body1). PhysX도 반전하지 않는다: `PxContactPairPoint`의 normal은 두 번째 셰이프에서 첫 번째 셰이프를 향하므로(PxSimulationEventCallback.h:448 [V]) shape 1 → Body1, shape 0 → Body0으로 그대로 Chaos 규약이고, Phi = separation, PointOn1 = position, PointOn0 = position + separation·n이다 (M5 수정 라운드 0에서 문서 정정. 코드는 처음부터 반전하지 않았다, `SdkBackend.CheckpointAConventions` min normal.z = 1).
+  - impulse를 얻을 수 없으면 NaN으로 둔다. 가동성 순위는 `GetMobilityRank(PT_MOTION_*)`.
+- **damping:** Chaos, Jolt, PhysX는 `v *= max(0, 1 - c·dt)`를 힘 적분 **뒤에** 한다 (PhysX DyBodyCoreIntegrator.h:26-42 [V]). Bullet의 `(1 - c_b)^dt` 배수는 `c_b = 1 - (1 - c·dt)^(1/dt)`로 맞출 수 있지만 순서가 다르다: `predictUnconstraintMotion`에서 감쇠한 뒤 솔버가 힘 임펄스를 더한다 (btDiscreteDynamicsWorld.cpp:1091-1105, btSequentialImpulseConstraintSolver.cpp:477-478, 1820-1826 [V]). 그래서 Bullet 백엔드는 기본으로 Bullet 감쇠를 0으로 두고 내부 pre-tick이 `UEOrderPreSolveVelocity`(v·m − a·dt·(1 − m))를 넣는다 (`DampingModel=UE`). 변환만 쓰는 `DampingModel=Converted`도 남겼다 (M5 [V]: 차이는 N 스텝 뒤 g·dt·(1 − m^N)).
 - **SDK 헤더 (백엔드 측):** 백엔드 Private TU에서 `PT_THIRD_PARTY_INCLUDES_START/END`(warning push/pop만 함) 안에서만 include한다. 백엔드는 하네스 Core를 include하지 않으므로 check/ensure 매크로와 충돌하지 않는다.
 - **third-party 헤더 (하네스 측):** 하네스 TU는 Core의 `check`/`verify`/`ensure`/`checkf` 매크로를 갖고 있고, doctest는 `check()`라는 멤버 함수를 선언한다. 매크로로는 `#undef`를 만들 수 없으므로 include 파일 쌍으로 처리한다.
   - `Misc/PtThirdPartyIncludesStart.h`: warning push → `#pragma push_macro("check")` 등 → `#undef`
   - `Misc/PtThirdPartyIncludesEnd.h`: `#pragma pop_macro(...)` → warning pop
   - doctest, ImGui, ImPlot, nlohmann/json은 반드시 이 쌍을 거쳐 include한다. CTest 컴파일 프로브가 확인한다 (§4.5).
-- **중력:** SDK에서는 값이 바뀔 때만 설정한다. Bullet `setGravity`가 O(N)이기 때문이다. Chaos는 UE처럼 매 프레임 받는다.
+- **중력:** SDK에서는 값이 바뀔 때만 설정한다. Bullet `setGravity`가 O(N)이기 때문이다. Chaos는 UE처럼 매 프레임 받는다. M5 [V]: `btDiscreteDynamicsWorld::setGravity`는 깨어 있는 바디만 바꾸므로(btDiscreteDynamicsWorld.cpp:499-510) Bullet 백엔드는 잠든 dynamic 바디의 중력도 직접 바꾼다.
 - **박스 마진 기록:** 엔진마다 규칙이 다르므로 셰이프별로 readback해 `shape.box_margin`에 요약(min, max)한다.
 
 | 엔진 | 박스 마진 규칙 | 50 cm 큐브 | 1 m 큐브 |
@@ -793,14 +793,14 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
 |---|---|---|
 | PhysXIncludes.h | `PhysXIncludes.h` | `PxPhysicsAPI.h`를 유일하게 include하는 파일 |
 | PhysXSupport | `U2PVector/P2UVector/U2PQuat/U2PTransform/P2UTransform` (LengthScale 포함), `U2PSphylBasis` (180°, 축 (1,0,1)/√2), `FPhysXAllocator` (16B 정렬, live/peak 집계), `FPhysXErrorCallback` (error bits), `FPhysxUserData {Type, Index}` | |
-| InitGamePhys / TermGamePhys | `PhysicsInitialization.cpp`: GPhysXFoundation, GPhysXSDK | PxCreateFoundation → `PxCreatePhysics(PxTolerancesScale(Length, Speed))` → PxInitExtensions. 프로세스당 1회다. tolerance scale은 InitGamePhys 옵션 `physx.ToleranceScale`로 받는다 (PxPhysics.h:997, PxSceneDesc.h:541 [V]). 같은 scale을 쓰는 변형은 각자 PxScene을 만든다 |
+| InitGamePhys / TermGamePhys | `PhysicsInitialization.cpp`: GPhysXFoundation, GPhysXSDK | PxCreateFoundation → `PxCreatePhysics(PxTolerancesScale(Length, Speed))` → PxInitExtensions. 살아 있는 PxPhysics는 프로세스에 하나다 (M5: `TermGamePhys`가 해제한 뒤에는 다른 scale로 다시 만들 수 있다. 초기화된 동안 다른 scale은 레지스트리·Kit·CreateScene이 거부한다). tolerance scale은 InitGamePhys 옵션 `ToleranceScale=(Length=..,Speed=..)`(UE struct 문법)로 받는다 (PxPhysics.h:997, PxSceneDesc.h:541 [V]). 같은 scale을 쓰는 변형은 각자 PxScene을 만든다 |
 | FPhysScene_PhysX::InitPhysScene | 같은 이름 | `FPhysXSceneConfig`(변형 ini)로 PxSceneDesc 구성. substep clamp 규칙은 하네스 `FStepPlanner` 소관이므로 이 config에 없다 |
 | FPhysXCPUDispatcherSingleThread / PhysX 워커 풀 | 같은 이름 / `PxDefaultCpuDispatcherCreate(T)` [R] | 아래 "단일 스레드 dispatcher" 참고 |
 | PhysXSimFilterShader | `PhysicsFiltering.*` | 아래 "필터 셰이더" 참고 |
-| FPhysXSimEventCallback | 같은 이름 (viz 전용) | onContact → extractContacts, 쌍당 최대 16점 [M]. PointOn1 = position, PointOn0 = position + separation·n. onWake/onSleep 카운터. EndFrame에서 디스패치 |
-| FInitBodiesHelper / InitBody | `PhysXBodyInstance.cpp` | §6의 UE 순서: createRigidStatic/Dynamic + 생성 시 플래그(eKINEMATIC, eDISABLE_GRAVITY, eENABLE_CCD, 최대 선속도) → 셰이프 → **배치 전체를 `addActors` 1회** → 바디별 InitDynamicProperties → `!bStartAwake`이면 putToSleep |
-| FBodySetupShapeIterator | `PhysXBodySetup.cpp` | 요소마다 exclusive PxShape를 만든다 (bEnableShapeSharing=false). contactOffset = clamp(0.02·MinExtent, 2, 8) cm [M 공식, V 상수]. MinExtent는 반지름 또는 최소 half-extent. restOffset 0. 50 cm 큐브 → 2 cm, 10 m 박스 → 8 cm |
-| InitDynamicProperties_AssumesLocked | 같은 순서 (BodyInstance.cpp:4648-4743 [V]) | mass/inertia/COM → damping → maxAngularVelocity → maxDepenetration (`PtActorCreateInfo::MaxDepenetrationVelocity`는 M3부터 UE5 의미다: -1 = 설정 안 함, 0 이상 = 바디 값. UE4Compat는 설정 안 함을 UE4 규칙대로 프로젝트 값 `UPhysicsSettingsCore::MaxDepenetrationVelocity`로 바꾸고, 0은 PX_MAX_F32로 바꾼다. PhysX 5.11은 ≤0을 거부한다. 프로젝트 값을 넘길 통로는 M5에서 정한다. UE5에서 바디 값 0은 "밀어내지 않음"이므로 이 변환은 UE4Compat만의 차이다) → 초기 속도 → sleepThreshold × 배수 → stabilizationThreshold × 배수 → iterations → !bStartAwake이면 putToSleep (Normalized의 `eDISABLE_SLEEPING` 씬에서는 건너뜀, §6). 이 함수는 `addActors` **다음에** 돈다 |
+| FPhysXSimEventCallback | 같은 이름 (viz / `PT_INSTR_CONTACTS`) | onContact → extractContacts, 쌍당 최대 16점 [M]. PointOn1 = position, PointOn0 = position + separation·n. onWake/onSleep 카운터. 배열은 한 번 잡는다. 점별 normal impulse > 0이면 `PT_CONTACT_ACTIVE`(정확), impulse 값은 M9까지 NaN |
+| FInitBodiesHelper / InitBody | `PhysScene_PhysX.cpp` (`FPhysScene_PhysX::CreateActors`) | §6의 UE 순서: createRigidStatic/Dynamic + 생성 시 플래그(eKINEMATIC, eDISABLE_GRAVITY, eENABLE_CCD, 최대 선속도) → 셰이프 → **배치 전체를 `addActors` 1회** → 바디별 InitDynamicProperties → `!bStartAwake`이면 putToSleep |
+| FBodySetupShapeIterator | `PhysScene_PhysX.cpp` | 요소마다 exclusive PxShape를 만든다 (bEnableShapeSharing=false). contactOffset = clamp(0.02·MinExtent, 2, 8) cm [M 공식, V 상수]. MinExtent는 반지름 또는 최소 half-extent. restOffset 0. 50 cm 큐브 → 2 cm, 10 m 박스 → 8 cm |
+| InitDynamicProperties_AssumesLocked | 같은 순서 (BodyInstance.cpp:4648-4743 [V]) | mass/inertia/COM → damping → maxAngularVelocity → maxDepenetration (`PtActorCreateInfo::MaxDepenetrationVelocity`는 M3부터 UE5 의미다: -1 = 설정 안 함, 0 이상 = 바디 값. UE4Compat는 설정 안 함을 UE4 규칙대로 프로젝트 값 `UPhysicsSettingsCore::MaxDepenetrationVelocity`로 바꾸고, 0은 PX_MAX_F32로 바꾼다. PhysX 5.11은 ≤0을 거부한다. 프로젝트 값은 M5에서 변형 키 `MaxDepenetrationRule=UE4Project` + `ProjectMaxDepenetrationVelocity`(UE 기본 0 [V])로 넘긴다. UE5에서 바디 값 0은 "밀어내지 않음"이므로 이 변환은 UE4Compat만의 차이다) → 초기 속도 → sleepThreshold × 배수 → stabilizationThreshold × 배수 → iterations → !bStartAwake이면 putToSleep (Normalized의 `eDISABLE_SLEEPING` 씬에서는 건너뜀, §6). 이 함수는 `addActors` **다음에** 돈다 |
 | FConstraintInstance → PxD6Joint | `PhysXConstraint.cpp` [확장 M9] | `PxD6JointCreate(SDK, actor2, frame2, actor1, frame1)` (actor 순서를 뒤집음 [M]). projection 없음 (5.2에서 제거) |
 | 머티리얼 | | 인자 순서는 `createMaterial(staticFriction, dynamicFriction, restitution)`이다 (PxPhysics.h:764 [V]). UE4Compat: `createMaterial(F, F, R)`, 즉 정지마찰 = 동적마찰 [M]. SdkDefault: `createMaterial(max(F, SF), F, R)`. PhysX가 정지마찰을 같은 combine 모드로 결합하므로 §5.1의 Chaos 규칙이 그대로 나온다. combine 모드는 static_cast |
 | 스텝 | | StartFrame = `simulate(dt, nullptr, scratch, 262144)`, WaitPhysScenes = `fetchResults(true)` (UE4의 TG_StartPhysics/EndPhysics 분할) |
@@ -819,10 +819,12 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
   - word2 = component id (하네스에서는 body index)
   - word3 = 상위 6비트 mask, 이어서 5비트 channel, 하위 21비트 EPDF 플래그 (PhysicsFiltering.h:18-35 [V])
 - 셰이더 동작:
-  - KK와 K-static 쌍은 억제한다 (EPDF_KinematicKinematicPairs가 없을 때).
-  - 상호 차단 검사를 한다.
+  - KK 쌍은 억제한다 (EPDF_KinematicKinematicPairs가 없을 때) [M].
+  - K-static 쌍은 변형 키 `KinematicStaticPairFilter`를 따른다 [M]: `UnlessKinematicPairs`(기본, KK와 같이 플래그가 없을 때 억제) 또는 `Always`(언제나 억제).
+  - 상호 차단 검사를 한다. 차단하지 않는 쌍은 변형 키 `NonBlockingPairFilter`를 따른다 [M]: `Kill`(기본, eKILL) 또는 `Suppress`(eSUPPRESS).
   - eCONTACT_DEFAULT를 쓴다.
-  - notify 플래그는 viz에서만 켠다.
+  - notify 플래그는 리스너가 있을 때(viz 또는 `PT_INSTR_CONTACTS`) 켠다.
+  - M5 수정 라운드 0: 이 설계 문단은 K-static과 차단하지 않는 쌍의 결과를 정하지 않으므로 두 결과를 [M] 변형 키로 두고 `PxSceneDesc::filterShaderData`로 셰이더에 넘긴다 (effective 키 `physx.filter_shader_rules`, `PxScene::getFilterShaderData` READBACK). 기본값은 이 문단을 읽은 대로이고, 검토자는 UE4가 둘 다 eSUPPRESS/언제나 억제였다고 기억한다 (미확인). 사용자 4.27 확인 목록에 넣었다 (03 §2). M5 씬은 모든 바디가 모든 채널을 차단하고 kinematic 쌍 플래그가 없어 어느 쪽도 지나지 않는다.
 
 **프로필 (`Config/Profiles/Backend/PhysX.*.ini`)**
 
@@ -840,8 +842,8 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
 | bounceThresholdVelocity | 200 cm/s | 2 m/s | [V] |
 | dynamicTreeRebuildRateHint | 10 | 100 | [V] |
 | scratch | 262144 B | 없음 | [V] |
-| per-body iterations | 8/1 (UE5 FBodyInstance는 8/2) | 4/1 | [M] / [V] PxvDynamics.h:116 |
-| damping / maxAngVel | 0.01/0, 62.83 rad/s | 0/0.05, 100 | [V] |
+| per-body iterations | 8/1 (UE5 FBodyInstance는 8/2) | 4/1 | [M] / [V] PxvDynamics.h:116. M5: 변형 키 `PositionIterations`/`VelocityIterations`가 override 없는 바디에 쓰인다 |
+| damping / maxAngVel | 0.01/0, 62.83 rad/s | (0/0.05, 100은 SDK 기본값) | [V]. M5: 바디 값은 모든 엔진처럼 프로필 값이고 변형이 바꾸지 않는다 (§10). SdkDefault 칸은 ini 주석으로만 남는다 |
 | sleep / stab threshold | 50 / 25 (× SleepFamily) | 공식 그대로 | [V] PxvDynamics.h:134-136 |
 | contact offset | UE4 clamp | 0.02·length | [M] |
 | 정지마찰 | = 동적 | `max(F, SF)` | [M] / [V] Chaos 규칙 |
@@ -850,7 +852,7 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
 
 **변형**
 - `UE4Compat-TGS`: eTGS.
-- `UE4Compat-Stab`: eENABLE_STABILIZATION.
+- `UE4Compat-Stab`: eENABLE_STABILIZATION. M5 [V]: 안정화는 sleep 검사 안에 있어(DySleep.cpp:21-30, DyDynamics.cpp:1184-1187) `eDISABLE_SLEEPING`(Normalized)에서는 효과가 없다. Normalized의 -Stab은 UE4Compat과 비트 단위로 같다.
 - 프로브 결과: 10단 스택이 PGS에서는 25 cm 흔들리고, 두 변형에서는 안정된다 [V]. 세 변형은 tolerance scale이 같으므로 뷰어 2단계에서 한 프로세스에 나란히 띄울 수 있다 [확장 M12]. 이것이 가장 유익한 PhysX 시각 비교다.
 
 **충실도 노트 (모든 PhysX manifest에 기록)**
@@ -862,6 +864,22 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
   - maxDepenetration 값은 0보다 커야 한다.
   - 기본 broadphase가 PABP다.
 - 결과에는 항상 "UE4 settings on PhysX 5.11"로 표기한다.
+
+**M5 구현 메모 [V]** ([Progress.md](Progress.md) M5 §3 P-1~P-18, I-1)
+- **파일:** `Source/Backends/PhysXBackend/Private/` — `PhysXIncludes.h`(SDK 헤더는 여기서만), `PhysXSupport.*`, `PhysicsInitialization.*`, `PhysXCPUDispatcher.*`, `PhysicsFiltering.*`, `PhysXSimEventCallback.*`, `PhysXSceneConfig.*`/`PhysXParse.h`(`[PhysicsTest.Backend.PhysX]` 키, 대소문자 무시, 잘못된 키·값은 이유와 함께 `PT_E_INVALID_ARG`), `PhysScene_PhysX.*`, `PhysXBackend.cpp`. 시험 훅은 PhysX 헤더 없는 C 함수(`Public/PhysXBackend/PhysXBackendTestHooks.h`). 어댑터 컨테이너는 `physx::PxArray`다.
+- **한 프로세스의 tolerance scale:** CreateScene이 `tolerances.length = 100 × LengthScale`(상대 1e-4)을 요구한다. 그렇지 않으면 SdkDefault 씬(m)이 UE4Compat PxPhysics(cm)에서 sleep 임계·contact offset이 100배 어긋난 채 조용히 돈다.
+- **userData:** `FPhysxUserData {Type, Index}`를 포인터 값 자체에 넣는다 (bit 32-39 Type, 0-31 Index). 할당이 없고 커지는 배열의 포인터가 무효해지지 않는다.
+- **속도 한계:** "제한 없음"은 선속도 1e16 native/s, 각속도 1e7 rad/s다 (PhysX가 1e16 초과를 거부하고 적분기가 1e7에서 자른다, NpRigidBodyTemplate.h:952, :975, DyBodyCoreIntegrator.h:123).
+- **`shape.wrapping`:** PhysX에는 래퍼 객체가 없어 같은 조건을 actor에서 읽는다 (M5 수정 라운드 0: 전에는 생성 때 `PtActorCreateInfo`로 세어 READBACK이 아니었다): `getNbShapes` ≥ 2 = compound, 단일 셰이프의 local pose(캡슐은 `U2PSphylBasis`를 뺀 값)가 actor frame이 아님 = local_transform, `getCMassLocalPose` ≠ 붙은 셰이프의 균일 밀도 기하 COM(`PxMassProperties::sum`, float 16 ulp) = offset_com, `PxCapsuleGeometry` = axis_remap.
+- **오류 bit:** 새 PhysX 보고의 PxErrorCode 값(0x2, 0x4, 0x8, 0x10, 0x20, 0x40. info·perf warning은 로그만)과 0x100(simulate/fetchResults 거부). `errors.capacity_bits` = 0x10(eOUT_OF_MEMORY). 카운터는 모듈 전역이다.
+- **dispatcher:** 씬 옵션 `CpuDispatcher=Auto`(T = 1 단일 스레드, T ≥ 2 `PxDefaultCpuDispatcherCreate(T)`) / `SingleThread` / `PxDefault`. SdkDefault는 `PxDefault`. 단일 스레드와 inline(`PxDefaultCpuDispatcherCreate(0)`)은 BoxPile 5k 600 프레임에서 `h_native`와 태스크 수(173883)가 같고 재진입 깊이는 1 (inline은 12). T = 2도 T = 1과 비트 동일했다.
+- **용량:** 힌트를 `PxSceneLimits`로 넘긴다. PhysX는 넘으면 늘리므로 용량 오류는 메모리 부족뿐이다.
+- **Prepare:** scratch 블록(256 KiB)을 4 KiB마다 한 번 써서 page fault를 미리 낸다 (§9.5).
+- **접촉:** 섬이 잠드는 스텝에 PhysX는 그 섬의 접촉을 보고하지 않는다 (M1 a: 49 프레임 4점, 50 프레임 잠듦 0점). 그래서 리스너가 있을 때(viz 또는 `PT_INSTR_CONTACTS`) 직전 스텝 보고를 복사해 두고 새로 잠든 쌍을 가져와 `PT_CONTACT_SLEEPING`으로 낸다 (Jolt M4 규칙과 같은 의미). 직전 스텝 보고의 각 점은 다음 `StartFrame`에서 한 곳에만 간다: `PUT_TO_SLEEP`으로 잠든 바디의 쌍이면 유지 목록, 아니면 직전 스텝 목록 (M5 수정 라운드 0: 전에는 두 곳 모두에 들어가 명령으로 재운 바디의 점이 두 번 나왔다, `SdkBackend.PutToSleepKeepsEachContactOnce`). 정지 PhysX 점은 Phi ≈ ±0(float)이라 하네스 섬 간선은 솔버 임펄스(ACTIVE)로도 잇는다 (§11 M5 메모).
+- **명령:** 0이 아닌 `setLinearVelocity`/`setAngularVelocity`는 autowake = false여도 잠든 바디를 깨운다 (NpRigidDynamic.cpp:253, :286, :605-622). 그래서 PhysX에서는 `SET_*_VELOCITY`와 0이 아닌 속도의 `SET_BODY_STATE`가 잠든 바디를 깨운다 (Null·Jolt는 잠든 채 속도를 유지하고, Bullet은 잠든 동안 속도를 잃는다. [Abi.md](Abi.md) §7.1, M6 검토, `SdkBackend.VelocityOfASleepingBody`).
+- **effective 정직성 (M5 수정 라운드 0):** `material.friction_combine`/`restitution_combine`은 PxMaterial마다 `getFrictionCombineMode`/`getRestitutionCombineMode`를 호스트 값과 대조한 READBACK("N of N PxMaterials hold the host's mode"), `physx.live_scenes`는 `PxPhysics::getNbScenes` READBACK. 호스트 입력과 어댑터 카운터(`physx.max_threads`, `physx.initializations`, `physx.allocator`, `physx.error_reports`, `physx.start_asleep_skipped`, `physx.error_bits`, `physx.sim_event_callback`, `physx.dispatcher_max_reentrancy`)는 SET_ONLY다 ([Abi.md](Abi.md) §5.14).
+- **dispatcher 검증 범위:** 단일 스레드 LIFO와 `PxDefaultCpuDispatcherCreate(0)`(깊이 우선 재귀)은 후속 태스크를 다른 순서로 돌린다. 해시 동일은 `M3.BoxPile`(CCD·조인트·articulation 없음)에서만 보였다. D6 조인트와 CCD가 태스크 그래프 가지를 더하므로 M9에서 D6 씬과 CCD 씬으로 단일 스레드 대 inline 해시·깊이 교차검증을 다시 돈다 (Progress M5 §5).
+- **PX_DEBUG/PX_CHECKED/PX_SUPPORT_PVD는 어댑터에 전달하지 않는다** (공개 헤더에서 레이아웃을 바꾸지 않는다, `cmake/ThirdParty/PhysX.cmake` 주석). checked 라이브러리의 PX_ASSERT는 핸들러 없이 `__debugbreak`다 (FdAssert.cpp:31-33). dbg 스위트·벤치에서 assert는 나지 않았다.
 
 ### 8.3 Jolt 5.6.0 (`FPhysScene_Jolt`) [MVP M3]
 
@@ -881,7 +899,7 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
   - EPhysicsUpdateError를 매 스텝 검사한다.
 - **동기화:** `GetBodyInterfaceNoLock` + `GetActiveBodiesUnsafe` (M3 메모).
 - **Prepare:** `OptimizeBroadPhase`.
-- **접촉:** viz 전용 listener (잡 스레드에서 잠금·할당 없이 미리 잡은 배열에 atomic 슬롯을 예약한다. M3 메모 "스냅샷", [Progress.md](Progress.md) M3 §3 #13). `Normal = -mWorldSpaceNormal`, 점마다 `Phi = -(p1 - p2)·n` (M4에서 정정. 매니폴드의 `mPenetrationDepth`는 가장 깊은 점의 값이다). impulse는 NaN이고 active 여부는 근사 플래그다. 잠든 섬의 접촉은 유지해 마지막 스텝의 플래그(Phi ≤ 0이면 `ACTIVE_APPROX`)에 `PT_CONTACT_SLEEPING`을 더해 낸다 (M4 메모. Chaos도 잠든 제약의 마지막 솔버 결과를 지우지 않아 쉬는 잠든 접촉을 활성으로 그린다).
+- **접촉:** 리스너는 viz 또는 `PT_INSTR_CONTACTS`일 때만 있다 (잡 스레드에서 잠금·할당 없이 미리 잡은 배열에 atomic 슬롯을 예약한다. M3 메모 "스냅샷", [Progress.md](Progress.md) M3 §3 #13). `Normal = -mWorldSpaceNormal`, 점마다 `Phi = -(p1 - p2)·n` (M4에서 정정. 매니폴드의 `mPenetrationDepth`는 가장 깊은 점의 값이다). impulse는 NaN이고 active 여부는 근사 플래그다. 잠든 섬의 접촉은 유지해 마지막 스텝의 플래그(Phi ≤ 0이면 `ACTIVE_APPROX`)에 `PT_CONTACT_SLEEPING`을 더해 낸다 (M4 메모. Chaos도 잠든 제약의 마지막 솔버 결과를 지우지 않아 쉬는 잠든 접촉을 활성으로 그린다).
 - **섬:** 네이티브 섬은 내부 API뿐이므로 하네스 `FIslandBuilder`를 쓴다 (§7.5).
 - **sleep 끄기 (Normalized):** 바디마다 `BodyCreationSettings::mAllowSleeping=false` (BodyCreationSettings.h:106 [V]).
 - **속도 클램프:** UEParity에서 `mMaxAngularVelocity`는 62.83으로 둔다. `mMaxLinearVelocity`(500 m/s)는 해제한다.
@@ -913,7 +931,7 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
   - `btBoxShape`: 마진은 셰이프마다 `min(0.04 m, 0.1 × minHalfExtent)`이며 `getMargin()`으로 읽어 기록한다 (§8.1)
   - `btCapsuleShapeZ` (재매핑 없음, D1 보정)
   - `btConvexHullShape` [확장 M15]
-- **COM:** body frame이 COM 주축이다.
+- **COM:** body frame이 COM 주축이다 (M5: dynamic 바디만. static·kinematic은 actor frame이고 `ReadMassProperties`는 하네스 값이다).
   - COM이 항등인 단일 요소는 셰이프를 그대로 쓴다.
   - 그 밖의 경우에만 `btCompoundShape` 자식을 inv(ComLocal)·Elem 위치에 놓고, 읽을 때 ActorTM을 복원한다.
   - 질량은 `setMassProps(m, I·1e-4)`.
@@ -921,10 +939,21 @@ M3에서 더한 것 (정본은 [Abi.md](Abi.md) §4, §5.5, §5.7, §7.1):
 - **combine:** 전역 `gCalculateCombinedFriction/RestitutionCallback`으로 UE 규칙을 적용한다 (GLOBAL_SCENE_SETTINGS). Bullet도 마찰 계수가 하나뿐이므로 (`m_combinedFriction`) 정지마찰은 Jolt와 같이 처리한다.
 - **각속도 클램프:**
   - UEParity: 62.83 rad/s를 내부 pre-tick 콜백으로 에뮬레이트한다.
-  - 하드코딩 한계 π/(2·dt) = 94.2 rad/s (btRigidBody.cpp:380-385)는 풀 수 없다. COMPILE_TIME으로 기록하고, 이 한계에 걸린 run에는 플래그를 단다.
-- **kinematic:** CF_KINEMATIC_OBJECT + 보간 transform + 속도 (`btTransformUtil::calculateVelocity`).
-- **sleep 끄기 (Normalized):** 바디마다 `DISABLE_DEACTIVATION`.
-- **디버그 드로어:** bench run에서는 붙이지 않는다. 드로어가 붙어 있으면 stepSimulation이 드로어의 `DBG_NoDeactivation` 비트로 `gDisableDeactivation`을 덮어쓴다 (btDiscreteDynamicsWorld.cpp:418-421 [V]). viz run에서만 붙이고, 그 비트를 프로필의 sleep 설정과 맞춘다.
+  - **M5 정정 [V]:** 설계가 인용한 π/(2·dt) = 94.2 rad/s 클램프(btRigidBody.cpp:380-385)는 `btRigidBody::integrateVelocities`에 있고, 이 함수는 `btSimpleDynamicsWorld`만 부른다(btSimpleDynamicsWorld.cpp:221). `btDiscreteDynamicsWorld`에 걸리는 한계는 `btTransformUtil::integrateTransform`(btTransformUtil.h:19, 44-72)이다: 스텝 회전이 `ANGULAR_MOTION_THRESHOLD` = π/4(60 Hz에서 47.1 rad/s)를 넘으면 지수 사상의 각도만 줄여 한 스텝에 2·atan((\|w\|·dt/(π/4))·tan(π/8))만 돈다 (62.83 rad/s면 60° 대신 57.9°). 속도는 그대로다. 이 문턱을 `bullet.angular_motion_threshold`(COMPILE_TIME)로, 넘은 body-step 수를 `bullet.angular_motion_limit_hits`(어댑터 post-tick이 세므로 SET_ONLY, M5 수정 라운드 0)로 기록한다. UEParity의 62.83 rad/s는 Bullet 문턱 위다.
+- **kinematic:** CF_KINEMATIC_OBJECT. M5: StartFrame이 목표로 world transform을 옮기고, 속도는 double로 계산해 pre-tick이 넣는다 (목표가 없으면 0, Chaos Reset). `btTransformUtil::calculateVelocity`는 float 쿼터니언의 acos(w)라 회전하지 않은 바디에도 약 0.04 rad/s를 만든다 [V].
+- **sleep 끄기 (Normalized):** 바디마다 `DISABLE_DEACTIVATION` (M5: kinematic에도). UEParity의 sleep 기준은 M5에서 Bullet 자신의 값(바디별 80 cm/s·1 rad/s, `gDeactivationTime` 2 s)이고 UE 임계값 매핑은 M9다.
+- **디버그 드로어:** bench run에서는 붙이지 않는다. 드로어가 붙어 있으면 stepSimulation이 드로어의 `DBG_NoDeactivation` 비트로 `gDisableDeactivation`을 덮어쓴다 (btDiscreteDynamicsWorld.cpp:418-421 [V]). viz run에서만 붙이고, 그 비트를 프로필의 sleep 설정과 맞춘다 (M9. M5는 어느 run에도 붙이지 않는다).
+
+**M5 구현 메모 [V]** ([Progress.md](Progress.md) M5 §3 B-1~B-14)
+- **파일:** `Source/Backends/BulletBackend/Private/` — `BulletIncludes.h`(SDK 헤더는 여기서만), `BulletMath.h`(단위 변환 한 곳 `GScale = GetEngineUnitScale(Bullet)`, actor ↔ COM 대수 double), `BulletCombine.h`, `PhysScene_Bullet.*`, `BulletBackend.cpp`. 어댑터 컨테이너는 `btAlignedObjectArray`다.
+- **내부 pre-tick** (btDiscreteDynamicsWorld.cpp:456-459, `saveKinematicState`·`applyGravity` 뒤, `predictUnconstraintMotion` 앞): UE 순서 감쇠(§8.1), 프로필의 선·각속도 한계(UEParity 62.83 rad/s), kinematic 속도. **post-tick:** 각속도 문턱 초과 수, 풀 peak.
+- **접촉 스냅샷:** 리스너가 없다. viz run이나 `PT_INSTR_CONTACTS`에서 캡처할 때 디스패처의 persistent manifold를 읽는다 (`listeners.installed` 0). 법선·마찰 임펄스는 실제 값(kg·cm/s), `PT_CONTACT_ACTIVE`는 정확(임펄스 > 0), Phi > 0이면 SPECULATIVE, `NativeIslandId` = `getIslandTag()`. 잠든 쌍은 narrow phase를 돌지 않아 매니폴드가 그대로 남으므로 M4의 잠든 접촉 규칙(`PT_CONTACT_SLEEPING`)이 장부 없이 성립한다. 자세를 정하는 명령(`SET_GLOBAL_POSE`, `SET_BODY_STATE`)은 그 바디의 매니폴드를 버린다 (`cleanProxyFromPairs`, Jolt `FlushKeptContactCommands`와 같은 규칙).
+- **섬:** Bullet 섬은 broad phase 쌍으로 합친다 (`btSimulationIslandManager::findUnions`). 그래서 네이티브 섬이 하네스 섬보다 크고, 섬 전체가 sleep 조건을 만족해야 잠든다.
+- **풀:** manifold 풀 = `MaxContactConstraintsHint`, collision algorithm 풀 = `MaxBodyPairsHint`(없으면 4096). heap으로 넘치면 오류 bit 0x1(manifold)/0x2(algorithm), `errors.capacity_bits` = 0x3, 벤치 종료 코드 5.
+- **contact breaking threshold (M5 수정 라운드 0):** 디스패처는 기본으로 `CD_USE_RELATIVE_CONTACT_BREAKING_THRESHOLD`다 (btCollisionDispatcher.cpp:32 [V]). 그래서 `gContactBreakingThreshold`(0.02)는 두 역할이다: 매니폴드의 breaking threshold에서는 셰이프 angular motion disc에 곱하는 무차원 계수(쌍의 두 셰이프 중 작은 값, btCollisionDispatcher.cpp:74-75, btCollisionShape.cpp:42-45 [V]. 50 cm 큐브 약 0.87 cm, 100 cm 큐브 1.73 cm)이고, AABB 팽창에서는 m 단위 길이다 (btCollisionWorld.cpp:153-160 [V]). 모듈 키 `ContactBreakingThreshold`는 Bullet이 받는 값 그대로다 (전에는 cm로 읽어 0.01을 곱했고 기본값에서만 우연히 맞았다). `contact.speculative_distance`는 엔진이 쓰는 값을 READBACK한다: 살아 있는 매니폴드의 `getContactBreakingThreshold` 범위, 없으면 dynamic 바디 셰이프의 `getContactBreakingThreshold(gContactBreakingThreshold)` 범위(그 바디 쌍의 상한). `DeactivationTime`은 0보다 커야 한다 (0이면 `wantsSleeping`이 언제나 거짓이라 sleep이 조용히 꺼진다, btRigidBody.h:522 [V]).
+- **effective 정직성 (M5 수정 라운드 0):** `bullet.debug_drawer`는 `getDebugDrawer()` READBACK, `listeners.installed`는 `gContact*Callback` 전역 5개를 읽는다. 어댑터 카운터(`bullet.angular_motion_limit_hits`, `bullet.pool_heap_fallbacks`, `bullet.start_asleep_skipped`, `bullet.engine_error_bits`)와 호스트 입력·어댑터 수(`bullet.max_threads`, `bullet.live_scenes`)는 SET_ONLY다.
+- **변형 키** (`[PhysicsTest.Backend.Bullet]`, `Bullet.Default.ini`가 Bullet 3.25 기본값을 증거 태그와 함께 명시): NumIterations 10, SolverMode 0x104, SplitImpulse, 임계 −4 cm, TurnErp 0.1, Erp2 0.2, LinearSlop 0, WarmstartingFactor 0.85, sleep 80 cm/s·1 rad/s, ForceUpdateAllAabbs, DampingModel=UE, 풀 크기 등 14개. 모듈 키는 §7.5.
+- **거동 메모:** `M3.BoxPile` 1k는 기본값(반복 10, 반발 0.3)에서 기둥이 120~300 프레임 사이에 무너진다. 반발 0 + 반복 50이면 선다. 규약 오류가 아니라 솔버 거동이다 ([Checkpoints.md](Checkpoints.md)).
 
 ## 9. 프레임/스텝 모델과 타이밍 계약
 
@@ -1050,8 +1079,8 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 | | SetUpForFrame | StartFrame | WaitPhysScenes | EndFrame | ReadBodyStates (T_pull) | Prepare (비타이밍) | bench 모드에서 금지 |
 |---|---|---|---|---|---|---|---|
 | Jolt | dt 저장, 변경 시 SetGravity | 쌓아 둔 임펄스·힘 적용 + Update(dt, 1, Temp, Jobs) | - | update error 반환 | NoLock + GetActiveBodiesUnsafe | OptimizeBroadPhase, temp 블록 pre-fault | ContactListener, ActivationListener, DebugRenderer, profiler |
-| PhysX | dt 저장, 변경 시 setGravity | simulate | fetchResults(true) | 이벤트 (viz만) / error bits | getActiveActors (SdkDefault는 전체 순회) | 없음 | eNOTIFY_* 플래그, event callback, PVD |
-| Bullet | dt 저장, 변경 시 setGravity | stepSimulation(dt, 0, dt) | - | - | COM TM × inv(ComLocal) (래핑된 바디만), isActive | 없음 | debug drawer, 내부 tick 콜백 (UEParity 클램프 제외) |
+| PhysX | dt 저장, 변경 시 setGravity | 쌓아 둔 명령 적용 + simulate(dt, nullptr, scratch, 262144) | fetchResults(true) | 이벤트 (viz만) / error bits | getActiveActors (SdkDefault는 `bEnableActiveActors=False`라 전체 순회) | scratch 블록 pre-fault (M5) | eNOTIFY_* 플래그, event callback, PVD |
+| Bullet | dt 저장, 변경 시 setGravity (잠든 바디 포함) | 쌓아 둔 명령·kinematic 목표 적용 + stepSimulation(dt, 0, dt) (내부 pre-tick: UE 순서 감쇠, 속도 한계, kinematic 속도) | - | post-tick 집계 / 풀 fallback bit | COM TM × inv(ComLocal) (dynamic 바디), isActive | 없음 | debug drawer (pre-/post-tick은 UE 모델의 일부라 bench에서도 돈다, M5) |
 | Chaos | FChaosScene::SetUpForFrame (중력은 UE처럼 매 프레임) | StartFrame | WaitPhysScenes | EndFrame | GT API X/R/V/W | 사용자 정의 (기록) | sim callback (PHASES 제외), CVD, debug draw (Test에서는 컴파일되지 않음) |
 
 **공통 규칙**
@@ -1150,8 +1179,8 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 | 항목 | UEParity | Normalized |
 |---|---|---|
 | 중력 | (0,0,-980) | 동일 |
-| damping | 0.01 / 0 (Bullet은 변환) | 0 / 0 |
-| 최대 각속도 | 62.83 rad/s (Bullet은 에뮬레이트) | 해제 (Bullet 94.2는 COMPILE_TIME으로 기록, 걸리면 플래그) |
+| damping | 0.01 / 0 (Bullet은 UE 순서를 pre-tick으로 에뮬레이트, §8.1) | 0 / 0 |
+| 최대 각속도 | 62.83 rad/s (Bullet은 에뮬레이트) | 해제 (Bullet은 속도를 clamp하지 않지만 스텝 회전이 π/4(60 Hz 47.1 rad/s)를 넘으면 회전각이 줄어든다: `bullet.angular_motion_threshold` COMPILE_TIME, 넘은 수 `bullet.angular_motion_limit_hits`. M5 정정, §8.4) |
 | 최대 선속도 | 해제 (UE에 제한 없음, Jolt 500 m/s 해제) | 해제 |
 | combine | 머티리얼 모드, 기본 Average (Jolt·Bullet은 콜백). 정지마찰은 Chaos 규칙 (§5.1). Jolt·Bullet은 동적 마찰만 | Average 강제, 정지마찰 = 동적마찰 (SF := F) |
 | restitution threshold | Chaos 네이티브 1000·dt / PhysX-UE4 200 cm/s / Jolt·Bullet은 Chaos 등가 1000·dt cm/s (사용자 확인 Q11, [04_DecisionLog.md](04_DecisionLog.md) §4) | 모든 엔진 50 cm/s (Chaos는 `p.CollisionRestitutionThreshold`를 50/dt로, 단위가 가속도라서, PBDCollisionConstraints.cpp:69 [V]) |
@@ -1182,7 +1211,8 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 ```
 after EndFrame, only on viz/capture frames, untimed
   CaptureDebugSnapshot -> ReadDebugSnapshot -> FPhysicsDebugSnapshot (cm, Chaos conventions)
-  FIslandBuilder   union-find over Phi<=0 contacts + joints, statics excluded, id = lowest body index, deterministic
+  FIslandBuilder   union-find over contacts with Phi<=0 or a solver impulse (ACTIVE, M5) + joints, statics excluded,
+                   id = lowest body index, deterministic
   DebugDraw::DrawAll, in the order of FPBDRigidsSolver::PostTickDebugDraw (PBDRigidsSolver.cpp:3417-3546 [V]):
     DrawParticleShapes -> DrawCollisions -> DrawParticleMass -> DrawParticleBounds -> DrawParticleTransforms
     -> DrawConstraintGraph (islands) -> DrawSleepState (UE: FPBDIslandManager::DebugDrawSleepState)
@@ -1279,6 +1309,13 @@ CVar 이름은 Chaos와 같다: `p.Chaos.DebugDraw.Enabled`, `p.Chaos.Solver.Deb
 - **재시작:** `FViewerSession::Open`이 씬을 만들기 전에 레지스트리 규칙을 본다. 두 번째 UE_RUNTIME 모듈, 다른 init 옵션으로 초기화된 GLOBAL_SCENE_SETTINGS 모듈, ONE_PER_PROCESS·NO_REINIT·GLOBAL_SCENE_SETTINGS 모듈의 InitGamePhys 거부는 RestartRequired다 (`ClassifyBackendSwitch`). Engines 패널의 버튼이 같은 exe를 새 선택의 명령줄로 띄우고 (`CreateProcessW`) 자신은 끝난다. 모듈은 프로세스가 끝날 때까지 내리지 않는다 (PhysX는 InitGamePhys가 한 번이다). 변형의 엔진 키는 씬 전에 빈 시험 씬으로 검사해 Fatal 대신 오류 문장을 낸다 (벤치의 preflight와 같다).
 - **카메라 [R]:** 최대 비행 속도 1000 cm/s × 속도 배율, 마우스 시점 0.25°/px, 피치 ±89°, C/Z FOV 60°/s, 비행이 아닐 때 휠 1칸 = 100 cm × 배율 전진, 왼쪽 드래그는 지면 이동 + yaw, 가운데 드래그는 팬. 설계가 정한 값(hFOV 90 major 축, near 10 cm, RMB + WASD, E/Q 월드 상하, 휠 ±10 %, 가속 20000 cm/s², 감쇠 10/s)은 단위 테스트로 고정했다.
 - **manifest:** 스크린숏마다 `<png>.json`(`schema = physicstest.viewer/1`, `mode = viz`, `timing_label`, `timing_valid_for_headline = false`, 씬·desc·options 해시, 카메라, 디버그 드로 플래그와 수, 단계별 시간)을 쓰고, `-PerfReport`는 `physicstest.viewer.perf/1`(mode viz)을 쓴다. 뷰어가 여는 씬의 `RunMode`는 언제나 Viz다.
+
+**M5 구현 메모 [V]** ([Progress.md](Progress.md) M5 §3 I-1~I-4)
+- **엔진 목록:** Bullet과 PhysX(변형 4종)가 뷰어 코드 변경 없이 레지스트리와 `Config/Profiles/Backend`에서 나타난다 (`Viewer.Headless{Bullet,PhysX}`).
+- **섬 간선:** Phi ≤ 0 **또는** `PT_CONTACT_ACTIVE`/`ACTIVE_APPROX`인 접촉이다. 정지 PhysX 점은 Phi ≈ +0(float)이고 솔버 임펄스가 있어 Phi만으로는 Normalized M1에서 섬이 생기지 않았다. Jolt는 ACTIVE_APPROX ⟺ Phi ≤ 0이라 그래프가 같다.
+- **스냅샷 인덱스:** 호스트 `FPhysicsBackendScene::CaptureDebugSnapshot`이 `BodyIndex ≥ 바디 수`(PT_INDEX_NONE 포함)인 파티클을 버리고 씬당 한 번 Error 로그를 남긴다 (`NumBodies`, `NumRejectedParticles`). `BuildParticleLookup`, `FIslandBuilder::Build`, `GatherIslands`는 `GetBodyIndexBound`로 배열 크기를 정하고 범위 밖 인덱스를 건너뛴다. 백엔드가 보낸 인덱스로 배열 크기를 정하지 않는다 (M13 Chaos 브리지도 같은 경로).
+- **재시작 (M4 이월):** PhysX와 Bullet이 GLOBAL_SCENE_SETTINGS라 이제 실제로 일어난다. UE4Compat 계열 ini는 init 키를 적지 않으므로(§7.5) "(Default / none)" ↔ UE4Compat ↔ -TGS ↔ -Stab는 같은 프로세스, SdkDefault ↔ 나머지는 RestartRequired다 (`Viewer.PhysXVariantSwitchRules`). 콘솔 명령 `open <Backend> [<Variant>|-]`(Apply와 같은 경로)과 `restart`(Engines 패널 버튼과 같은 `RequestRestart`), 그리고 그 명령을 프레임마다 하나씩 실행하는 `-ViewerCmds=`를 더했다. `-Headless` 프로세스의 재실행은 자동 실행의 일부라 `-Headless`와 실행 제어(`-Frames`, `-WarmupFrames`, `-Paused`, `-Exit`, `-Screenshot`, `-PerfReport`, `-Camera`, `-WaitGpu`)를 넘기고, 자식을 `CREATE_NO_WINDOW` + 표준 핸들 상속으로 띄워 끝날 때까지 기다린 뒤 그 종료 코드로 끝난다. 창 모드의 재실행은 그대로 실행 제어를 넘기지 않고 새 창을 띄운 뒤 끝난다. `-ViewerCmds`는 넘기지 않는다. CTest `Viewer.HeadlessRestart`가 PhysX UE4Compat → -TGS(같은 프로세스) → SdkDefault(RestartRequired) → `restart` → 자식이 SdkDefault로 스크린숏을 쓰고 0으로 끝나는 것을 확인한다.
+- **`-PerfReport`:** 헤드리스에서는 `vsync`를 false로 쓴다 (M4 경미 지적).
 
 **2단계 [확장 M12]**
 - **레이아웃:** SideBySide / GhostOverlay (엔진별 tint + COM 궤적).
@@ -1510,7 +1547,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 | G4 | `S05.RestitutionCombine` (e 0.8, 임계 50 cm/s) | 아래 "반발 게이트" 참고. 바닥 e=0일 때 Average 0.4, Multiply 0, Max 0.8 (e 기준, apex 비로는 0.16 / 0 / 0.64) | MVP M6 |
 | G5 | `S06.FrictionSlide` (v0 500, μ 0.5) | 정지 거리 250.947 cm ±1% (dt_engine 기준 이산해, 연속해 255.10). 30° 경사에서 μ≥0.6은 정지, ≤0.55는 미끄러짐 | MVP M6 |
 | G6 | sleep 계약 | Normalized: 정지 600 프레임 동안 sleep 0. UEParity: `S08.StartAsleep`의 `bStartAwake=false` dynamic 바디가 frame 0 ReadBodyStates에서 Sleeping (§6 순서 검증, PhysX putToSleep 포함). `S08`은 UEParity에서만 돈다 (Normalized는 5단계를 건너뜀, §6) | MVP M6 |
-| G7 | `S07.ClampProbe` (ω0 50/80/120) | UEParity에서 62.83 ±0.01. Normalized는 해제 (Bullet 94.2는 문서화된 예외) | MVP M6 |
+| G7 | `S07.ClampProbe` (ω0 50/80/120) | UEParity에서 62.83 ±0.01. Normalized는 해제 (Bullet: 속도는 해제되지만 47.1 rad/s 위에서 스텝 회전각이 줄어드는 것이 문서화된 예외, §8.4 M5 정정) | MVP M6 |
 | G8 | DET1 | fresh process 3회에서 h_native 동일 | 확장 M7 |
 | G9 | effective readback | READBACK 키 전부 일치. `M3.BoxPile` 1k에서 `shape.wrapping` 합계 0 | MVP M6 |
 | G10a | bench 위생 | listeners 0, 드로어 분리, 계측 tier 0 | 확장 M7 |

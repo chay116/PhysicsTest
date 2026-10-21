@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 #include <fstream>
 #include <vector>
@@ -167,6 +168,9 @@ namespace PhysicsTest
 		bool bWin32Backend = false;
 		bool bRequestExit = false;
 		bool bCameraPlaced = false;
+		// A headless relaunch ran and ended (ProcessRequests): the child wrote the run's outputs (-PerfReport, -Screenshot are
+		// forwarded to it), so this process must not overwrite them with its few frames before the restart.
+		bool bRelaunchedHeadless = false;
 		int32 ExitCode = 0;
 		int32 PendingWidth = 0;
 		int32 PendingHeight = 0;
@@ -181,6 +185,7 @@ namespace PhysicsTest
 		std::vector<double> SampleSnapshotMs;
 		std::vector<double> SampleDrawAllMs;
 		double LastScreenshotMs = -1.0;             // the -Screenshot capture, excluded from FrameMs
+		size_t NextViewerCommand = 0;               // -ViewerCmds: the next one to run
 		std::vector<double> RecentSnapshotDrawMs;   // ring of the last GRollingFrames "snapshot + draw" values (Stats median)
 		size_t RecentSnapshotDrawNext = 0;
 
@@ -281,6 +286,12 @@ namespace PhysicsTest
 				Options.Camera[Index] = std::atof(Parts[Index].c_str());
 			}
 			Options.bHasCamera = true;
+		}
+		// -ViewerCmds: viewer console commands, run one per rendered frame (Tick, before the editor's requests) - M5's scripted
+		// engine switch and restart path. Not forwarded to a relaunched process (GetForwardedSwitches).
+		if (FParse::Value(Cmd, "ViewerCmds=", Text, false))
+		{
+			Options.ViewerCommands = SplitList(Text, ',');
 		}
 		// -ExecCmds: the viewer's own console variables (debug draw) now; the resolver applies the physics ones per scene.
 		if (FParse::Value(Cmd, "ExecCmds=", Text, false))
@@ -663,6 +674,13 @@ namespace PhysicsTest
 			I.SampleDrawAllMs.push_back(I.Viewport.GetTimings().DrawAllMs);
 		}
 
+		// -ViewerCmds: the next command, as if typed into the Console panel during this frame.
+		if (I.NextViewerCommand < I.Options.ViewerCommands.size())
+		{
+			const std::string& Command = I.Options.ViewerCommands[I.NextViewerCommand++];
+			UE_LOG(LogViewer, Display, "viewer command: %s", Command.c_str());
+			I.Editor.ExecuteConsoleCommand(Command, I.Session);
+		}
 		I.ProcessRequests();
 		if (bLastFrame)
 		{
@@ -714,11 +732,35 @@ namespace PhysicsTest
 			STARTUPINFOW Startup = {};
 			Startup.cb = sizeof(Startup);
 			PROCESS_INFORMATION Process = {};
-			if (CreateProcessW(nullptr, Line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &Startup, &Process))
+			// Headless (M5): the relaunch is part of an automated run - no console window, this process's stdout / stderr, and
+			// this process waits for it and returns its exit code. Windowed: the new viewer runs on its own.
+			BOOL bInheritHandles = FALSE;
+			DWORD CreationFlags = 0;
+			if (Options.bHeadless)
+			{
+				Startup.dwFlags = STARTF_USESTDHANDLES;
+				Startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+				Startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+				Startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+				bInheritHandles = TRUE;
+				CreationFlags = CREATE_NO_WINDOW;
+			}
+			UE_LOG(LogViewer, Display, "restarting: %s", CommandLine.c_str());
+			std::fflush(stdout);
+			std::fflush(stderr);
+			if (CreateProcessW(nullptr, Line.data(), nullptr, nullptr, bInheritHandles, CreationFlags, nullptr, nullptr, &Startup, &Process))
 			{
 				CloseHandle(Process.hThread);
+				if (Options.bHeadless)
+				{
+					WaitForSingleObject(Process.hProcess, INFINITE);
+					DWORD ChildExitCode = 1;
+					GetExitCodeProcess(Process.hProcess, &ChildExitCode);
+					ExitCode = static_cast<int32>(ChildExitCode);
+					bRelaunchedHeadless = true;
+					UE_LOG(LogViewer, Display, "the relaunched viewer exited with %d", ExitCode);
+				}
 				CloseHandle(Process.hProcess);
-				UE_LOG(LogViewer, Display, "restarting: %s", CommandLine.c_str());
 				bRequestExit = true;
 			}
 			else
@@ -851,7 +893,7 @@ namespace PhysicsTest
 		Report["harness"] = { { "git_sha", PT_BUILD_GIT_SHA }, { "preset", PT_BUILD_PRESET }, { "configuration", PT_BUILD_CONFIGURATION } };
 		Report["scene"] = MakeSceneJson();
 		Report["view"] = { { "width", RHI.GetWidth() }, { "height", RHI.GetHeight() }, { "msaa", RHI.GetMsaaSamples() }, { "adapter", RHI.GetAdapterName() },
-			{ "headless", Options.bHeadless }, { "wait_for_gpu_each_frame", Options.bWaitForGpu }, { "vsync", Options.bVSync } };
+			{ "headless", Options.bHeadless }, { "wait_for_gpu_each_frame", Options.bWaitForGpu }, { "vsync", Options.bVSync && !Options.bHeadless } };
 		Report["frames"] = SampleFrameMs.size();
 		// The first frames build the buffers and the ImGui font atlas: summarise frames 10.. when there are enough.
 		const size_t Skip = SampleFrameMs.size() > 20 ? 10 : 0;
@@ -913,7 +955,14 @@ namespace PhysicsTest
 		FImpl& I = *Impl;
 		if (!I.Options.PerfReport.empty() && I.Renderer)
 		{
-			I.WritePerfReport();
+			if (I.bRelaunchedHeadless)
+			{
+				UE_LOG(LogViewer, Display, "perf: not written by this process - the relaunched viewer wrote %s", StringConv::PathToUtf8(I.Options.PerfReport).c_str());
+			}
+			else
+			{
+				I.WritePerfReport();
+			}
 		}
 		I.Session.Close();
 		// Modules: every initialised one gets its TermGamePhys (no scene is alive any more), also a module an Open initialised

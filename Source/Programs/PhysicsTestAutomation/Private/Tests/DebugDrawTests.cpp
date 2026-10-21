@@ -540,6 +540,61 @@ TEST_CASE("PhysicsTest.DebugDraw.IslandBuilder")
 	CHECK(JointOnly.HarnessIslandIndex[1] == 1);
 	CHECK(JointOnly.HarnessIslandIndex[2] == 1);
 	CHECK(JointOnly.HarnessIslandIndex[3] == INDEX_NONE);
+	// M5: a point the solver pushed on is an edge whatever its Phi (a resting PhysX point is Phi ~ +0 with an impulse); a
+	// speculative point without one is not.
+	FPhysicsDebugSnapshot Resting;
+	Resting.Particles = Snapshot.Particles;
+	Resting.Contacts = { MakeContact(3, 0, FVector(), 1.0e-5, PT_CONTACT_ACTIVE), MakeContact(5, 3, FVector(), 0.5, PT_CONTACT_SPECULATIVE) };
+	FIslandBuilder::Build(Resting, {});
+	CHECK(Resting.HarnessIslandIndex[3] == 3);
+	CHECK(Resting.HarnessIslandIndex[5] == INDEX_NONE);
+}
+
+// M5 (M4 carry-over (2)): a backend-reported BodyIndex never sizes an array. PT_INDEX_NONE and indices at or beyond the
+// snapshot's body bound are skipped by BuildParticleLookup, FIslandBuilder::Build and GatherIslands (the host capture drops
+// them before, FPhysicsBackendScene::CaptureDebugSnapshot; a hand-made snapshot without NumBodies ignores PT_INDEX_NONE).
+TEST_CASE("PhysicsTest.DebugDraw.SnapshotBodyIndexBounds")
+{
+	FPhysicsDebugSnapshot Snapshot;
+	const uint32 Indices[] = { 0, 1, PT_INDEX_NONE, 2, 0x7FFFFFFFu };
+	const uint8 States[] = { 3, 4, 4, 4, 4 };
+	for (size_t Slot = 0; Slot < std::size(Indices); ++Slot)
+	{
+		PtParticleSnapshot Particle = {};
+		Particle.BodyIndex = Indices[Slot];
+		Particle.ObjectState = States[Slot];
+		Snapshot.Particles.push_back(Particle);
+	}
+	Snapshot.Contacts = { MakeContact(1, 0, FVector(), -1.0, PT_CONTACT_ACTIVE), MakeContact(2, 1, FVector(), -1.0, PT_CONTACT_ACTIVE),
+		MakeContact(0x7FFFFFFFu, 1, FVector(), -1.0, PT_CONTACT_ACTIVE), MakeContact(PT_INDEX_NONE, 2, FVector(), -1.0, PT_CONTACT_ACTIVE) };
+	Snapshot.NumBodies = 3;   // as the host capture sets it
+	CHECK(GetBodyIndexBound(Snapshot) == 3u);
+	std::vector<int32> ParticleOfBody;
+	DebugDraw::BuildParticleLookup(Snapshot, ParticleOfBody);
+	CHECK(ParticleOfBody == std::vector<int32>{ 0, 1, 3 });
+	FIslandBuilder::Build(Snapshot, {});
+	CHECK(Snapshot.HarnessIslandIndex == std::vector<int32>{ INDEX_NONE, 1, INDEX_NONE, 1, INDEX_NONE });
+	std::vector<FHarnessIsland> Islands;
+	FIslandBuilder::GatherIslands(Snapshot, Islands);
+	REQUIRE(Islands.size() == 1u);
+	CHECK(Islands[0].Id == 1);
+	CHECK(Islands[0].NumParticles == 2);
+	// Without NumBodies (a hand-made snapshot) the bound comes from the particles, PT_INDEX_NONE excluded; a garbage index far
+	// beyond the particle count (0x7FFFFFFF above, 0x7FFFFFFE here) is skipped too, never sized (M5 round 0).
+	Snapshot.NumBodies = 0;
+	CHECK(GetBodyIndexBound(Snapshot) == 3u);
+	Snapshot.Particles[4].BodyIndex = 0x7FFFFFFEu;
+	CHECK(GetBodyIndexBound(Snapshot) == 3u);
+	DebugDraw::BuildParticleLookup(Snapshot, ParticleOfBody);
+	CHECK(ParticleOfBody == std::vector<int32>{ 0, 1, 3 });
+	Snapshot.Particles[4].BodyIndex = 2u * 5u + static_cast<uint32>(GHandMadeBodyIndexSlack) - 1u;   // the largest plausible index
+	CHECK(GetBodyIndexBound(Snapshot) == 2u * 5u + static_cast<uint32>(GHandMadeBodyIndexSlack));
+	Snapshot.Particles[4].BodyIndex = 4;
+	CHECK(GetBodyIndexBound(Snapshot) == 5u);
+	DebugDraw::BuildParticleLookup(Snapshot, ParticleOfBody);
+	CHECK(ParticleOfBody == std::vector<int32>{ 0, 1, 3, INDEX_NONE, 4 });
+	FIslandBuilder::Build(Snapshot, {});
+	CHECK(Snapshot.HarnessIslandIndex[2] == INDEX_NONE);
 }
 
 // Chaos::FDebugDrawQueue cost and FChaosDDFrame region / budget (p.Chaos.DebugDraw.MaxLines 20000, .Radius 3000 cm).

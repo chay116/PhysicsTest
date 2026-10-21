@@ -7,8 +7,8 @@
 //   Inspector  the outliner (every body) and the details of the selected one (UE's Outliner + Details in one panel)
 //   Stats      "stat ChaosCounters" names (NumBodies, NumDynamicBodies, ..., NumManifoldPoints), the viewer timings - every
 //              one labelled "viz mode, not a benchmark" - and the debug draw budget
-//   Console    console variables / commands (p.Chaos.*, "stat ChaosCounters", pause / step / reset); the harness physics
-//              CVars are shown read-only (the scene's resolved config owns them)
+//   Console    console variables / commands (p.Chaos.*, "stat ChaosCounters", pause / step / reset, open <Backend>
+//              [<Variant>], restart); the harness physics CVars are shown read-only (the scene's resolved config owns them)
 // The editor only records requests (open, reset, screenshot, restart, exit); the app carries them out between frames.
 #pragma once
 
@@ -72,7 +72,9 @@ namespace PhysicsTest
 
 		// The outcome of the last Open, shown in the Engines panel (RestartRequired offers the relaunch).
 		void SetOpenResult(EViewerOpenResult Result, const std::string& Message, const FViewerSelection& Requested);
-		// Runs one console line (also the app's -ExecCmds and the Console panel). Returns false for an unknown command.
+		// Runs one console line (the Console panel, and the app's -ViewerCmds one per frame). Returns false for an unknown
+		// command. "open <Backend> [<Variant>|-]" requests the current selection on another backend / variant (as Apply),
+		// "restart" relaunches with the last RestartRequired selection (as the Engines panel's button; M5).
 		bool ExecuteConsoleCommand(const std::string& Line, FViewerSession& Session);
 		void AddLog(const std::string& Line);
 
@@ -102,6 +104,8 @@ namespace PhysicsTest
 		void DrawInspectorPanel(FEditorContext& Context);
 		void DrawStatsPanel(FEditorContext& Context);
 		void DrawConsolePanel(FEditorContext& Context);
+		// The restart request of the last RestartRequired selection with this process's forwarded switches (button and console).
+		void RequestRestart();
 
 		FViewerSelection Pending;            // what the Engines panel edits
 		bool bPendingInitialised = false;

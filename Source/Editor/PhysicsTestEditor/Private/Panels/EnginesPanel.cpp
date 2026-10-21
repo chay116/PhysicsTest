@@ -158,9 +158,7 @@ namespace PhysicsTest
 			ImGui::TextWrapped("%s", LastOpenMessage.c_str());
 			if (ImGui::Button("Restart the viewer with this selection"))
 			{
-				// The new selection plus this process's session switches (-ini:, -ExecCmds, -ConfigDir, -ResX/-ResY, -NoVSync, ...).
-				RestartCommandLine = FViewerSession::MakeCommandLine(LastRequested, FViewerSession::GetForwardedSwitches(FCommandLine::Get()));
-				bRestartRequested = true;
+				RequestRestart();
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel"))

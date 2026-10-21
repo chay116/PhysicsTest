@@ -190,7 +190,9 @@ namespace PhysicsTest
 			return false;
 		}
 		OutFiles.ProfileSha256 = Profile.Sha256();
-		// The backend variant: the given name, else <Backend>.Default when that file exists, else none.
+		// The backend variant: the given name, else <Backend>.Default when that file exists, else the one <Backend>.*.ini whose
+		// [PhysicsTest.Variant] says DefaultForEngine=True (M5 round 0: PhysX.UE4Compat, so that every PhysX run carries a
+		// variant label and fidelity notes, 02 8.2), else none.
 		FBackendVariant Variant;
 		bool bHasVariant = false;
 		std::string VariantName = Spec.BackendProfile;
@@ -198,6 +200,34 @@ namespace PhysicsTest
 		if (VariantName.empty() && std::filesystem::exists(ConfigDir / "Profiles" / "Backend" / (Spec.Backend + ".Default.ini"), Ignored))
 		{
 			VariantName = "Default";
+		}
+		if (VariantName.empty() && !Spec.Backend.empty())
+		{
+			const std::string Prefix = Spec.Backend + ".";
+			for (const std::filesystem::directory_entry& Entry : std::filesystem::directory_iterator(ConfigDir / "Profiles" / "Backend", Ignored))
+			{
+				const std::string Stem = StringConv::PathToUtf8(Entry.path().stem());
+				if (Entry.path().extension() != ".ini" || Stem.size() <= Prefix.size() || Stem.compare(0, Prefix.size(), Prefix) != 0)
+				{
+					continue;
+				}
+				FBackendVariant Candidate;
+				if (!FBackendVariant::LoadIni(StringConv::PathToUtf8(Entry.path()), Candidate, Error))
+				{
+					OutError = "backend variant '" + Stem + "': " + Error;
+					return false;
+				}
+				if (!Candidate.bDefaultForEngine || Candidate.Engine != Spec.Backend)
+				{
+					continue;
+				}
+				if (!VariantName.empty())
+				{
+					OutError = "backend variants '" + Spec.Backend + "." + VariantName + "' and '" + Stem + "' both say DefaultForEngine=True";
+					return false;
+				}
+				VariantName = Stem.substr(Prefix.size());
+			}
 		}
 		if (!VariantName.empty())
 		{

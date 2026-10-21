@@ -1,4 +1,4 @@
-// PtShapeWrapping.h - the shared COM-wrapping decision (02_Architecture 8.1, DL42, A.4). [MVP M3]
+// PtShapeWrapping.h - the shared COM-wrapping decision (02_Architecture 8.1, DL42, A.4). [MVP M3, compound kinds M5]
 // Every SDK backend applies the same rule: a body with ONE collision element whose element frame and COM frame are both
 // (nearly) the actor frame uses the engine's native primitive directly (Jolt BoxShape / SphereShape, btBoxShape,
 // PxBoxGeometry). Anything else is wrapped (Jolt OffsetCenterOfMassShape / StaticCompoundShape / RotatedTranslatedShape,
@@ -55,5 +55,47 @@ inline namespace PT_BACKEND_NS
 
 		uint32 Total() const { return Compound + LocalTransform + OffsetCom + AxisRemap; }
 	};
+
+	// The wrapper kind of a body on an engine whose only wrapper is a compound with placed children and whose body frame is
+	// the COM principal frame (Bullet: btCompoundShape children at inv(ComLocal) * Elem, 02 8.4). Several elements are a
+	// Compound (the children carry the COM offset, nothing else is counted); one element needs a one-child compound when the
+	// COM frame is not the actor frame (OffsetCom) or, with the COM frame at the actor frame, when the element itself is
+	// placed (LocalTransform); otherwise it is the native primitive (None). An engine capsule axis other than UE's Z is an
+	// additional AxisRemap the caller counts (Bullet: btCapsuleShapeZ, never).
+	enum class EShapeWrapKind : uint8
+	{
+		None,
+		Compound,
+		LocalTransform,
+		OffsetCom,
+	};
+
+	inline EShapeWrapKind ClassifyCompoundWrapping(const PtActorCreateInfo& Actor, const PtShapeElem* FirstShape)
+	{
+		if (Actor.NumShapes > 1)
+		{
+			return EShapeWrapKind::Compound;
+		}
+		if (!IsComLocalIdentity(Actor.CenterOfMassLocal))
+		{
+			return EShapeWrapKind::OffsetCom;
+		}
+		if (FirstShape != nullptr && !IsNearlyIdentityTransform(FirstShape->LocalTransform))
+		{
+			return EShapeWrapKind::LocalTransform;
+		}
+		return EShapeWrapKind::None;
+	}
+
+	inline void CountWrapping(FShapeWrappingCounts& InOut, const EShapeWrapKind Kind)
+	{
+		switch (Kind)
+		{
+		case EShapeWrapKind::Compound: ++InOut.Compound; break;
+		case EShapeWrapKind::LocalTransform: ++InOut.LocalTransform; break;
+		case EShapeWrapKind::OffsetCom: ++InOut.OffsetCom; break;
+		case EShapeWrapKind::None: break;
+		}
+	}
 }
 }

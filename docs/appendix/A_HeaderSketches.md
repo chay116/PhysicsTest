@@ -1950,7 +1950,10 @@ class FPhysScene_Bullet final : public PhysicsTest::Abi::IPhysicsBackendScene {
   // Capsule: btCapsuleShapeZ, no remap (D1 amendment).
   // Combine: global gCalculateCombinedFriction / RestitutionCallback -> CombinePairFriction(...).Dynamic (GLOBAL_SCENE_SETTINGS);
   //   one coefficient per pair (m_combinedFriction) -> material.static_friction_rule=dynamic_only.
-  // Damping: UEDampingToBullet. Angular clamp: UEParity emulates 62.83 rad/s; pi/(2*dt) is COMPILE_TIME (btRigidBody.cpp:380-385 [V]).
+  // Damping (M5): Bullet damping 0 + the internal pre-tick sets UEOrderPreSolveVelocity (UE order; DampingModel=Converted keeps
+  //   UEDampingToBullet). Angular clamp: UEParity emulates 62.83 rad/s; Bullet's own limit is integrateTransform's pi/4 per step
+  //   (47.1 rad/s at 60 Hz, an angle cap, not a velocity clamp; btTransformUtil.h:19, 44-72 [V]), COMPILE_TIME. M5 correction:
+  //   the pi/(2*dt) of btRigidBody.cpp:380-385 is integrateVelocities, which btDiscreteDynamicsWorld never calls.
   // Debug drawer: attached in viz runs only, DBG_NoDeactivation mirrored from the profile, because stepSimulation
   //   overwrites gDisableDeactivation from it (btDiscreteDynamicsWorld.cpp:418-421 [V]).
   // Sleep off (Normalized): DISABLE_DEACTIVATION.

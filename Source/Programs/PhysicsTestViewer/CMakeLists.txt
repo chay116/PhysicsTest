@@ -40,21 +40,59 @@ set_tests_properties(PhysicsTest.Unit.ViewerRenderer PROPERTIES
 	SKIP_REGULAR_EXPRESSION "PT_SKIPPED: no hardware D3D11 device")
 
 # Headless smoke (no window, offscreen D3D11): the viewer opens a scene, renders, writes the PNG and its mode-viz manifest,
-# and exits 0. Null (host snapshot) and, when built, Jolt (backend snapshot, contacts, islands).
+# and exits 0. Null (host snapshot) and every SDK backend (backend snapshot, contacts, islands); M5 adds Bullet and PhysX
+# (variant UE4Compat) without a viewer code change. Entries: <test suffix>|<backend>|<variant or ->.
 set(_pt_viewer_shots "${CMAKE_BINARY_DIR}/_viewer")
-set(_pt_viewer_backends Null)
+set(_pt_viewer_backends "Null|Null|-")
 if(PT_WITH_JOLT)
-	list(APPEND _pt_viewer_backends Jolt)
+	list(APPEND _pt_viewer_backends "Jolt|Jolt|-")
 endif()
-foreach(_backend IN LISTS _pt_viewer_backends)
-	pt_add_script_test(PhysicsTest.Viewer.Headless${_backend}
+if(PT_WITH_BULLET)
+	list(APPEND _pt_viewer_backends "Bullet|Bullet|-")
+endif()
+if(PT_WITH_PHYSX)
+	list(APPEND _pt_viewer_backends "PhysX|PhysX|UE4Compat")
+endif()
+foreach(_entry IN LISTS _pt_viewer_backends)
+	string(REPLACE "|" ";" _parts "${_entry}")
+	list(GET _parts 0 _name)
+	list(GET _parts 1 _backend)
+	list(GET _parts 2 _variant)
+	set(_variant_arg "")
+	set(_variant_regex "")
+	if(NOT _variant STREQUAL "-")
+		set(_variant_arg "|-BackendProfile=${_variant}")
+		set(_variant_regex ".*.variant.: .${_variant}.")
+	endif()
+	pt_add_script_test(PhysicsTest.Viewer.Headless${_name}
 		SCRIPT "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake"
-		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestViewer>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=screenshot .*Headless${_backend}[.]png"
-			"-DPT_ARGS=-Headless|-Backend=${_backend}|-Scenario=M1.SingleBoxDrop|-WarmupFrames=120|-Paused|-Frames=3|-ResX=800|-ResY=450|-ExecCmds=p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.Solver.DebugDrawTransforms 1, p.Chaos.Solver.DebugDrawIslands 1|-Screenshot=${_pt_viewer_shots}/Headless${_backend}.png"
-			"-DPT_EXPECT_FILE=${_pt_viewer_shots}/Headless${_backend}.png.json"
-			"-DPT_EXPECT_FILE_REGEX=.mode.: .viz.*.timing_label.: .viz mode, not a benchmark.*.backend.: .${_backend}.*.frame.: 120"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestViewer>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=screenshot .*Headless${_name}[.]png"
+			"-DPT_ARGS=-Headless|-Backend=${_backend}${_variant_arg}|-Scenario=M1.SingleBoxDrop|-WarmupFrames=120|-Paused|-Frames=3|-ResX=800|-ResY=450|-ExecCmds=p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.Solver.DebugDrawTransforms 1, p.Chaos.Solver.DebugDrawIslands 1|-Screenshot=${_pt_viewer_shots}/Headless${_name}.png"
+			"-DPT_EXPECT_FILE=${_pt_viewer_shots}/Headless${_name}.png.json"
+			"-DPT_EXPECT_FILE_REGEX=.mode.: .viz.*.timing_label.: .viz mode, not a benchmark.*.backend.: .${_backend}.${_variant_regex}.*.frame.: 120"
 		LABELS "viewer")
 	# No hardware D3D11 device (a GPU-less CI host; WARP arrives in M12): skipped, not failed. The viewer logs the failing
 	# D3D11CreateDevice call and exits non-zero; the script echoes the output, which this property matches.
-	set_tests_properties(PhysicsTest.Viewer.Headless${_backend} PROPERTIES SKIP_REGULAR_EXPRESSION "D3D11CreateDevice [(]hardware")
+	set_tests_properties(PhysicsTest.Viewer.Headless${_name} PROPERTIES SKIP_REGULAR_EXPRESSION "D3D11CreateDevice [(]hardware")
 endforeach()
+
+# M5 (M4 carry-over (1)): the "restart required" relaunch end to end, headless. PhysX UE4Compat -> UE4Compat-TGS switches in
+# this process (one PxPhysics, same (100, 1000)); -> SdkDefault is RestartRequired (PxTolerancesScale (1, 10) is
+# process-wide); "restart" relaunches the viewer headless with the SdkDefault selection and this run's run control (no window,
+# no console window, same stdout), waits for it and returns its exit code. The output regex checks both halves of the 03 1.6
+# rule in order: the TGS switch opens in this process, then SdkDefault needs the restart. The child writes the screenshot,
+# its manifest and the -PerfReport (variant SdkDefault, frame 4 and 4 rendered frames: the child runs -Frames=4 on its own
+# fresh scene); the parent, which rendered 3 frames before the restart, must not overwrite the report (M5 round 0).
+if(PT_WITH_PHYSX)
+	pt_add_script_test(PhysicsTest.Viewer.HeadlessRestart
+		SCRIPT "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestViewer>" -DPT_EXPECT_RC=0
+			"-DPT_EXPECT_REGEX=opened M1.SingleBoxDrop on PhysX [(][^/]*/ UE4Compat-TGS[)].*open PhysX / SdkDefault: RestartRequired.*GLOBAL_SCENE_SETTINGS.*restarting: -Backend=PhysX -BackendProfile=SdkDefault .*-Headless.*opened M1.SingleBoxDrop on PhysX [(][^/]*/ SdkDefault[)].*screenshot .*HeadlessRestart[.]png.*the relaunched viewer exited with 0"
+			"-DPT_ARGS=-Headless|-Backend=PhysX|-BackendProfile=UE4Compat|-Scenario=M1.SingleBoxDrop|-Frames=4|-ResX=640|-ResY=360|-ViewerCmds=open PhysX UE4Compat-TGS, open PhysX SdkDefault, restart|-Screenshot=${_pt_viewer_shots}/HeadlessRestart.png|-PerfReport=${_pt_viewer_shots}/HeadlessRestart.perf.json"
+			"-DPT_EXPECT_FILE=${_pt_viewer_shots}/HeadlessRestart.png.json"
+			"-DPT_EXPECT_FILE_REGEX=.mode.: .viz.*.backend.: .PhysX.*.variant.: .SdkDefault.*.frame.: 4,"
+			"-DPT_EXPECT_FILE2=${_pt_viewer_shots}/HeadlessRestart.perf.json"
+			"-DPT_EXPECT_FILE2_REGEX=.scene.: [{].*.variant.: .SdkDefault.*.frame.: 4,.*.frames.: 4,"
+		LABELS "viewer")
+	set_tests_properties(PhysicsTest.Viewer.HeadlessRestart PROPERTIES SKIP_REGULAR_EXPRESSION "D3D11CreateDevice [(]hardware")
+endif()

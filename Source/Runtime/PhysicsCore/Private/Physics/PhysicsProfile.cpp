@@ -1032,6 +1032,12 @@ namespace PhysicsTest
 		}
 		Out.Ini.GetString(ConfigSections::VariantMeta, "Label", Out.Label);
 		Out.Ini.GetArray(ConfigSections::VariantMeta, "FidelityNotes", Out.FidelityNotes);
+		std::string DefaultText;
+		if (Out.Ini.GetString(ConfigSections::VariantMeta, "DefaultForEngine", DefaultText) && !Out.Ini.GetBool(ConfigSections::VariantMeta, "DefaultForEngine", Out.bDefaultForEngine))
+		{
+			OutError = DisplayName + ": [" + std::string(ConfigSections::VariantMeta) + "] DefaultForEngine must be True or False, not '" + DefaultText + "'";
+			return false;
+		}
 		return true;
 	}
 

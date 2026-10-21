@@ -232,6 +232,8 @@ namespace PhysicsTest
 		[[nodiscard]] uint32 GetNumBodies() const { return static_cast<uint32>(BodiesByIndex.size()); }
 		[[nodiscard]] FBodyInstance* GetBody(const uint32 Index) const { return Index < BodiesByIndex.size() ? BodiesByIndex[Index] : nullptr; }
 		[[nodiscard]] std::string GetLastErrorMessage() const { return Module->GetLastErrorMessage(); }
+		// How often CaptureDebugSnapshot logged a rejected particle BodyIndex (once per scene at most; a unit test reads it).
+		[[nodiscard]] uint32 GetNumSnapshotIndexErrorLogs() const { return NumSnapshotIndexErrorLogs; }
 
 	private:
 		FPhysicsBackendScene() = default;
@@ -245,6 +247,7 @@ namespace PhysicsTest
 		std::vector<PtBodyCommand> PendingCommands;
 		std::vector<uint32> PullIndices;
 		std::vector<PtBodyState> PullStates;
+		uint32 NumSnapshotIndexErrorLogs = 0;   // CaptureDebugSnapshot: an invalid particle BodyIndex is logged once per scene
 	};
 
 	// PtBodyState -> FBodyInstanceState (cm, cm/s, rad/s; the object state values are shared).

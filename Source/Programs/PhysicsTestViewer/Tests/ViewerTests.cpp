@@ -335,14 +335,21 @@ TEST_CASE("PhysicsTest.Viewer.RestartRequiredRules")
 	Selection.Params = { { "N", "5000" } };
 	Selection.Threads = 4;
 	CHECK(FViewerSession::MakeCommandLine(Selection, "-NoVSync") == "-Backend=PhysX -BackendProfile=SdkDefault -Profile=UEParity -Scenario=M3.BoxPile -Param:N=5000 -Threads=4 -NoVSync");
-	// ... plus the session switches of the running process, verbatim (quotes kept); selection and run control are not
-	// carried over (the new selection replaces the old one, a restart is an interactive session).
+	// ... plus the session switches of the running process, verbatim (quotes kept); selection, run control and -ViewerCmds
+	// are not carried over from a windowed process (the new selection replaces the old one, a restart is interactive).
 	const char* const Running = "-Backend=Jolt -Scenario=M1.SingleBoxDrop -Param:N=10 -ini:Engine:[/Script/Engine.PhysicsSettings]:DefaultGravityZ=-490 "
-		"-ExecCmds=\"p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.DebugDraw.Radius 0\" -ConfigDir=\"D:/My Config\" -ResX=1280 -ResY=720 -NoVSync -Headless "
-		"-Frames=60 -Exit -Paused -WarmupFrames=10 -Screenshot=\"C:/a b.png\" -Camera=1,2,3,4,5 -UI=Stats,Engines -D3DDebug";
+		"-ExecCmds=\"p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.DebugDraw.Radius 0\" -ConfigDir=\"D:/My Config\" -ResX=1280 -ResY=720 -NoVSync "
+		"-Frames=60 -Exit -Paused -WarmupFrames=10 -Screenshot=\"C:/a b.png\" -Camera=1,2,3,4,5 -UI=Stats,Engines -D3DDebug -ViewerCmds=\"open PhysX SdkDefault, restart\"";
 	const std::string Forwarded = FViewerSession::GetForwardedSwitches(Running);
 	CHECK(Forwarded == "-ini:Engine:[/Script/Engine.PhysicsSettings]:DefaultGravityZ=-490 -ExecCmds=\"p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.DebugDraw.Radius 0\" "
 		"-ConfigDir=\"D:/My Config\" -ResX=1280 -ResY=720 -NoVSync -UI=Stats,Engines -D3DDebug");
+	// M5: a -Headless process is an automated run - its relaunch stays headless and keeps the run control (never a window),
+	// still without -ViewerCmds (the relaunch carries the selection, not the script that led to it).
+	const std::string HeadlessRunning = std::string(Running) + " -Headless -WaitGpu";
+	CHECK(FViewerSession::GetForwardedSwitches(HeadlessRunning.c_str())
+		== "-ini:Engine:[/Script/Engine.PhysicsSettings]:DefaultGravityZ=-490 -ExecCmds=\"p.Chaos.Solver.DebugDrawCollisions 1, p.Chaos.DebugDraw.Radius 0\" "
+		   "-ConfigDir=\"D:/My Config\" -ResX=1280 -ResY=720 -NoVSync -Frames=60 -Exit -Paused -WarmupFrames=10 -Screenshot=\"C:/a b.png\" -Camera=1,2,3,4,5 "
+		   "-UI=Stats,Engines -D3DDebug -Headless -WaitGpu");
 	const std::string Relaunch = FViewerSession::MakeCommandLine(Selection, Forwarded);
 	std::string ExecCmds;
 	CHECK(FParse::Value(Relaunch.c_str(), "ExecCmds=", ExecCmds, false));
@@ -391,6 +398,80 @@ TEST_CASE("PhysicsTest.Viewer.RestartRequiredRules")
 	Bad.Scenario = "S00.FreeFall";
 	Bad.Backend = "NoSuchEngine";
 	CHECK(Session.Open(Bad, Message) == EViewerOpenResult::Failed);
+}
+
+// M5 (M4 carry-over (1)): the console's "open" / "restart" take the same paths as Apply and the Engines panel's button.
+TEST_CASE("PhysicsTest.Viewer.ConsoleOpenAndRestart")
+{
+	FPhysicsTestEditor Editor;
+	FViewerSession Session;
+	CHECK(Editor.ExecuteConsoleCommand("open PhysX SdkDefault", Session));
+	FViewerSelection Requested;
+	REQUIRE(Editor.ConsumeOpenRequest(Requested));
+	CHECK(Requested.Backend == "PhysX");
+	CHECK(Requested.BackendProfile == "SdkDefault");
+	CHECK(Editor.ExecuteConsoleCommand("open Bullet -", Session));
+	REQUIRE(Editor.ConsumeOpenRequest(Requested));
+	CHECK(Requested.Backend == "Bullet");
+	CHECK(Requested.BackendProfile.empty());
+	CHECK_FALSE(Editor.ExecuteConsoleCommand("open", Session));
+	CHECK_FALSE(Editor.ExecuteConsoleCommand("open PhysX UE4Compat extra", Session));
+	CHECK_FALSE(Editor.ConsumeOpenRequest(Requested));
+	// "restart" only after a RestartRequired open, with that selection.
+	std::string CommandLine;
+	CHECK_FALSE(Editor.ExecuteConsoleCommand("restart", Session));
+	CHECK_FALSE(Editor.ConsumeRestartRequest(CommandLine));
+	FViewerSelection SdkDefault;
+	SdkDefault.Backend = "PhysX";
+	SdkDefault.BackendProfile = "SdkDefault";
+	Editor.SetOpenResult(EViewerOpenResult::RestartRequired, "'PhysX': GLOBAL_SCENE_SETTINGS", SdkDefault);
+	CHECK(Editor.ExecuteConsoleCommand("restart", Session));
+	REQUIRE(Editor.ConsumeRestartRequest(CommandLine));
+	CHECK(CommandLine.rfind("-Backend=PhysX -BackendProfile=SdkDefault ", 0) == 0);
+	CHECK_FALSE(Editor.ConsumeRestartRequest(CommandLine));
+}
+
+// M5 (M4 carry-over (1)) on the real PhysX module: one PxPhysics / PxTolerancesScale per process (PxPhysics.h:997 [V]).
+// UE4Compat, -TGS and -Stab share (100, 1000) and switch in this process, as does PhysX without a variant (the backend's
+// defaults are UE4Compat's, so the family states no init key); SdkDefault (1, 10) needs a restart. The relaunch itself runs
+// headless in the CTest PhysicsTest.Viewer.HeadlessRestart.
+TEST_CASE("PhysicsTest.Viewer.PhysXVariantSwitchRules")
+{
+	const std::vector<std::string> Available = FPhysicsBackendRegistry::Get().GetAvailableNames();
+	if (std::find(Available.begin(), Available.end(), "PhysX") == Available.end())
+	{
+		MESSAGE("PhysX is not in this build: skipped");
+		return;
+	}
+	FViewerSession Session;
+	std::string Message;
+	FViewerSelection Selection;
+	Selection.Backend = "PhysX";
+	Selection.Scenario = "M1.SingleBoxDrop";
+	FPhysicsBackendModule* Module = FPhysicsBackendRegistry::Get().FindOrLoadModule("PhysX", Message);
+	REQUIRE(Module != nullptr);
+	CHECK((Module->GetInfo().ModuleFlags & PT_MODULE_GLOBAL_SCENE_SETTINGS) != 0u);
+	if (Module->IsInitialized() && !Module->GetInitParams().InitOptions.empty())
+	{
+		MESSAGE("PhysX was initialised with other init options earlier in this process: skipped");
+		return;
+	}
+	for (const char* Variant : { "", "UE4Compat", "UE4Compat-TGS", "UE4Compat-Stab", "UE4Compat" })
+	{
+		Selection.BackendProfile = Variant;
+		CAPTURE(Selection.BackendProfile);
+		CHECK(Session.Open(Selection, Message) == EViewerOpenResult::Opened);
+		INFO(Message);
+		CHECK(Session.TickPhysics() == 1);
+		// "(Default / none)" resolves PhysX's default variant file, UE4Compat (DefaultForEngine, M5 round 0).
+		CHECK(Session.GetConfigFiles().VariantName == (std::string(Variant).empty() ? std::string("UE4Compat") : std::string(Variant)));
+	}
+	Selection.BackendProfile = "SdkDefault";
+	CHECK(Session.Open(Selection, Message) == EViewerOpenResult::RestartRequired);
+	CHECK(Message.find("GLOBAL_SCENE_SETTINGS") != std::string::npos);
+	CHECK(Session.HasScene());   // the running UE4Compat scene stays
+	CHECK(Session.GetSelection().BackendProfile == "UE4Compat");
+	MESSAGE("SdkDefault after UE4Compat: " << Message);
 }
 
 namespace

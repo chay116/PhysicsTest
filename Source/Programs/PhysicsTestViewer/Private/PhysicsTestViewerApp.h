@@ -9,6 +9,11 @@
 //       [-Param:Name=Value ...] [-Threads=1] [-ExecCmds="p.Chaos.Solver.DebugDrawCollisions 1, ..."] [-ini:...]
 //       [-ResX=1600 -ResY=900] [-NoVSync] [-Paused] [-WarmupFrames=N] [-Frames=N [-Exit]] [-Headless]
 //       [-Screenshot=<png>] [-PerfReport=<json>] [-NoUI | -UI=Stats,Engines,...] [-Camera=X,Y,Z,Pitch,Yaw] [-WaitGpu]
+//       [-ViewerCmds="open PhysX SdkDefault, restart"]
+//   -ViewerCmds runs viewer console commands (Console panel syntax), one per rendered frame from the first frame on (M5:
+//   the scripted way to switch engines and to take the restart path headless). A restart from a -Headless process relaunches
+//   headless with the same run control (no window, no console window, the child writes to this process's stdout / stderr),
+//   waits for it and returns its exit code; a windowed process starts the new viewer and exits.
 //   -Headless renders offscreen (no window) and always exits after -Frames (default 1). -WarmupFrames advances the
 //   physics N frames before the first rendered frame. -Screenshot captures the last frame (PNG + <png>.json, mode viz).
 //   -PerfReport writes per-frame CPU / GPU timings of the rendered frames (JSON, mode viz, "viz mode, not a benchmark").
@@ -24,6 +29,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace PhysicsTest
 {
@@ -44,6 +50,7 @@ namespace PhysicsTest
 		bool bHasCamera = false;
 		double Camera[5] = {};          // X, Y, Z, Pitch, Yaw
 		bool bWaitForGpu = false;       // headless default: one frame at a time (pessimistic fps)
+		std::vector<std::string> ViewerCommands;   // -ViewerCmds, one per rendered frame (M5)
 	};
 
 	class FPhysicsTestViewerApp

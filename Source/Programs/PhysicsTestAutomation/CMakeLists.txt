@@ -2,6 +2,35 @@
 # Links the backend registry (static Null, Jolt from M3) and the AbiTwin test backend; PtBackend_Null.dll is built next to
 # the exe for the DLL-path gates. M3 adds every scenario (pt_link_scenarios) and PT::Benchmark; M4 adds PT::PhysicsDebugDraw
 # (renderer-free: the DebugDraw area runs in every preset, the test preset included).
+# M5: one test file and one CTest area per new SDK backend (BulletBackend, PhysXBackend), so the two never share a file.
+# Each file calls its backend's static entry directly, so the backend library is linked here even while it is a stub
+# outside the generated registry; PT_<ENGINE>_IN_REGISTRY tells the file which registry state to expect.
+set(_pt_automation_backend_tests "")
+set(_pt_automation_backend_deps "")
+set(_pt_automation_backend_areas "")
+if(PT_WITH_BULLET)
+	list(APPEND _pt_automation_backend_tests Private/Tests/BulletBackendTests.cpp)
+	list(APPEND _pt_automation_backend_deps PT::Backend::Bullet)
+	list(APPEND _pt_automation_backend_areas BulletBackend)
+	get_target_property(_pt_in_registry PtBackendBullet PT_IN_BACKEND_REGISTRY)
+	if(_pt_in_registry)
+		set_source_files_properties(Private/Tests/BulletBackendTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_BULLET_IN_REGISTRY=1)
+	else()
+		set_source_files_properties(Private/Tests/BulletBackendTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_BULLET_IN_REGISTRY=0)
+	endif()
+endif()
+if(PT_WITH_PHYSX)
+	list(APPEND _pt_automation_backend_tests Private/Tests/PhysXBackendTests.cpp)
+	list(APPEND _pt_automation_backend_deps PT::Backend::PhysX)
+	list(APPEND _pt_automation_backend_areas PhysXBackend)
+	get_target_property(_pt_in_registry PtBackendPhysX PT_IN_BACKEND_REGISTRY)
+	if(_pt_in_registry)
+		set_source_files_properties(Private/Tests/PhysXBackendTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_PHYSX_IN_REGISTRY=1)
+	else()
+		set_source_files_properties(Private/Tests/PhysXBackendTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_PHYSX_IN_REGISTRY=0)
+	endif()
+endif()
+
 pt_add_program(PhysicsTestAutomation
 	SOURCES
 		Private/PhysicsTestAutomationMain.cpp
@@ -19,8 +48,9 @@ pt_add_program(PhysicsTestAutomation
 		Private/Tests/ScenarioTests.cpp
 		Private/Tests/SdkBackendTests.cpp
 		Private/Tests/StepPlannerTests.cpp
+		${_pt_automation_backend_tests}
 	DEPS PT::Core PT::PhysicsCore PT::Conformance PT::Benchmark PT::PhysicsDebugDraw PT::BackendRegistry PT::Backend::Null PT::BackendCommon PtBackendAbiTwin PT::Doctest
-		PT::BuildInfo)
+		PT::BuildInfo ${_pt_automation_backend_deps})
 pt_link_scenarios(PhysicsTestAutomation)   # the M3 scenes (WHOLE_ARCHIVE)
 # The profile tests read the repository's Config/ (overridable with -ConfigDir=).
 target_compile_definitions(PhysicsTestAutomation PRIVATE "PT_CONFIG_DIR=\"${CMAKE_SOURCE_DIR}/Config\"")
@@ -36,7 +66,8 @@ set_tests_properties(PhysicsTest.Automation PROPERTIES LABELS "unit")
 
 # One CTest entry per test area (PhysicsTest.<Area>.*), so a failure names its area. doctest exits 0 when a filter
 # matches nothing, so each entry also requires a non-empty, all-passing summary line.
-foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw)
+foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw
+		${_pt_automation_backend_areas})
 	add_test(NAME PhysicsTest.Unit.${_area} COMMAND PhysicsTestAutomation "-tc=PhysicsTest.${_area}.*")
 	set_tests_properties(PhysicsTest.Unit.${_area} PROPERTIES
 		LABELS "unit"
