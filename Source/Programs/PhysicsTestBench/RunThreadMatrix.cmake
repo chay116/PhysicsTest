@@ -3,7 +3,8 @@
 # Every run must exit 0 with frames_run = frames; the manifest's threads.affinity_mask must be the first T P-core logical
 # CPUs of platform.p_cores (0x1, 0x5, 0x15, 0x55, 0x155, 0x555 on the i5-13600KF), threads.engine_native.workers the
 # engine's mapping (Jolt T - 1 job threads; PhysX 0 for the T = 1 inline dispatcher, T for PxDefaultCpuDispatcherCreate(T)),
-# and T > 1 carries the scaling note "cpu_eff 미검증 (M10)". Bullet T = 2 must be refused (exit 2: no PT_CAP_MULTITHREADED).
+# and (M10) every run carries its census window: cpu_eff and the foreign thread cycles, G10b Skip at T > 1 (the scaling runs
+# keep the values; G10b judges T = 1). Bullet T = 2 must be refused (exit 2: no PT_CAP_MULTITHREADED).
 # Short runs (PT_FRAMES frames, no pre-roll); the scaling numbers themselves are a manual, UNOFFICIAL step (Progress M7).
 #   cmake -DPT_BENCH_EXE=<exe> -DPT_OUT_DIR=<dir> -DPT_ENGINES=Jolt,PhysX -DPT_BULLET=ON -DPT_FRAMES=10 [-DPT_MAX_T=6] -P RunThreadMatrix.cmake
 cmake_minimum_required(VERSION 3.25)
@@ -83,10 +84,15 @@ foreach(_case IN LISTS _cases)
 	if(NOT _workers EQUAL _expected_workers)
 		list(APPEND _failures "${_engine} T=${_t}: threads.workers ${_workers}, expected ${_expected_workers} (02 9.6)")
 	endif()
-	if(_t GREATER 1 AND NOT _note MATCHES "cpu_eff 미검증 [(]M10[)]")
+	string(JSON _cpu_eff ERROR_VARIABLE _cpu_err GET "${_manifest}" threads census_window cpu_eff)
+	string(JSON _census_t ERROR_VARIABLE _census_err GET "${_manifest}" threads census_window T)
+	if(_cpu_err OR _census_err OR NOT _cpu_eff MATCHES "^[0-9]" OR NOT _census_t EQUAL _t)
+		list(APPEND _failures "${_engine} T=${_t}: no census window (cpu_eff '${_cpu_eff}', T '${_census_t}') ${_cpu_err}${_census_err}")
+	endif()
+	if(_t GREATER 1 AND NOT _note MATCHES "^T > 1: cpu_eff and the foreign thread cycles")
 		list(APPEND _failures "${_engine} T=${_t}: the scaling note is missing: '${_note}'")
 	endif()
-	list(APPEND _lines "${_engine} T=${_t}: mask ${_mask}, workers ${_workers}")
+	list(APPEND _lines "${_engine} T=${_t}: mask ${_mask}, workers ${_workers}, cpu_eff ${_cpu_eff}")
 endforeach()
 if(PT_BULLET)
 	_pt_run_thread_case(Bullet 2 2 _dir)

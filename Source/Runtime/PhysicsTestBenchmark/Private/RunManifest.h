@@ -26,7 +26,13 @@ namespace PhysicsTest
 
 		// Pretty-printed (2 spaces) and flushed. False when the file cannot be written.
 		bool Write(const std::filesystem::path& Path) const;
-		// [확장 M10] sha256(scene_sha256, desc_sha256, physics_sha256, mass_rule, flag_profile, tick_mode, dt, T, sync_policy,
-		// mode, instrumentation, harness_commit) (02 13). Not computed before M10: the field stays null.
+		// [확장 M10] The comparability key (02 13): SHA-256 of the canonical JSON (keys sorted, no whitespace) of
+		//   {"schema": "physicstest.comparability/1", scene_sha256, desc_sha256, physics_sha256, mass_rule, flag_profile,
+		//    tick_mode, dt_bits (the IEEE-754 bits of run.dt_s as 16 hex digits), T, thread_series, sync_policy, mode,
+		//    instrumentation (sorted), harness_commit (harness.git_sha, "+dirty" when harness.dirty)}
+		// read from Json's groups. thread_series is an M10 addition (TimingContract 7: runs of another mask shape are not
+		// compared). Tools/ptbench/analysis/comparability.py recomputes it from the same fields; validate rejects a manifest
+		// whose key does not match them. Frames are inside desc_sha256 (the dt sequence), the windows inside scene_sha256.
+		[[nodiscard]] std::string ComputeComparabilityKey() const;
 	};
 }

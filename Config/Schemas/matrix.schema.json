@@ -17,7 +17,7 @@
     },
     "preset": {
       "description": "The build whose out/<preset>/bin/PhysicsTestBench.exe runs the matrix (headline timing: test or test-avx2). --exe / --preset override it.",
-      "enum": [ "dbg", "dev", "test", "test-avx2" ]
+      "enum": [ "dbg", "dev", "test", "test-avx2", "test-jolt", "test-physx", "test-bullet", "prof" ]
     },
     "repeats": { "type": "integer", "minimum": 1, "maximum": 1000 },
     "block_seed": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
@@ -25,7 +25,7 @@
     "timeout_s": { "description": "A run that does not end in time is killed and recorded as timed_out (no exit.json).", "type": "number", "exclusiveMinimum": 0, "maximum": 86400 },
     "contaminated_retries": { "description": "Fresh-process retries of a run that ends with exit code 4 (default 2); the cell is 'contaminated' when every attempt ends with 4.", "type": "integer", "minimum": 0, "maximum": 10 },
     "window": { "description": "The scene window whose per-run mean is the run's value (default headline).", "type": "string", "minLength": 1 },
-    "bench_args": { "description": "Extra PhysicsTestBench switches for every run (e.g. -HashEvery=1 for a determinism matrix). ptbench refuses a switch key (case-insensitive, before '='; -ini: up to [Section]:Key) that appears twice for a cell over the matrix's, the target's, the scene's (M9) and --bench-arg switches - the bench reads the first occurrence only (FParse::Value) - and the switches the runner sets per cell (-Out, -Backend, -BackendProfile, -Profile, -Scenario, -Param:, -Threads, -Frames, -Repeat, -Order, -BlockSeed, -Session) or that start another mode (-Gate, -List, -Describe, -Conformance, -AnalyticReferences, -SceneHashes, -BusyHelper).", "type": "array", "items": { "type": "string", "pattern": "^-" } },
+    "bench_args": { "description": "Extra PhysicsTestBench switches for every run (e.g. -HashEvery=1 for a determinism matrix). ptbench refuses a switch key (case-insensitive, before '='; -ini: up to [Section]:Key) that appears twice for a cell over the matrix's, the target's, the scene's (M9) and --bench-arg switches - the bench reads the first occurrence only (FParse::Value) - and the switches the runner sets per cell (-Out, -Backend, -BackendProfile, -Profile, -Scenario, -Param:, -Threads, -Frames, -Repeat, -Order, -BlockSeed, -Session) or that start another mode (-Gate, -List, -Describe, -Conformance, -AnalyticReferences, -SceneHashes, -BusyHelper), and -StampDir (M10: the runner passes its --stamp-dir).", "type": "array", "items": { "type": "string", "pattern": "^-" } },
     "targets": {
       "type": "array",
       "minItems": 1,
@@ -66,6 +66,39 @@
       }
     },
     "threads": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 64 } },
+    "stamps": {
+      "description": "M10 fix round 0: the conformance stamp policy of the runner (R9, 02 12.4). require: a cell without a valid stamp refuses the session before any process starts; record: every cell runs and its stamp state is recorded in session.json. Default: require for purpose perf, record for determinism and behavior (R9 is about reportable timing; a behaviour matrix's probe targets with physics-changing -ini: overrides may never pass the gates). ptbench run --require-stamps / --skip-unstamped / --allow-unstamped override it.",
+      "enum": [ "require", "record" ]
+    },
+    "cv_gate": {
+      "description": "M10 (02 12.5 step 5): after the R blocks, every cell whose CV exceeds threshold_pct gets one more block (those cells only), at most max_extra_blocks times; a cell still above it is noisy. A perf matrix gates by default (2 %, 2 blocks); false turns it off; another purpose gates only when this is an object.",
+      "oneOf": [
+        { "const": false },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "threshold_pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+            "max_extra_blocks": { "type": "integer", "minimum": 0, "maximum": 10 }
+          }
+        }
+      ]
+    },
+    "sentinel": {
+      "description": "M10 (02 12.5 step 4): one cell of the matrix (label, profile, scenario, params, T) that runs at the start, after half of the plan and at the end of the session (runs fresh processes per point, never a cell value); a drift of its value above drift_pct (default 2) - or a point without a headline-valid value - flags the whole session.",
+      "type": "object",
+      "required": [ "label", "scenario" ],
+      "additionalProperties": false,
+      "properties": {
+        "label": { "type": "string" },
+        "profile": { "type": "string" },
+        "scenario": { "type": "string" },
+        "params": { "type": "object", "additionalProperties": { "type": [ "string", "integer" ] } },
+        "T": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "runs": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "drift_pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+      }
+    },
     "exclude": {
       "description": "Cells to leave out: every named field must match (a list means any of; params: every named parameter). E.g. {\"backend\": \"Bullet\", \"T\": [2, 3, 4, 5, 6], \"reason\": \"Bullet runs T = 1 only (02 9.6)\"}.",
       "type": "array",

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://physicstest.local/schemas/manifest.schema.json",
   "title": "PhysicsTest bench run manifest (physicstest.run/2)",
-  "description": "manifest.json of one PhysicsTestBench run (docs/ResultsSchema.md, 02_Architecture 12.3, 03_WorkPlan M7). Every run that initialised its backend writes one, refused runs included: a run refused by the engine-option preflight has no scene (scene.built false), so its scene-derived fields are null; every other run satisfies the stricter rules in allOf. Groups may gain fields (additional properties are allowed); the fields listed as required are what M8 analysis and the M7 criteria rely on. M10 fields (comparability_key, conformance_stamp, clock.tsc_hz, threads.census_*, summary.cpu_eff) are null until M10. M8: status usage_error (exit 2) is a run refused after its scene was built because a test-only injection could not take effect (-InjectPreflightFault=g9:<key> on a key G9 does not compare). A headline-valid run (timing_valid_for_headline true) must be internally consistent: status ok, exit code 0, no reasons, Bench mode, no instrumentation tier, no per-frame recorder, no test injection, no allocation inside the timed buckets and an uncontaminated host; an invalid run names at least one reason.",
+  "description": "manifest.json of one PhysicsTestBench run (docs/ResultsSchema.md, 02_Architecture 12.3, 03_WorkPlan M7). Every run that initialised its backend writes one, refused runs included: a run refused by the engine-option preflight has no scene (scene.built false), so its scene-derived fields are null; every other run satisfies the stricter rules in allOf. Groups may gain fields (additional properties are allowed); the fields listed as required are what M8 analysis and the M7 criteria rely on. M10 fields (comparability_key, conformance_stamp, clock.tsc_hz, threads.census_*, threads.foreign_cycles_fraction, summary.cpu_eff) are null in M7-M9 manifests and filled from M10 on (the M10 bench writes null only where the run stopped before them: no scene, no loop). M8: status usage_error (exit 2) is a run refused after its scene was built because a test-only injection could not take effect (-InjectPreflightFault=g9:<key> on a key G9 does not compare). A headline-valid run (timing_valid_for_headline true) must be internally consistent: status ok, exit code 0, no reasons, Bench mode, no instrumentation tier, no per-frame recorder, no test injection, no allocation inside the timed buckets and an uncontaminated host; an invalid run names at least one reason.",
   "type": "object",
   "required": [
     "schema",
@@ -72,23 +72,57 @@
       }
     },
     "unofficial": {
-      "const": true
+      "description": "M10: false only for a headline-valid run with a valid conformance stamp under a High performance / Ultimate power plan (M7-M9: always true)",
+      "type": "boolean"
+    },
+    "unofficial_reasons": {
+      "description": "M10: why the timing is not reportable (empty when unofficial is false)",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "timing_label": {
       "type": "string",
       "minLength": 1
     },
     "comparability_key": {
-      "type": [
-        "string",
-        "null"
+      "description": "M10 (02 13): SHA-256 of the canonical comparability fields (FRunManifest::ComputeComparabilityKey, Tools/ptbench/analysis/comparability.py); null without a scene",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "conformance_stamp": {
-      "type": [
-        "object",
-        "string",
-        "null"
+      "description": "M10 (02 12.2 step 7, 12.4): the stamp the bench found for its own key (never a refusal: the runner refuses); null in M7-M9 manifests",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "key_sha256",
+            "found",
+            "valid",
+            "reason",
+            "path",
+            "stamp_dir",
+            "key"
+          ],
+          "properties": {
+            "valid": {
+              "type": "boolean"
+            },
+            "found": {
+              "type": "boolean"
+            }
+          }
+        }
       ]
     },
     "run_id": {
@@ -142,6 +176,19 @@
         },
         "do_check": {
           "type": "boolean"
+        },
+        "sdks": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "Jolt",
+              "Bullet",
+              "PhysX",
+              "Chaos"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "M10 fix round 1: the SDK backends compiled into this exe (PT_WITH_<SDK>): one SDK = a single-SDK exe, the binary composition control (02 14.3; Tools/ptbench perf.py decides by this, not by the preset name). Absent before M10 fix round 1"
         }
       }
     },
@@ -639,13 +686,63 @@
           "minLength": 1
         },
         "census_init": {
-          "type": "null"
+          "description": "M10 (02 12.2 step 5): census #1 after InitGamePhys - every thread of the process with its name and cycles",
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "census_window": {
-          "type": "null"
+          "description": "M10 (02 12.2 step 11): the census window around the loop - own / main / foreign cycles, cpu_eff, cpu_eff_raw, per thread",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "valid",
+                "T",
+                "wall_s",
+                "own_cycles",
+                "main_cycles",
+                "foreign_cycles",
+                "cpu_eff",
+                "cpu_eff_raw",
+                "foreign_cycles_fraction",
+                "per_thread"
+              ],
+              "properties": {
+                "own_s": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "M10 fix round 1: own cycles at the window's TSC rate - G10b's minimum window (50 ms of own CPU time)"
+                },
+                "other_on_mask_fraction": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "M10 fix round 1: other processes / interrupts on the mask's CPUs / (wall x T) - G10b's contended rule (> 5 %)"
+                },
+                "g10b_skip": {
+                  "enum": [
+                    "",
+                    "multi_thread",
+                    "no_census",
+                    "short_window",
+                    "contended"
+                  ],
+                  "description": "M10 fix round 1: why the run's G10b is Skip ('' = a verdict). A T = 1 run with no_census or contended has no single-thread proof and is not headline-valid; short_window rests on the stamp's G10b run"
+                }
+              }
+            }
+          ]
         },
         "foreign_cycles_fraction": {
-          "type": "null"
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
         },
         "series": {
           "enum": [
@@ -825,7 +922,27 @@
           "exclusiveMinimum": 0
         },
         "tsc_hz": {
-          "type": "null"
+          "description": "M10: 1e9 / ns_per_tick of the run's TSC calibration (null in M7-M9 manifests or when the calibration failed)",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "tsc_invariant": {
+          "type": "boolean"
+        },
+        "tsc_read_overhead_ns": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "calibration": {
+          "type": "object",
+          "required": [
+            "valid",
+            "pairs",
+            "span_s",
+            "max_residual"
+          ]
         }
       }
     },
@@ -939,7 +1056,11 @@
           }
         },
         "cpu_eff": {
-          "type": "null"
+          "description": "M10: the census window's cpu_eff (null in M7-M9 manifests or without a loop)",
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "frame0_frame_ns": {
           "type": [
@@ -996,7 +1117,8 @@
             "enum": [
               "G0",
               "G9",
-              "G10a"
+              "G10a",
+              "G10b"
             ]
           },
           "result": {
@@ -1239,6 +1361,51 @@
   },
   "allOf": [
     {
+      "$comment": "M10 (R9): a reportable run (unofficial false) is headline-valid, has a valid conformance stamp and ran under High performance / Ultimate",
+      "if": {
+        "properties": {
+          "unofficial": {
+            "const": false
+          }
+        },
+        "required": [
+          "unofficial"
+        ]
+      },
+      "then": {
+        "properties": {
+          "timing_valid_for_headline": {
+            "const": true
+          },
+          "conformance_stamp": {
+            "type": "object",
+            "properties": {
+              "valid": {
+                "const": true
+              }
+            },
+            "required": [
+              "valid"
+            ]
+          },
+          "platform": {
+            "properties": {
+              "power_scheme_high_performance": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "unofficial_reasons": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
       "if": {
         "properties": {
           "scene": {
@@ -1348,7 +1515,7 @@
       }
     },
     {
-      "$comment": "M8 headline consistency: timing_valid_for_headline true implies every condition of docs/TimingContract.md 6 (M7 review)",
+      "$comment": "M8 headline consistency: timing_valid_for_headline true implies every condition of docs/TimingContract.md 6 (M7 review); M10 (M8 review): also #5 (the four host controls applied), #9 (PT_DO_CHECK 0) and the M10 conditions #11 (no failed G10b, and - M10 fix round 1 - no T = 1 G10b Skip for a missing census or a contended window), #12 (an invariant TSC and a valid TSC / QPC calibration whose residual is below 1e-5, M10 fix round 1) and #13 (not a profiler build). A field an older manifest lacks is not required here.",
       "if": {
         "properties": {
           "timing_valid_for_headline": {
@@ -1418,8 +1585,104 @@
               "tick_new_calls"
             ]
           },
+          "harness": {
+            "properties": {
+              "do_check": {
+                "const": false
+              },
+              "profiler": {
+                "const": false
+              }
+            }
+          },
+          "threads": {
+            "properties": {
+              "affinity_applied": {
+                "const": true
+              },
+              "census_window": {
+                "if": {
+                  "type": "object",
+                  "properties": {
+                    "T": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "T"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "g10b_skip": {
+                      "not": {
+                        "enum": [
+                          "no_census",
+                          "contended"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "clock": {
+            "properties": {
+              "tsc_invariant": {
+                "const": true
+              },
+              "calibration": {
+                "properties": {
+                  "valid": {
+                    "const": true
+                  },
+                  "max_residual": {
+                    "type": "number",
+                    "exclusiveMaximum": 1e-05
+                  }
+                }
+              }
+            }
+          },
+          "gates": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "const": "G10b"
+                  },
+                  "result": {
+                    "const": "Fail"
+                  }
+                },
+                "required": [
+                  "id",
+                  "result"
+                ]
+              }
+            }
+          },
           "platform": {
             "properties": {
+              "priority_set": {
+                "const": true
+              },
+              "throttling": {
+                "properties": {
+                  "opt_out_applied": {
+                    "const": true
+                  }
+                }
+              },
+              "timer_resolution": {
+                "properties": {
+                  "applied": {
+                    "const": true
+                  }
+                }
+              },
               "host_load": {
                 "properties": {
                   "valid": {

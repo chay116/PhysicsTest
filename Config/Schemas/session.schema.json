@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://physicstest.local/schemas/session.schema.json",
   "title": "PhysicsTest bench session (physicstest.session/1)",
-  "description": "session.json of one Tools/ptbench matrix execution (03_WorkPlan M8, 02_Architecture 12.5, docs/ResultsSchema.md 11): the environment gate, the matrix and its seeded blocks, every attempt of every run (exit.json is the verdict, never the raw process exit code) and the per-cell state with the reported CV. Rewritten after every run, so an interrupted session still validates (status running / aborted). index.csv has one row per attempt with the same fields.",
+  "description": "session.json of one Tools/ptbench matrix execution (03_WorkPlan M8, M10; 02_Architecture 12.5, docs/ResultsSchema.md 11): the environment gate, the stamp check (M10), the matrix and its seeded blocks (the CV gate's extra blocks included), every attempt of every run (exit.json is the verdict, never the raw process exit code; sentinel runs are kind sentinel), the per-cell state with the CV and the CV gate's verdict (M10), and the sentinel's drift (M10). Rewritten after every run, so an interrupted session still validates (status running / aborted). index.csv has one row per attempt with the same fields. The M10 groups (stamps, cv_gate, sentinel) are absent from M8 / M9 sessions.",
   "type": "object",
   "required": [ "schema", "session_id", "status", "started_utc", "finished_utc", "wall_s", "matrix", "runner", "bench", "git", "environment", "bypasses",
     "unofficial", "unofficial_reasons", "blocks", "plan", "cells", "runs", "summary" ],
@@ -11,6 +11,7 @@
     "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
     "status": { "enum": [ "running", "complete", "aborted", "refused" ] },
     "abort_reason": { "type": "string" },
+    "refusal_reason": { "description": "M10: why the session was refused (the environment gate, or cells without a valid conformance stamp).", "type": "string" },
     "started_utc": { "$ref": "#/$defs/utc" },
     "finished_utc": { "anyOf": [ { "$ref": "#/$defs/utc" }, { "type": "null" } ] },
     "wall_s": { "type": [ "number", "null" ], "minimum": 0 },
@@ -75,12 +76,48 @@
       }
     },
     "bypasses": {
-      "description": "Every environment check that failed (or, --skip-idle, was not measured) and was let through; the report head lists them in bold.",
+      "description": "Every environment check that failed (or, --skip-idle, was not measured) and was let through, and (M10) a relaxed stamp policy (--allow-unstamped, --skip-unstamped); the report head lists them in bold.",
       "type": "array",
-      "items": { "enum": [ "--allow-balanced", "--allow-busy", "--allow-concurrent", "--skip-idle" ] }
+      "items": { "enum": [ "--allow-balanced", "--allow-busy", "--allow-concurrent", "--skip-idle", "--allow-unstamped", "--skip-unstamped" ] }
     },
-    "unofficial": { "const": true },
-    "unofficial_reasons": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "unofficial": { "description": "M10: false only for a perf session under High performance / Ultimate with no bypass, every cell stamped, R >= 5 and a sentinel without drift (M8 / M9 sessions: always true).", "type": "boolean" },
+    "unofficial_reasons": { "type": "array", "items": { "type": "string" } },
+    "stamps": {
+      "description": "M10 (R9, 02 12.4): the conformance stamp check before any process started (Tools/ptbench/stamps.py).",
+      "type": "object",
+      "required": [ "policy", "stamp_dir", "checked" ],
+      "properties": {
+        "policy": { "description": "require (a perf matrix: an unstamped cell refuses the session), record (M10 fix round 0: a determinism or behaviour matrix - every cell runs, its stamp state is recorded), allow (--allow-unstamped), skip (--skip-unstamped).", "enum": [ "require", "record", "allow", "skip" ] },
+        "stamp_dir": { "type": "string" },
+        "checked": { "type": "boolean" },
+        "unstamped_cells": { "type": "array", "items": { "type": "string" } },
+        "targets": { "type": "array", "items": { "type": "object", "required": [ "state", "reason", "target" ], "properties": { "state": { "enum": [ "valid", "missing", "stale", "invalid" ] } } } }
+      }
+    },
+    "cv_gate": {
+      "description": "M10 (02 12.5 step 5): the CV gate of a perf session (enabled false otherwise, with the reason: the matrix turned it off or is not a perf matrix).",
+      "type": "object",
+      "required": [ "enabled" ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "threshold_pct": { "type": "number" },
+        "max_extra_blocks": { "type": "integer", "minimum": 0 },
+        "blocks": { "type": "array", "items": { "type": "object", "required": [ "index", "cells" ] } },
+        "noisy": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "sentinel": {
+      "description": "M10 (02 12.5 step 4): the sentinel cell's value at the start, the middle and the end, and the session flag.",
+      "type": "object",
+      "required": [ "declared", "points", "flagged", "reason" ],
+      "properties": {
+        "declared": { "type": [ "object", "null" ] },
+        "points": { "type": "array", "items": { "type": "object", "required": [ "point", "runs", "value_ns" ], "properties": { "point": { "enum": [ "start", "middle", "end" ] }, "value_ns": { "type": [ "number", "null" ] } } } },
+        "drift_pct": { "type": [ "number", "null" ] },
+        "flagged": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
     "blocks": {
       "type": "array",
       "items": {
@@ -102,7 +139,10 @@
         "type": "object",
         "required": [ "cell_id", "key", "label", "backend", "variant", "profile", "scenario", "params", "T", "frames" ],
         "properties": {
-          "state": { "description": "unsupported (M9): every repeat's bench refused the scene because the backend lacks a capability it requires (joints); reported, not a failure.", "enum": [ "ok", "contaminated", "failed", "incomplete", "unsupported" ] },
+          "state": { "description": "unsupported (M9): every repeat's bench refused the scene because the backend lacks a capability it requires (joints); reported, not a failure. unstamped (M10): no valid conformance stamp under --skip-unstamped, never run.", "enum": [ "ok", "contaminated", "failed", "incomplete", "unsupported", "unstamped" ] },
+          "noisy": { "description": "M10: the CV gate's extra blocks left its CV above the threshold.", "type": "boolean" },
+          "cv_gate": { "type": "object", "required": [ "initial_cv_pct", "extra_blocks", "final_cv_pct", "noisy" ] },
+          "stamp": { "type": "object", "required": [ "state", "reason" ], "properties": { "state": { "enum": [ "valid", "missing", "stale", "invalid" ] } } },
           "cv_pct": { "description": "CV of values_ns (reported only; the report's CV over the validated runs is the authoritative one).", "type": [ "number", "null" ] },
           "values_ns": { "description": "The window mean of every ok, headline-valid run (the last attempt of each repeat).", "type": "array", "items": { "type": "number" } },
           "n_not_headline_valid": { "description": "ok runs with timing_valid_for_headline false: they give no value.", "type": "integer", "minimum": 0 }
@@ -117,6 +157,7 @@
           "exit_json", "exit_code", "outcome", "retried" ],
         "properties": {
           "attempt": { "type": "integer", "minimum": 0 },
+          "kind": { "description": "M10: cell (a matrix cell's run) or sentinel (the session's drift check, never a cell value). Absent before M10: cell.", "enum": [ "cell", "sentinel" ] },
           "exit_json": { "type": "boolean" },
           "exit_code": { "enum": [ null, 0, 2, 3, 4, 5, 6 ] },
           "process_exit_code": { "type": [ "integer", "null" ] },
@@ -140,6 +181,9 @@
     },
     "summary": { "type": "object", "required": [ "planned_runs", "attempts", "outcomes", "retries", "cells", "no_exit_json", "timed_out" ] }
   },
+  "allOf": [
+    { "$comment": "an unofficial session names at least one reason (M10)", "if": { "properties": { "unofficial": { "const": true } } }, "then": { "properties": { "unofficial_reasons": { "minItems": 1 } } } }
+  ],
   "$defs": {
     "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

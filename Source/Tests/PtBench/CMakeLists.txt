@@ -8,7 +8,11 @@
 #                                       values, parquet column types, determinism with a majority reference and the
 #                                       incomplete verdict, the environment gate with an injected power plan, the idle
 #                                       wait, the runner's teardown kill / timeout / kill on interruption / job object,
-#                                       executables by full path, UTF-8 console output, schemas)
+#                                       executables by full path, UTF-8 console output, schemas; M10: the claim rule's three
+#                                       synthetic cases, bootstrap CIs, the CV gate's extra blocks / noisy and the sentinel
+#                                       drift flag with synthetic results (runner end to end with a mocked bench), stamp
+#                                       verification (missing / stale / invalid), comparability keys, viewer manifests,
+#                                       S(T) / E(T), missing CLI paths, the composition control table, target selection)
 #   PhysicsTest.Py.AnalyticMatchesCpp   analytic.py against PhysicsTestBench -AnalyticReferences, |difference| <= 1e-9
 #   PhysicsTest.Py.Integration          the runner and the analysis with this build's bench exe: a refused environment
 #                                       gate starts no run, a run that died half-way
@@ -17,7 +21,10 @@
 #                                       manifest is rejected, Shipped + MatchedAVX2 or two desc_sha256 in one table are
 #                                       errors, the DET1 matrix and the first divergent frame of a tampered copy, a session end
 #                                       to end with its report (also from its run directories alone) and `ptbench perf` with
-#                                       a captured stdout
+#                                       a captured stdout; M10: conformance stamps refuse a stale cell before any process
+#                                       (a PhysX.UE4Compat.ini key, the Null DLL, tolerances.json), a measurement-protocol run
+#                                       proves G10b and calibrates the TSC; single-SDK builds (test-<engine>) run the engines
+#                                       they have
 set(_pt_py_out "${CMAKE_BINARY_DIR}/_py")
 pt_add_python_test(PhysicsTest.Py.Unit REQUIRES ptbench
 	COMMAND -m unittest -v ptbench.tests.test_unit

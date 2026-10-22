@@ -8,5 +8,6 @@ pt_add_module(PtBenchCore STATIC ALIAS PT::BenchCore
 		Public/BenchCore.h
 		Private/BenchCore.cpp
 		Private/HostEnvironment.cpp
+		Private/ThreadCensus.cpp
 	PUBLIC_DEPS PT::Core
 	PRIVATE_DEPS PowrProf Ole32 Winmm)

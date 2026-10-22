@@ -256,6 +256,7 @@ D:\PhysicsTest\
   - PT_DO_CHECK
 - **/arch:** 전역으로 걸지 않는다. `pt_apply_arch(<targets>)`가 타깃 목록에만 붙인다.
 - **재현 가능 링크:** `/Brepro`는 선택이다. 바뀌지 않은 코드를 다시 링크해도 exe SHA가 유지되므로 스탬프 무효화가 줄어든다 [확장 M10, 선택].
+  - **M10 구현 [V]:** 옵션 `PT_REPRO_LINK`(기본 OFF)가 컴파일과 링크 모두에 `/Brepro`를 건다 (`cmake/PTToolchain.cmake`). 스탬프 키는 이 옵션과 무관하다 (exe 파일 해시일 뿐). 확인: `/Brepro` 트리에서 바뀌지 않은 소스를 다시 컴파일·링크해도 exe와 Null DLL의 SHA-256이 같았다. **단, PDB를 새로 쓸 때만이다:** 남아 있는 PDB를 링커가 갱신하면 PDB age가 이미지의 디버그 디렉터리에 들어가 SHA가 바뀐다 (ninja의 보통 다시 빌드가 이 경우다). `/Brepro` 없이는 다시 링크할 때마다 바뀐다 (타임스탬프). 그래서 기본은 OFF로 두고, 스탬프는 exe를 다시 빌드하면 다시 만든다 ([Progress.md](Progress.md) M10 §4).
 
 ### 4.2 플래그 프로필
 
@@ -293,6 +294,10 @@ D:\PhysicsTest\
 | test-jolt, test-physx, test-bullet | Release | Test | 단일 SDK | 바이너리 구성 대조군 | - | 확장 M10 |
 
 "보기는 Development, 측정은 Test" 원칙은 모든 엔진에 똑같이 적용한다. VS 생성기는 벤치 프리셋에서 지원하지 않는다.
+
+**M10 구현 메모 [V]**
+- `test-jolt`, `test-physx`, `test-bullet`은 test를 상속하고 다른 두 SDK를 끈다 (`PT_WITH_<SDK>=OFF`). 그 exe에는 그 엔진과 Null(정적, DLL)만 있다. 바이너리 구성 대조군은 같은 셀을 test exe와 단일 SDK exe로 돌려 비교한다 (리포트 §2c, §13 M10 메모).
+- `prof`는 Release, `PT_DO_CHECK` OFF, viewer OFF, `PT_WITH_PROFILER` ON이다. Tracy v0.14.1 클라이언트(`cmake/ThirdParty/Tracy.cmake`, URL + URL_HASH SHA256 고정, `TRACY_ENABLE`, `TRACY_ON_DEMAND`, `TRACY_ONLY_LOCALHOST`, `TRACY_NO_BROADCAST`, 시스템 트레이싱·샘플링·문맥 전환·코드 전송·크래시 핸들러 끔, M10 수정 라운드 0부터 `TRACY_NO_CALLSTACK`: 시작 직후 30~55 ms를 쓰던 심볼 워커 스레드와 dbghelp가 없다)를 하네스 Core에 링크하고, `PT_PROFILE_SCOPE`(Tick, 엔진 프레임, flush, EndFrame)와 프레임 마크를 켠다. Jolt는 `JPH_EXTERNAL_PROFILE`로 빌드하고(`Jolt.cmake`는 `JPH_PROFILE_ENABLED`와 둘 중 하나만 고른다: prof의 compile_commands 144 TU 모두 `JPH_EXTERNAL_PROFILE`뿐이다, M10 수정 라운드 0에서 문구를 고쳤다) `PtJoltProfiler`가 Jolt의 `ExternalProfileMeasurement`를 Tracy C API 존으로 보낸다. G0가 Jolt 설정 문자열의 "(External Profile)"을 prof에서는 요구하고 다른 프리셋에서는 금지한다. prof의 run은 헤드라인 자격이 없다 (사유 "profiler build", [TimingContract.md](TimingContract.md) §6 조건 13).
 
 ### 4.5 타깃 그래프 [MVP]
 
@@ -1101,6 +1106,7 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
   - run 전체에 걸쳐 QPC로 보정한다 (잔차 < 1e-5).
   - 프레임별 QPC raw 값도 같이 저장한다.
   - 읽기 오버헤드를 측정해 기록한다 (< 30 ns 예상).
+  - **M10 구현 [V]:** `FCycleCounter`(Core `HAL/PlatformTime.h`, `CycleCounter.cpp`)가 `__rdtscp` + `_mm_lfence`를 읽는다. 보정 쌍(TSC, QPC)은 호스트 제어 뒤, pre-roll 앞뒤, 60 프레임마다, 루프 뒤에 읽고 첫 쌍과 마지막 쌍의 2점 보정으로 `ns_per_tick`을 정한 뒤 모든 버킷을 다시 변환한다. 잔차(모든 쌍의 상대 위치 차 최댓값)는 창 ≥ 0.15 s run에서 최대 5.4e-7, 60 ms짜리 짧은 run에서 최대 2.1e-6이다 (기준 1e-5). 읽기 오버헤드 TSC 13.4 ns, QPC 12.2 ns. 프레임마다 Tick 전체를 TSC와 QPC로 한 번씩 더 읽어 원시값(`tick_tsc_ticks`, `frame_qpc_ticks`, `tsc_end`, `qpc_end`)을 남긴다. 작은 씬의 배치 측정은 윈도의 TSC 한 구간 / 프레임 수(`batch_frame_ns`), 호출당 ABI 오버헤드는 `-AbiOverhead`(Null, 바디 0, 4호출 × 20000 프레임 묶음 31개의 중앙값, < 100 ns/frame: test 41 ns)다 ([TimingContract.md](TimingContract.md) §2.1).
 
 **루프 제약:** 타이밍 루프 안에서는 할당, I/O, 로그를 하지 않는다. `test` 빌드의 카운팅 훅으로 검증한다 [확장 M7].
 - **M7 구현 [V]:** 벤치 exe가 전역 `operator new`/`delete`(모든 형)를 바꿔 원자 카운터에 센다 (`PhysicsTestBench/Private/AllocationHook.cpp`). manifest `alloc.tick_new_calls`는 `Tick`(타이밍 버킷) 안에서 일어난 `operator new` 호출 수다. 하네스, Kit, 정적 어댑터, SDK의 `operator new`가 모두 이 훅을 지난다. SDK가 자기 할당자로 하는 할당(Jolt `JPH::Allocate`, Bullet `btAlignedAlloc`, PhysX `PxAllocatorCallback`은 `malloc` 계열)은 이 훅에 보이지 않으므로, 백엔드가 셀 수 있으면 `PtMemoryStats.NumAllocs`의 루프 전후 차이를 `alloc.backend_allocs_in_loop`로 따로 적는다 (첫 판은 PhysX·Null만, M7 수정 라운드 0부터 Jolt는 `JPH::Allocate` 계열 함수 포인터의 세는 래퍼, Bullet은 `btAlignedAllocSetCustom`으로 세 SDK 모두. M8에서 고친 문장). `tick_new_calls` > 0이면 헤드라인 자격이 없다. `backend_allocs_in_loop`는 엔진 거동이라 자격에 넣지 않고 기록만 한다. 클럭 읽기 오버헤드는 시작할 때 QPC를 20000번 읽어 `clock.read_overhead_ns`로 기록한다 ([TimingContract.md](TimingContract.md) §2.1).
@@ -1156,6 +1162,7 @@ PhysX UE4Compat는 UE4 규칙을 쓰고, 나머지는 모두 UE5 규칙을 쓴�
 - 마스크는 고정 상수가 아니라 `GetLogicalProcessorInformationEx`로 읽은 토폴로지에서 만든다 (`FProcessorTopology::MakeThreadMask`: 효율 등급이 가장 높은 코어마다 첫 논리 CPU를 T개). 이 PC에서는 위 표의 마스크와 같다 (CTest `PhysicsTest.Unit.Bench`의 `ThreadMasksFromTopology`). `-Affinity=`를 주면 그 마스크의 비트 수가 T와 같아야 한다 (다르면 종료 코드 2).
 - PhysX T ≥ 2는 `PxDefaultCpuDispatcherCreate(T)` 그대로다 (워커 T개). effective `threads.workers`와 `physx.cpu_dispatcher`는 T = 1이면 0, T ≥ 2면 T이고, G9 규칙 `profile:dispatcher_workers`가 비교한다. Bullet에 T ≥ 2를 주면 종료 코드 2다 (`PhysicsTest.Bench.ExitBulletThreads`).
 - manifest `threads`에 `T`, `affinity_mask`, `logical_cpus`, `engine_native`(백엔드의 스레드 키), `scaling_note` "cpu_eff 미검증 (M10)"을 적는다. T = 1..6 스케일링 수치는 모두 비공식이다.
+- **M10 구현 메모 [V]:** 스레드 센서스(`FThreadCensus`, BenchCore: Toolhelp32 + `QueryThreadCycleTime`, 핸들을 잡아 창 안에서 끝난 스레드도 읽는다)를 `InitGamePhys` 뒤(#1), frame 0 바로 앞과 마지막 프레임 뒤(창)에 찍는다. 창 경계의 카운터(프로세스 총량, 스레드들, main, TSC/QPC)는 열거 바깥에서 함께 읽는다 (M10 수정 라운드 0). cpu_eff = own / (wall × T − 마스크 CPU의 다른 부하), 외부 스레드 cycle = 이 프로세스의 main 밖 스레드 cycle / own, unattributed = 프로세스 총량 − own(어느 센서스에도 없는 스레드, 경계 읽기의 기준선을 뺀다). G10b(T = 1, 창의 own CPU 시간 ≥ 50 ms: cpu_eff ∈ [0.98, 1.02], 외부 + unattributed < 0.5%. M10 수정 라운드 1: 다른 부하 > 5%인 경합 창의 실패는 마스크의 바쁜 cycle 대비로도 0.5%를 넘을 때만 Fail, 아니면 판정 없는 Skip)가 Jolt·Bullet·PhysX에서 통과한다 (cpu_eff 1.00000, 외부 0.000000%: Jolt job system과 PhysX inline dispatcher의 스레드는 T = 1에서 cycle 0이다). T > 1 값은 기록만 한다: ThreadMatrix CTest(`M3.BoxPile` 1k, 짧은 run)에서 Jolt T = 2 cpu_eff 0.84, PhysX UE4Compat T = 2 0.51 (main은 `fetchResults`에서 기다리고 워커 둘이 대부분을 한다). PhysX 워커 수(T 대 T − 1)는 M11 스케일링 세션의 10k 값으로 정한다 ([TimingContract.md](TimingContract.md) §7.1, [Progress.md](Progress.md) M10).
 - 시리즈 플래그 (M7 수정 라운드 0): `threads.series`가 마스크의 모양을 토폴로지에서 적는다. `p_cores_one_lp`(P코어마다 논리 CPU 하나, 기본 T 시리즈), `p_cores_smt`(한 코어의 SMT 쌍이 마스크에 있음: HT 시리즈), `with_e_cores`(E코어가 마스크에 있음). `threads.cores`, `smt_pair_cores`, `e_cores`도 함께 쓴다. `-Affinity=`로 HT·E코어 시리즈를 돌려도 M8이 마스크를 다시 풀지 않는다.
 
 ### 9.7 Chaos 보고 수준 (수준 간 비교는 하지 않음) [확장 M13]
@@ -1434,6 +1441,12 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **M7 수정 라운드 0:** Fatal 훅은 run의 마지막 `exit.json`을 쓰기 전까지만 `exit.json`을 쓴다. 그 뒤(teardown)의 Fatal은 `teardown.json`의 `fatal`에 남고, 프로세스는 run의 종료 코드로 `TerminateProcess`된다 (DL52: teardown은 판정을 바꾸지 않는다, CTest `PhysicsTest.Bench.ExitTeardownFatal`). UE_RUNTIME 모듈이 로드된 프로세스의 Fatal도 `exit.json`(`terminate_process: true`)을 쓴 뒤 `TerminateProcess`로 끝난다 (`PhysicsTest.Bench.UeRuntimeFatal`). 백엔드를 로드한 뒤 끝나는 모든 경로의 `exit.json`이 `terminate_process`를 바르게 적는다.
 - `-Conformance`도 `exit.json`을 쓴다. run 디렉터리를 먼저 만들므로 게이트 전에 멈춘 경우(백엔드 없음, 설정·허용치 오류)도 `exit.json`이 남는다 (`PhysicsTest.Bench.ConformanceBackendUnavailable`). CTest `PhysicsTest.Bench.Exit*`가 모든 코드의 `exit.json`을 확인한다 ([Progress.md](Progress.md) M7 §2, §7).
 
+**M10 구현 메모 [V]**
+- 5단계 센서스 #1은 `InitGamePhys` 바로 뒤다. 센서스 **창**은 frame 0 바로 앞(9단계 pre-roll 뒤)에서 11단계까지다: 씬 구성과 pre-roll(도우미 스레드)은 측정 루프가 아니다. 11단계 뒤에 G10b를 판정하고 `gates[]`에 더한다 (Fail이면 헤드라인 자격 없음. M10 수정 라운드 1부터 T = 1의 판정 없는 Skip(센서스 없음, 경합 창)도 자격 없음).
+- 7단계의 스탬프 확인은 그 run의 키로 `Saved/Conformance/<key>.json`을 찾아 manifest `conformance_stamp`에 적는다. 거부하지 않는다 (거부는 러너가 프로세스 전에 한다). 스탬프가 없으면 run은 `unofficial`이다.
+- TSC/QPC 보정 쌍은 2단계 뒤, 9단계 앞뒤, 10단계의 60 프레임마다(프레임 사이), 루프 뒤에 읽는다 (§9.3 M10 구현).
+- `-Conformance`는 M10부터 G10b를 자식 run(`M3.BoxPile` N = 1000, 300 프레임, T = 1. 수정 라운드 1: 최대 세 번 - own CPU 시간이 50 ms보다 짧으면 프레임을 늘리고, 경합 창이면 쉬었다가 다시. 마지막도 Skip이면 Fail이라 유효한 스탬프의 G10b는 언제나 Pass다)으로 확인하고, 스위트 전체가 시험 주입 없이 돌았으면 스탬프를 쓴다 (§12.4). M10 수정 라운드 0부터 DLL 백엔드의 스위트 전체는 ABI 게이트 A0~A7·A10을 게이트마다 새 프로세스(`-Conformance -Gates=<A>`)로 돌려 같은 스탬프에 넣는다 (`GateSuiteVersion` 10, 수정 라운드 1에서 11).
+
 ### 12.3 출력 `Saved/Results/<session>/<run_id>/` (ULID)
 
 **해시 정의** [MVP M3. 스탬프 키로 쓰는 것은 확장 M10]
@@ -1509,6 +1522,14 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **확인:** 러너가 프로세스를 띄우기 **전에** 모든 키 구성요소를 다시 계산해 비교한다.
 - 링크에 `/Brepro`를 쓰면 무관한 재링크로 exe SHA가 바뀌지 않는다 (선택).
 
+**M10 구현 메모 [V]** ([TimingContract.md](TimingContract.md) §9.1, [ResultsSchema.md](ResultsSchema.md) §2.1)
+- 키에 `config_overrides`(명령줄 `-ini:`·`-ExecCmds=` 토큰을 정렬한 목록)를 더했다: 같은 ini 파일이라도 오버라이드가 다르면 엔진 설정이 다르다. 정적 백엔드의 module SHA는 ""이다. 키 SHA-256은 정렬된 키의 공백 없는 JSON(UTF-8)의 해시이고 C++(`FConformanceStampKey`)과 Python(`ptbench/stamps.py`)이 같은 바이트를 만든다.
+- 스탬프는 `-Gates=` 없이 스위트 전체를 시험 주입 없이 돈 `-Conformance`만 쓴다. `valid` = 게이트 실패 0 그리고 `pending_sign_offs` 0 (서명 대기 등록에 기댄 판정이 남아 있으면 무효). 무효 스탬프도 파일로 남겨 러너가 사유를 보인다. M10 수정 라운드 1: G10b 자식 run의 Skip(최대 세 번 돈 뒤)과 ABI 게이트 프로세스의 Skip은 Fail이다 (Skip이 실패가 아니면 판정 없는 G10b로 스탬프가 valid가 된다): 유효한 스탬프의 G10b는 언제나 Pass다 (`GateSuiteVersion` 11).
+- 러너의 "다시 계산": exe와 DLL은 파일 해시를 다시 내고, `variant_sha256`·`physics_sha256`(C++ 리졸버의 정규 해시)은 스탬프가 기록한 입력 파일(Base·프로필·변형 ini, `tolerances.json`)의 지금 원시 해시로 대신 확인한다 (입력과 exe가 같으면 리졸버의 해시도 같다). 셀의 오버라이드, `-ConfigDir`, 스탬프 자신(키 해시 = 파일 이름, valid, pending 0)도 본다. 벤치는 run마다 자기 키(C++ 정확한 계산)로 스탬프를 찾아 manifest에 적고 validate가 스탬프 없는 run을 거부하므로, 러너를 거치지 않은 run도 표에 들어가지 않는다.
+- 백엔드 목록 `PhysicsTestBench.backends.json`(exe 옆, CMake가 만든다)이 어느 백엔드가 DLL인지 러너에 알린다. `python -I -m ptbench stamp --matrix <m>`이 매트릭스의 조합마다 `-Conformance`를 한 번 돈다.
+- **M10 수정 라운드 0:** (1) DLL 백엔드의 스위트 전체는 ABI 게이트 A0~A7·A10도 돈다 (§14.2 "Null, 그리고 모든 백엔드"): 게이트마다 새 프로세스(`-Conformance -Gates=<A>`, `PT_MODULE_NO_REINIT` 규칙)이고 결과가 스탬프 `gates[]`에 들어간다. 그래서 다시 빌드한 DLL(M13의 Chaos 브리지)의 스탬프는 그 바이너리의 핸드셰이크·음성 사례·MXCSR 보존(A1/A4/A6)을 증명한다. 정적 백엔드는 exe의 일부이고 그 ABI 게이트는 CTest(`PhysicsTest.Abi.*`)가 돈다. `GateSuiteVersion` 10. (2) 한 스탬프 디렉터리에 모든 exe(test, test-avx2, test-<engine>, 예전 빌드)의 스탬프가 모이므로, 러너는 사유를 이 exe의 스탬프에서 고른다: 이 exe SHA로 쓴 것, 그다음 같은 경로의 exe가 쓴 것("rebuilt"). 다른 exe의 스탬프만 있으면 "missing"(이 exe의 스탬프 없음)이다. `ptbench stamp --prune`은 자기 exe나 DLL이 없어졌거나 다시 빌드된 스탬프(다시 유효해질 수 없다)와 그 conformance run을 지운다 (`--check`와 함께면 목록만).
+- **다시 빌드 뒤:** `/Brepro` 없이는 다시 링크할 때마다 exe SHA가 바뀌므로 그 exe의 스탬프가 모두 낡는다 (설계대로, Progress M10 D-18). 세션 전에 `ptbench stamp --matrix <m> --preset <p>`를 돈다 (smoke 매트릭스 하나에 약 5 s, DLL 대상은 ABI 게이트 프로세스 9개가 더해진다).
+
 ### 12.5 `Tools/ptbench` 러너 (`python -I -m ptbench run --matrix ...`) [확장 M8]
 
 1. **환경 게이트 (읽기 전용):**
@@ -1536,6 +1557,13 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - **자식 프로세스 (M8 수정 라운드 1):** 벤치는 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job object에 들어간다 (M7 `FProcessSpawner`의 `-Gate=` 자식과 같다). 러너가 어떻게 끝나든(Ctrl+C, CTest 타임아웃, 충돌) 벤치도 끝난다. 대기는 try/finally라 예외에도 자식을 죽이고, KeyboardInterrupt 밖의 예외도 `session.json`을 `aborted`(사유 포함)로 남긴 뒤 다시 던진다. `exit.json`을 쓴 뒤 30 s(`teardown_grace_s`) 안에 끝나지 않는 run(TermGamePhys나 정적 teardown의 멈춤, DL52)은 그때 죽이고 `teardown_killed` true와 메모를 남긴다. 판정은 그 `exit.json`이다 (러너는 1 s마다 `exit.json`이 생겼는지만 본다).
 - **smoke 매트릭스 (03 M8 완료 기준):** 4 엔진 변형 × {P0, BoxPile 1k, 5k} × T = 1 × R = 5 = 60 run이 이 PC(Balanced, 사용 중)에서 무인으로 약 4분에 끝난다.
 
+**M10 구현 메모 [V]** ([TimingContract.md](TimingContract.md) §5.2, [ResultsSchema.md](ResultsSchema.md) §11)
+- **2단계 스탬프:** perf 매트릭스의 기본 정책 `require`는 셀 하나라도 스탬프가 없거나(missing) 낡았거나(stale) 무효(invalid)이면 프로세스를 하나도 띄우지 않고 종료 코드 3으로 거부한다 (`session.json` `refusal_reason`, `stamps`). determinism·behavior 매트릭스의 기본 정책은 `record`다 (M10 수정 라운드 0): 셀마다 스탬프 상태를 기록하고 돈다 (R9는 보고 가능한 타이밍의 조건이다. 거동 프로브 타깃은 물리를 바꾸는 오버라이드라 게이트를 통과하지 못할 수 있다). 매트릭스의 `"stamps"`(require / record)가 기본을 바꾸고 `--require-stamps`가 `require`를 강제한다. `--skip-unstamped`는 그 셀만 빼고(`unstamped`), `--allow-unstamped`는 모두 돌되 비공식이다. 둘 다 우회로 기록된다.
+- **4단계 sentinel:** 매트릭스 `sentinel`(smoke: `jolt.Default`, `M3.BoxPile` 1k, T = 1)을 처음, 계획된 run의 절반 뒤, 끝에 돌린다 (`kind: sentinel`). 처음 대비 drift > 2%이거나 sentinel run이 실패하면 세션 플래그.
+- **5단계 CV 게이트:** R 블록 뒤 CV > 2%인 셀만 모아 추가 블록(새 seed 셔플)을 최대 2번 돈다. 그래도 넘으면 `noisy`(값은 보고, 리포트 ⚠). 리포트는 그 셀의 모든 run(추가 블록 포함)으로 통계를 낸다.
+- **세션 판정:** `unofficial`은 전원 계획, 우회, perf 아님, R < 5, 스탬프 정책, sentinel 없음·플래그 중 하나라도 있으면 참이다 (`unofficial_reasons`).
+- **기타 (M8 검토):** `--target`이 매트릭스의 타깃을 고른다 (단일 SDK exe 세션, `ptbench stamp`). `--session`의 디렉터리가 이미 있으면 종료 코드 2. determinism 매트릭스의 `--report`는 DET1 리포트를 만든다. 분석 명령은 없는 입력 경로를 종료 코드 2로 거부한다.
+
 ## 13. 분석 파이프라인 (`Tools/ptbench/analysis`)
 
 사용 패키지: numpy, pandas, pyarrow, scipy, matplotlib, jsonschema. 버전을 고정한 venv/wheelhouse로 설치한다 (§4.7).
@@ -1543,8 +1571,8 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 | 모듈 | 역할 | 단계 |
 |---|---|---|
 | load | 스키마 검증 후 tidy parquet로 저장 (runs, frames, effective, gates) | 확장 M8 |
-| validate | 거부 대상: 헤드라인 자격 없는 run, 게이트 실패, 오염 호스트, 플래그 프로필이 섞인 표, 한 표 안의 `desc_sha256` 불일치, mode=viz manifest. 스탬프 누락·불일치는 M10에 더한다 | 확장 M8 (M10 보강) |
-| perf | run별 윈도 평균, run 간 중앙값, p95/p99, 프레임별 중앙값/IQR 시계열, CV, N-scaling α, S(T)/E(T), 오버헤드 모델 t = a + b·N (P0/P1/M3). percentile bootstrap 95% CI (B=10000)와 cpu_eff는 M10 | 확장 M8 (M10 보강) |
+| validate | 거부 대상: 헤드라인 자격 없는 run, 게이트 실패, 오염 호스트, 플래그 프로필이 섞인 표, 한 표 안의 `desc_sha256` 불일치, mode=viz manifest. M10: 스탬프 없는 run, comparability key 불일치(편집된 manifest), sentinel run, 뷰어 manifest | 확장 M8 (M10 보강) |
+| perf | run별 윈도 평균, run 간 중앙값, p95/p99, 프레임별 중앙값/IQR 시계열, CV, N-scaling α, S(T)/E(T), 오버헤드 모델 t = a + b·N (P0/P1/M3). M10: 중앙값의 percentile bootstrap 95% CI (B=10000), cpu_eff, block-bootstrap 비율 CI와 주장 표, 바이너리 구성 대조 표 | 확장 M8 (M10 보강) |
 | behavior | 반발 계수, 마찰 d(t) (이산·연속 기준), 진자 주기 (영점 교차), 체인 신장, 하네스 기하 관통 (sphere-plane, box corner, SAT), resting jitter, time-to-sleep, 자기 민감도 대비 발산, 최종 z의 Wasserstein | 확장 M9 |
 | determinism | DET1 행렬과 첫 발산 프레임. DET2~DET5는 M15 | 확장 M8 |
 | report | `report/<date>/index.md` + PNG. comparability key마다 표 하나 (M10 전에는 scene × profile × flag × T마다) | 확장 M8 |
@@ -1572,8 +1600,16 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 - block-bootstrap 비율 CI가 1을 포함하지 않는다.
 - |ρ-1| ≥ 3%.
 - Shipped와 MatchedAVX2에서 방향이 같다. 다르면 "ISA-dependent"로 표기한다.
+- (M10 수정 라운드 1) A와 B의 셀이 두 플래그 프로필 모두에서 CV 게이트를 통과했다 (noisy가 아님). noisy 셀은 보고할 수 있는 셀이 아니므로(TimingContract §9) 그 쌍은 주장하지 않는다.
 
 씬별 결과를 우선한다. M10 이전의 비율은 "비공식"으로 표기한다.
+
+**M10 구현 메모 [V]** ([Progress.md](Progress.md) M10)
+- **comparability key:** 벤치가 `FRunManifest::ComputeComparabilityKey`로 manifest에 쓰고 `analysis/comparability.py`가 같은 필드로 다시 계산한다 (다르면 validate가 거부). 정규형 = {`schema` "physicstest.comparability/1", 위 12개, `thread_series`}의 정렬된 공백 없는 JSON의 SHA-256. dt는 `run.dt_s`의 IEEE-754 비트(16진 16자리)로 넣고(`dt_bits`, 텍스트 실수는 안정된 키가 아니다), `harness_commit` = `git_sha` + dirty면 "+dirty", instrumentation은 정렬한다. **`thread_series`를 더했다:** P코어 하나씩·SMT·E코어 시리즈는 같은 T라도 다른 표다 (02 §9.6, M8 검토). 프레임 수와 윈도는 `desc_sha256`(dt 시퀀스)과 `scene_sha256`(씬 이름·버전·파라미터)에 이미 들어 있다.
+- **표:** comparability key마다 표 하나, 엔진·변형은 시리즈다. 키가 없는 M7~M9 manifest는 M8의 scene × profile × flag × T로 묶는다. 한 표 안에서 같은 시리즈 레이블이 여러 프리셋(test와 test-<engine>)에서 오면 `label@preset`으로 나눈다 (바이너리 구성 대조군. 어느 쪽이 단일 SDK exe인지는 M10 수정 라운드 1부터 manifest `harness.sdks`로 가린다: preset 이름이 test-local·test-jolt-local 같은 사용자 프리셋이어도 된다). check_table은 그대로 플래그 프로필·`desc_sha256`·키 단일성을 assert한다.
+- **CI:** 셀 중앙값의 percentile bootstrap 95% CI (B = 10000, seed = 입력 정체성의 SHA-256: 같은 run이면 같은 CI). 비율 ρ = median(A) / median(B)의 CI는 **block bootstrap**이다: 블록 = 한 세션에서 러너의 반복 하나(모든 셀을 셔플 순서로 한 번, 키 `<session>#<repeat>`)이고, 두 시리즈의 같은 블록 run은 같은 기계 상태에서 몇 분 안에 돌았으므로 블록 단위로 함께 다시 뽑는다. 공통 블록이 2개 미만이면 CI 없음. 단일 SDK exe의 시리즈(`label@test-<engine>`)는 엔진 비교에서 빼고 구성 대조 표에만 둔다.
+- **주장 규칙 (`analysis/claims.py`):** Shipped 표와 MatchedAVX2 표의 같은 (씬, 프로필, T, 스레드 시리즈, A, B) 쌍마다 (스레드 시리즈 짝짓기는 M10 수정 라운드 1): 두 ISA 모두 비율 CI가 1을 포함하지 않고 |ρ − 1| ≥ 3%이며 방향이 같으면 "faster"/"slower". 두 ISA의 방향이 다르고 적어도 한쪽이 단독으로 성립하면 "ISA-dependent". 그 밖에는 "no claim"과 막는 조건(CI가 1을 포함, |ρ − 1| < 3%, MatchedAVX2 비율 없음: 한쪽 ISA만으로는 주장하지 않는다)을 적는다. 합성 데이터 세 경우를 `Py.Unit` `ClaimRuleTests`가 확인한다. M10 수정 라운드 1: 네 셀(A·B × 두 ISA) 중 하나라도 CV 게이트 뒤 noisy면 "no claim"이고 사유에 그 셀과 CI만으로의 판정을 적는다 (`test_a_noisy_cell_is_no_claim`).
+- **바이너리 구성 대조 (`perf.composition_table`, 리포트 §2c):** 같은 표에 단일 SDK exe의 `label@<preset>`(`harness.sdks`가 하나, M10 수정 라운드 1. 그 필드가 없는 예전 manifest는 preset 이름 test-<engine>)과 SDK가 가장 많은 exe의 `label@<preset>`(보통 test)이 있으면 diff = median(test-<engine>) / median(test) − 1과 독립 표본 bootstrap CI(두 세션이라 블록을 공유하지 않는다)를 적는다. 판정(|diff| ≤ 1%)은 M11이다 (§14.3).
 
 **거동 차이 태그 [확장 M9]**
 - 모든 거동 차이에 by-design / mismatch / algorithmic 중 하나를 붙인다.
@@ -1638,7 +1674,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 | G8 | DET1 | fresh process 3회에서 h_native 동일 | 확장 M7 |
 | G9 | effective readback | READBACK 키 전부 일치. `M3.BoxPile` 1k에서 `shape.wrapping` 합계 0 | MVP M6 |
 | G10a | bench 위생 | listeners 0, 드로어 분리, 계측 tier 0 | 확장 M7 |
-| G10b | 단일 스레드 증명 | T=1에서 cpu_eff ∈ [0.98, 1.02], 외부 스레드 cycle < 0.5% | 확장 M10 |
+| G10b | 단일 스레드 증명 | T=1에서 cpu_eff ∈ [0.98, 1.02], 외부 스레드 cycle < 0.5%. M10: run마다 센서스 창으로 판정해 `gates[]`에 넣고(창의 own CPU 시간 < 50 ms이면 Skip(M10 첫 판 창 10 ms, 수정 라운드 0 wall 50 ms), 다른 부하 > 5%인 경합 창의 실패는 마스크 바쁜 cycle 대비로도 0.5%를 넘어야 Fail이고 아니면 Skip(수정 라운드 1, T = 1이면 헤드라인 자격 없음), T > 1은 Skip, 수정 라운드 0부터 어느 센서스에도 없는 스레드의 cycle(unattributed, 경계 읽기의 기준선을 뺀 몫)도 외부로 센다. 음성 대조 `-InjectForeignWork`), `-Conformance`는 자식 run(`M3.BoxPile` 1k, 300 프레임, T=1, 최대 세 번)으로 확인하고 Skip이면 Fail이다(수정 라운드 1). 이 프로세스의 스레드만 본다 (사용 중인 데스크톱에서는 판정 대신 Skip이 날 수 있다) | 확장 M10 |
 | G11 | 결과 중립 knob | 접촉 캡처 on/off 시 `M3.BoxPile` 1k 600 프레임 비트 동일 (M7). `Bullet.StaticAabbOff` 해시가 `Bullet.Default`와 동일 (M9, 변형이 생길 때). **리드 결정 (2026-10-22): 좁힌 범위** - 한 바디(`M1.SingleBoxDrop` b)·조인트(`M6a`·`M6b`·`M6c`)·탑(`M2a.Tower` N=10 기준 run) 씬의 두 프로필과 `M3.BoxPile` 1k Normalized + `bEnableEnhancedDeterminism`(600 프레임)에서 판정한다 (CTest `G11BulletStaticAabbOff`, `G11BulletStaticAabbOffPile`). 기본 프로필 더미(`M3.BoxPile` 1k: frame 51 UEParity / 54 Normalized)와 무너지는 탑(N=30)에서는 쌍 순서가 바뀌어 갈린다: 이 변형은 더미에서 결과 중립이 아닌 by-design knob이고, 비교에서 `Bullet.Default`와 같은 것으로 다루지 않는다. 드로어 knob(`-G11Knob=viz`)은 viz child가 매 프레임 그렸는지도 본다 (M9 수정 라운드 0) | 확장 M7 / M9 |
 | J1 | 조인트 계약 (`M6a.Pendulum` 5° hinge·ball, COM 넛지 막대, 충돌 스위치, 잠든 조인트, hinge 외팔보) | [Abi.md](Abi.md) §9.4 13: 선언한 타입마다 stretch ≤ 0.5 cm(등록 예외는 `tolerances.json` J1: Bullet ball 3 cm, 리드 승인 2026-10-22), hinge 축 ≤ 1e-2 rad, 진자가 넘어감, 스냅샷 프레임 = 호스트 `GetWorldFrame`, 움직이는 조인트의 앵커 둘레 couple 0, 해제, actor 공간 프레임(COM 넛지), **충돌 스위치**(6 cm 겹친 두 정육면체: UE 기본 `bDisableCollision` false면 60 프레임에 중심 거리 ≥ `J1.collision_push_cm` 2 cm 벌어지고, `PT_JOINTF_DISABLE_COLLISION`이면 ≤ `J1.disable_collision_drift_cm` 0.05 cm; 호스트 자세로 재므로 접촉 캡처 없는 백엔드도 돈다), **잠든 조인트**(sleep을 켠 프로필 = UEParity와 `JOINT_SNAPSHOT`: 두 고리를 재우면 두 레코드가 `PT_JOINTSNAP_SLEEPING`만과 정확히 0인 충격량; Normalized에서는 노트로 건너뛴다), 충격량 규약(m g dt, −50 m g dt). sleep 끔 (잠든 조인트 사례만 프로필 sleep, UEParity). 스냅샷 사례(프레임, couple, 충격량, 잠든 조인트)는 `PT_CAP_JOINT_SNAPSHOT`이 있을 때만 돌고 없으면 노트다. 조인트 capability가 없으면 호스트 전용 확인 + 등록된 Skip(Null, 조인트 전의 Chaos). DLL 백엔드도 `-Conformance`로 자기 프로세스에서 돈다 | 확장 M9 (수정 라운드 0, 충돌 스위치·잠든 조인트는 수정 라운드 2) |
 | G12 | 용량·오류 | Jolt update error 0, PhysX error callback 0, Bullet 풀 heap fallback 0 | MVP M6 |
@@ -1672,7 +1708,7 @@ PhysicsTestBench.exe -List | -DescribeBuild | -Describe -Backend=.. | -Conforman
 
 **골든 네이티브 해시 [확장 M7]:** 회귀 경고로만 쓴다. SDK나 플래그가 바뀌면 다시 기준선을 잡는다.
 
-**바이너리 구성 대조군 [확장 M10]:** `test-<engine>`과 `test`의 차이가 1% 이내여야 한다. 넘으면 헤드라인을 단일 SDK exe 기준으로 잡는다.
+**바이너리 구성 대조군 [확장 M10]:** `test-<engine>`과 `test`의 차이가 1% 이내여야 한다. 넘으면 헤드라인을 단일 SDK exe 기준으로 잡는다. **M10은 측정·기록만 하고 판정은 M11이다 (03 M10):** 프리셋 셋과 리포트 §2c, 측정값은 [Progress.md](Progress.md) M10 §4.
 
 ## 15. Chaos 백엔드 연결 계획 (나중, 사용자 구현) [확장 M13, 스파이크 M2.5]
 

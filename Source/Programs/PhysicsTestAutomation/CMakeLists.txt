@@ -69,6 +69,7 @@ pt_add_program(PhysicsTestAutomation
 		Private/Tests/GateTests.cpp
 		Private/Tests/JointAndBehaviorTests.cpp
 		Private/Tests/JoltJointTests.cpp
+		Private/Tests/MeasurementTests.cpp
 		Private/Tests/PhysicsBackendTests.cpp
 		Private/Tests/PhysicsProfileTests.cpp
 		Private/Tests/PhysicsTypesTests.cpp
@@ -94,7 +95,9 @@ set_tests_properties(PhysicsTest.Automation PROPERTIES LABELS "unit")
 
 # One CTest entry per test area (PhysicsTest.<Area>.*), so a failure names its area. doctest exits 0 when a filter
 # matches nothing, so each entry also requires a non-empty, all-passing summary line.
+# M10: Measurement (the TSC clock and its calibration, the thread census, G10b verdicts, the stamp key).
 foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw Bench Joint Behavior
+		Measurement
 		${_pt_automation_backend_areas})
 	add_test(NAME PhysicsTest.Unit.${_area} COMMAND PhysicsTestAutomation "-tc=PhysicsTest.${_area}.*")
 	set_tests_properties(PhysicsTest.Unit.${_area} PROPERTIES

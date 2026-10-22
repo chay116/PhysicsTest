@@ -25,11 +25,15 @@ from typing import Any, Iterable
 import pandas as pd
 
 from .. import common
+from . import comparability
 
 WINDOW_STATS = ("mean", "median", "p95", "p99", "min", "max", "count")
 KNOWN_WINDOWS = ("headline", "impact", "settled")
 TIMING_COLUMNS = ["frame", "sim_time_s", "num_steps", "push_ns", "setup_ns", "start_ns", "wait_ns", "end_ns", "step_ns", "pull_ns", "frame_ns",
-                  "frame_qpc_ticks", "solver_ns", "awake_bodies", "contact_pairs", "contact_points", "islands", "error_bits"]
+                  "frame_qpc_ticks", "solver_ns", "awake_bodies", "contact_pairs", "contact_points", "islands", "error_bits",
+                  # M10: the TSC buckets' raw ticks, the whole Tick and the TSC / QPC at its end (M7-M9 files lack them)
+                  "frame_tsc_ticks", "tick_ns", "tick_tsc_ticks", "tsc_end", "qpc_end"]
+RUN_SCHEMA = "physicstest.run/2"
 
 
 @dataclasses.dataclass
@@ -112,6 +116,9 @@ def run_row(run_dir: pathlib.Path, info: dict[str, Any] | None = None) -> tuple[
         "run_dir": str(run_dir),
         "source": info.get("source", ""),
         "source_kind": info.get("source_kind", "run"),
+        # M10 fix round 0: the session directory a session run came from (the runner's per-session cell state, e.g. its CV gate's
+        # noisy mark, belongs to that session only; cell keys repeat across sessions of one matrix)
+        "session_dir": info.get("session_dir"),
         "run_name": info.get("run_name", run_dir.name),
         "attempt": info.get("attempt", 0),
         "repeat": info.get("repeat"),
@@ -131,7 +138,13 @@ def run_row(run_dir: pathlib.Path, info: dict[str, Any] | None = None) -> tuple[
                    exit_reason=exit_doc.get("reason", ""), terminate_process=exit_doc.get("terminate_process"))
     else:
         row.update(exit_json_valid=None, exit_code=None, exit_status=None, exit_category=None, exit_reason="", terminate_process=None)
-    if manifest is not None:
+    if manifest is not None and manifest.get("schema") != RUN_SCHEMA:
+        # M10 (M8 review): a manifest of another kind - the viewer's physicstest.viewer/1 (top-level "mode": "viz", 02 11.2) -
+        # is never a run; validate rejects it by its schema.
+        row.update(manifest_valid=False, manifest_schema=manifest.get("schema"), mode=str(manifest.get("mode") or manifest.get("schema") or "?"))
+        schema_errors.append(f"manifest.json schema {manifest.get('schema')!r} is not {RUN_SCHEMA}")
+        manifest = None
+    elif manifest is not None:
         errors = common.schema_errors(manifest, "manifest.schema.json")
         schema_errors += [f"manifest.json {e}" for e in errors]
         scene = manifest.get("scene") or {}
@@ -146,8 +159,28 @@ def run_row(run_dir: pathlib.Path, info: dict[str, Any] | None = None) -> tuple[
         determinism = manifest.get("determinism") or {}
         summary = manifest.get("summary") or {}
         params = _scene_params(manifest)
+        census = threads.get("census_window") if isinstance(threads.get("census_window"), dict) else {}
+        clock = manifest.get("clock") or {}
+        calibration = clock.get("calibration") if isinstance(clock.get("calibration"), dict) else {}
+        stamp = manifest.get("conformance_stamp") if isinstance(manifest.get("conformance_stamp"), dict) else {}
+        g10b = next((g for g in manifest.get("gates") or [] if isinstance(g, dict) and g.get("id") == "G10b"), {})
         row.update(
             manifest_valid=not errors,
+            manifest_schema=manifest.get("schema"),
+            # M10: the comparability key as written and as recomputed from the manifest's own fields (validate compares them)
+            comparability_key=manifest.get("comparability_key"),
+            comparability_key_recomputed=comparability.key_from_manifest(manifest),
+            stamp_valid=stamp.get("valid") if stamp else None,
+            stamp_reason=stamp.get("reason") if stamp else "no conformance_stamp (an M7-M9 manifest)",
+            stamp_key=stamp.get("key_sha256") if stamp else None,
+            cpu_eff=summary.get("cpu_eff") if isinstance(summary.get("cpu_eff"), (int, float)) else None,
+            cpu_eff_raw=census.get("cpu_eff_raw"),
+            foreign_fraction=threads.get("foreign_cycles_fraction") if isinstance(threads.get("foreign_cycles_fraction"), (int, float)) else None,
+            g10b=g10b.get("result"),
+            g10b_skip=census.get("g10b_skip"),   # M10 fix round 1: why G10b is Skip ("" = a verdict)
+            tsc_hz=clock.get("tsc_hz") if isinstance(clock.get("tsc_hz"), (int, float)) else None,
+            tsc_residual=calibration.get("max_residual"),
+            unofficial_reasons=_json_text(manifest.get("unofficial_reasons") or []),
             run_id=manifest.get("run_id"),
             session=manifest.get("session"),
             status=manifest.get("status"),
@@ -179,6 +212,8 @@ def run_row(run_dir: pathlib.Path, info: dict[str, Any] | None = None) -> tuple[
             affinity_mask=threads.get("affinity_mask"),
             thread_series=threads.get("series"),
             preset=harness.get("preset"),
+            # M10 fix round 1: the SDKs compiled into the exe ("Jolt" = a single-SDK exe, the composition control; None before)
+            build_sdks=",".join(map(str, harness["sdks"])) if isinstance(harness.get("sdks"), list) else None,
             do_check=harness.get("do_check"),
             exe_sha256=harness.get("exe_sha256"),
             git_sha=harness.get("git_sha"),
@@ -211,9 +246,17 @@ def run_row(run_dir: pathlib.Path, info: dict[str, Any] | None = None) -> tuple[
                 row[f"win_{name}_{stat}"] = stats.get(stat) if stat != "count" else entry.get("count")
             row[f"win_{name}_first"] = entry.get("first")
             row[f"win_{name}_last"] = entry.get("last")
-    else:
+            # M10: the batch measurement (one TSC interval over the window) and the whole Tick's mean
+            row[f"win_{name}_batch"] = entry.get("batch_frame_ns") if isinstance(entry.get("batch_frame_ns"), (int, float)) else None
+            tick = entry.get("tick_ns") if isinstance(entry.get("tick_ns"), dict) else {}
+            row[f"win_{name}_tick_mean"] = tick.get("mean")
+    elif "manifest_schema" not in row:
         row["manifest_valid"] = None
     row["schema_errors"] = _json_text(schema_errors)
+    row["kind"] = info.get("kind") or "cell"
+    row["cell_key"] = info.get("cell_key")
+    # M10: the block of the run for the block bootstrap - the runner's repeat, else the manifest's order.repeat_index
+    row["block"] = info.get("repeat") if info.get("repeat") is not None else (((manifest or {}).get("order") or {}).get("repeat_index") if manifest else None)
     label = info.get("label") or (default_label(manifest) if manifest is not None else (info.get("backend") or "?"))
     row["label"] = label
     for key in ("backend", "variant", "profile", "scenario", "T"):
@@ -266,7 +309,8 @@ def load(inputs: Iterable[str | pathlib.Path], with_frames: bool = True) -> Load
             for run in document.get("runs", []):
                 cell = cells.get(run.get("cell_key"), {})
                 info = dict(run)
-                info.update(source=document.get("session_id"), source_kind="session", label=run.get("label") or cell.get("label"), params=run.get("params"))
+                info.update(source=document.get("session_id"), source_kind="session", session_dir=str(path), label=run.get("label") or cell.get("label"),
+                            params=run.get("params"))
                 entries = [(path / run["out_dir"], info)]
                 _collect(entries, rows, frames, effective, gates, with_frames)
         elif kind == "gate_g8":
@@ -310,7 +354,7 @@ def _collect(entries, rows, frames, effective, gates, with_frames) -> None:
 
 # Typed columns of the parquet files (nullable: a run without exit.json or manifest has missing values, not text).
 BOOL_COLUMNS = ("timed_out", "exit_json", "manifest", "exit_json_valid", "manifest_valid", "terminate_process", "built", "do_check",
-                "timing_valid_for_headline", "unofficial", "power_scheme_high_performance", "contaminated", "accepted")
+                "timing_valid_for_headline", "unofficial", "power_scheme_high_performance", "contaminated", "accepted", "stamp_valid")
 INT_COLUMNS = ("attempt", "repeat", "order", "process_exit_code", "exit_code", "scene_version", "num_bodies", "N", "frames", "frames_run",
                "hash_every", "T", "tick_new_calls", "h_native_frame", "engine_error_bits", "frame", "num_steps", "checks", "n_failures")
 
@@ -360,6 +404,10 @@ def write_parquet(loaded: Loaded, out_dir: pathlib.Path) -> list[pathlib.Path]:
 
 
 def main(args) -> int:
+    missing = [p for p in args.inputs if not pathlib.Path(p).exists()]
+    if missing:
+        print(f"ptbench load: no such path: {', '.join(missing)}")
+        return 2
     loaded = load(args.inputs)
     if loaded.runs.empty:
         print("ptbench load: no run found under " + ", ".join(args.inputs))

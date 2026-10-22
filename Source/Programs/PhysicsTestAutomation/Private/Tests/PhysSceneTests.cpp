@@ -432,7 +432,12 @@ TEST_CASE("PhysicsTest.PhysScene.TimingBucketsAndStats")
 	CHECK(Timing.FrameNs == Timing.PushNs + Timing.StepNs + Timing.PullNs);
 	const uint64 SubBuckets = Timing.SetupNs + Timing.StartNs + Timing.WaitNs + Timing.EndNs;
 	CHECK((SubBuckets > Timing.StepNs ? SubBuckets - Timing.StepNs : Timing.StepNs - SubBuckets) <= 4u);   // per-bucket rounding
-	CHECK(Timing.FrameQpcTicks > 0u);
+	// M10: the buckets read the TSC; the raw ticks add up like the ns values (no rounding), and the scene leaves the QPC field
+	// to the bench (the QPC ticks of the whole Tick, read outside the buckets).
+	CHECK(Timing.FrameTsc > 0u);
+	CHECK(Timing.FrameTsc == Timing.PushTsc + Timing.StepTsc + Timing.PullTsc);
+	CHECK(Timing.StepTsc == Timing.SetupTsc + Timing.StartTsc + Timing.WaitTsc + Timing.EndTsc);
+	CHECK(Timing.FrameQpcTicks == 0u);
 	CHECK(Scene.GetStats().NumAwakeBodies == 100);
 	// With a command the push runs (one ApplyBodyCommands call). Its duration can be below one QPC tick (100 ns), so the
 	// check is on the effect, not on PushNs > 0.

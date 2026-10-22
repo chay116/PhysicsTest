@@ -1,0 +1,351 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://physicstest.local/schemas/stamp.schema.json",
+  "title": "PhysicsTest conformance stamp (physicstest.stamp/1)",
+  "description": "Saved/Conformance/<stamp_key_sha256>.json, written by PhysicsTestBench -Conformance after the whole gate suite ran (02_Architecture 12.4, 03_WorkPlan M10 task 4). The key binds the result to the bench exe, a DLL backend's file, the backend variant's content, the resolved physics profile, tolerances.json, the gate suite version and the configuration switches (-ini: / -ExecCmds=, an M10 addition). stamp_key_sha256 = SHA-256 of key_canonical, the key as canonical JSON (keys sorted, no whitespace, UTF-8). valid = the suite passed (no gate failed) and pending_sign_offs = 0. The runner (Tools/ptbench/stamps.py) recomputes the exe and DLL hashes and the raw hashes of every input before it starts a process.",
+  "type": "object",
+  "required": [
+    "schema",
+    "stamp_key_sha256",
+    "valid",
+    "result",
+    "invalid_reason",
+    "pending_sign_offs",
+    "summary",
+    "key_canonical",
+    "key",
+    "target",
+    "build",
+    "backend_module",
+    "config_dir",
+    "inputs",
+    "gates",
+    "conformance_dir",
+    "command_line",
+    "utc"
+  ],
+  "properties": {
+    "schema": {
+      "const": "physicstest.stamp/1"
+    },
+    "stamp_key_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "valid": {
+      "type": "boolean"
+    },
+    "result": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "invalid_reason": {
+      "type": "string"
+    },
+    "pending_sign_offs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "gates",
+        "failed",
+        "skipped"
+      ],
+      "properties": {
+        "gates": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "key_canonical": {
+      "type": "string",
+      "minLength": 2
+    },
+    "key": {
+      "type": "object",
+      "required": [
+        "bench_exe_sha256",
+        "backend_module_sha256",
+        "variant_sha256",
+        "physics_sha256",
+        "tolerances_sha256",
+        "gate_suite_version",
+        "config_overrides"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bench_exe_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_module_sha256": {
+          "$ref": "#/$defs/sha256_or_empty"
+        },
+        "variant_sha256": {
+          "$ref": "#/$defs/sha256_or_empty"
+        },
+        "physics_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "tolerances_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "gate_suite_version": {
+          "type": "integer",
+          "minimum": 9
+        },
+        "config_overrides": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^-([Ii][Nn][Ii]:|[Ee][Xx][Ee][Cc][Cc][Mm][Dd][Ss]=)"
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "backend",
+        "variant_requested",
+        "variant",
+        "profile"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant_requested": {
+          "type": "string"
+        },
+        "variant": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": [
+        "exe",
+        "exe_path",
+        "preset",
+        "flag_profile",
+        "configuration",
+        "git_sha",
+        "git_dirty"
+      ]
+    },
+    "backend_module": {
+      "type": "object",
+      "required": [
+        "kind",
+        "file",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "static",
+            "dll"
+          ]
+        }
+      }
+    },
+    "config_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "base_ini",
+              "profile_ini",
+              "variant_ini",
+              "tolerances"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "result",
+          "reason",
+          "failures"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 2
+          },
+          "result": {
+            "enum": [
+              "pass",
+              "fail",
+              "skip"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "conformance_dir": {
+      "type": "string"
+    },
+    "command_line": {
+      "type": "string"
+    },
+    "utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "a valid stamp: the suite passed and no verdict rests on an unsigned post-run registration",
+      "if": {
+        "properties": {
+          "valid": {
+            "const": true
+          }
+        },
+        "required": [
+          "valid"
+        ]
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "const": "pass"
+          },
+          "pending_sign_offs": {
+            "const": 0
+          },
+          "invalid_reason": {
+            "const": ""
+          },
+          "summary": {
+            "properties": {
+              "failed": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "invalid_reason": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "$comment": "a DLL backend's stamp names its module file; a static backend's key has no module hash",
+      "if": {
+        "properties": {
+          "backend_module": {
+            "properties": {
+              "kind": {
+                "const": "dll"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "key": {
+            "properties": {
+              "backend_module_sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          },
+          "backend_module": {
+            "properties": {
+              "file": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "key": {
+            "properties": {
+              "backend_module_sha256": {
+                "const": ""
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256_or_empty": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "const": ""
+        }
+      ]
+    }
+  }
+}

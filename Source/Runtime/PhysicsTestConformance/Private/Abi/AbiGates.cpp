@@ -2,6 +2,7 @@
 #include "Abi/AbiGates.h"
 #include "AbiGateHelpers.h"
 
+#include "HAL/PlatformTime.h"
 #include "Physics/EffectiveSettings.h"
 #include "Physics/PhysicsBackend.h"
 
@@ -967,5 +968,71 @@ namespace PhysicsTest::AbiGates
 		R.Check(Api.DestroyScene(Scene) == PT_OK, "DestroyScene");
 		R.Check(Api.TermGamePhys() == PT_OK, "TermGamePhys");
 		return R;
+	}
+
+	// ---- [확장 M10] the ABI call overhead on the TSC -----------------------------------------------------------------------
+	FAbiCallOverhead MeasureCallOverhead(const FAbiGateTarget& Target, const int32 FramesPerBatch, const int32 Batches)
+	{
+		FAbiCallOverhead Out;
+		Out.FramesPerBatch = FramesPerBatch > 0 ? FramesPerBatch : 1;
+		Out.Batches = Batches > 0 ? Batches : 1;
+		const PtBackendApi& Api = *Target.Api;
+		const FTerminateOnExit Terminate(Api);
+		const PtInitParams Init = MakeInitParams();
+		if (Api.InitGamePhys(&Init) != PT_OK)
+		{
+			Out.Error = "InitGamePhys failed";
+			return Out;
+		}
+		const PtSceneDesc Desc = MakeSceneDesc(0u);
+		PtSceneId Scene = 0;
+		if (Api.CreateScene(&Desc, &Scene) != PT_OK)
+		{
+			Out.Error = "CreateScene failed";
+			return Out;
+		}
+		const PtVec3 Gravity = { 0.0, 0.0, -980.0 };
+		const auto RunFrames = [&Api, Scene, &Gravity](const int32 Frames)
+		{
+			bool bOk = true;
+			for (int32 Frame = 0; Frame < Frames; ++Frame)
+			{
+				PtFrameResult Result = {};
+				bOk = Api.SetUpForFrame(Scene, &Gravity, 1.0f / 60.0f, 0.0f, 0.0f, 0.0f, 1, 0u) == PT_OK && Api.StartFrame(Scene) == PT_OK
+					&& Api.WaitPhysScenes(Scene) == PT_OK && Api.EndFrame(Scene, &Result) == PT_OK && bOk;
+			}
+			return bOk;
+		};
+		FCycleCounter::EnsureCalibrated();
+		Out.NsPerTick = FCycleCounter::GetNsPerTick();
+		if (!RunFrames(Out.FramesPerBatch))   // warm-up: caches, branch predictors, the CPU's clock
+		{
+			Out.Error = "a frame call failed";
+			Api.DestroyScene(Scene);
+			return Out;
+		}
+		std::vector<double> PerFrame;
+		PerFrame.reserve(static_cast<size_t>(Out.Batches));
+		for (int32 Batch = 0; Batch < Out.Batches; ++Batch)
+		{
+			const uint64 Begin = FCycleCounter::Read();
+			const bool bOk = RunFrames(Out.FramesPerBatch);
+			const uint64 End = FCycleCounter::Read();
+			if (!bOk)
+			{
+				Out.Error = "a frame call failed";
+				Api.DestroyScene(Scene);
+				return Out;
+			}
+			PerFrame.push_back(static_cast<double>(End - Begin) * Out.NsPerTick / static_cast<double>(Out.FramesPerBatch));
+		}
+		Api.DestroyScene(Scene);
+		std::sort(PerFrame.begin(), PerFrame.end());
+		const size_t N = PerFrame.size();
+		Out.MedianNsPerFrame = (N % 2 == 1) ? PerFrame[N / 2] : 0.5 * (PerFrame[N / 2 - 1] + PerFrame[N / 2]);
+		Out.MinNsPerFrame = PerFrame.front();
+		Out.MaxNsPerFrame = PerFrame.back();
+		Out.bValid = true;
+		return Out;
 	}
 }

@@ -6,7 +6,9 @@
 
 namespace PhysicsTest
 {
-	// [MVP] FPlatformTime (QPC) ticks converted to ns; [확장 M10] FCycleCounter (TSC) per bucket.
+	// [MVP] FPlatformTime (QPC) ticks converted to ns; [확장 M10] FCycleCounter (TSC, rdtscp + lfence) per bucket: the
+	// *Tsc fields are the raw tick counts, the *Ns fields those ticks converted with the process-wide calibration
+	// (FCycleCounter::GetNsPerTick). The bench converts the raw ticks again with its per-run calibration (TimingContract 2.1).
 	// T_frame = sum(T_push) + sum(T_step) + T_pull; T_step = setup + start + wait + end.
 	struct FFrameTiming
 	{
@@ -18,6 +20,18 @@ namespace PhysicsTest
 		uint64 StepNs = 0;
 		uint64 PullNs = 0;
 		uint64 FrameNs = 0;
+		// M10: raw TSC ticks of the same buckets (FrameTsc = PushTsc + StepTsc + PullTsc).
+		uint64 PushTsc = 0;
+		uint64 SetupTsc = 0;
+		uint64 StartTsc = 0;
+		uint64 WaitTsc = 0;
+		uint64 EndTsc = 0;
+		uint64 StepTsc = 0;
+		uint64 PullTsc = 0;
+		uint64 FrameTsc = 0;
+		// M7-M9: the QPC ticks of the buckets. M10: the buckets read the TSC; the bench fills this with the QPC ticks of the
+		// whole Tick (two QPC reads around FPhysScene::Tick, outside the buckets: timings.csv frame_qpc_ticks). 0 in a scene's
+		// own timing.
 		uint64 FrameQpcTicks = 0;
 		uint32 NumSteps = 0;
 		uint32 EngineErrorBits = 0;

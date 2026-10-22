@@ -151,6 +151,11 @@ namespace PhysicsTest
 		return StringConv::Utf8ToPath(PT_SOURCE_DIR).make_preferred() / "Saved" / "Results";
 	}
 
+	std::filesystem::path GetDefaultStampDir()
+	{
+		return StringConv::Utf8ToPath(PT_SOURCE_DIR).make_preferred() / "Saved" / "Conformance";
+	}
+
 	bool FBenchRunSpec::ParseScenarioParams(const char* CommandLine, FScenarioParams& OutParams, std::string& OutError)
 	{
 		// -Param:Name=Value tokens (repeatable; the value may be quoted).
@@ -188,6 +193,7 @@ namespace PhysicsTest
 		Out.bList = FParse::Param(Cmd, "List");
 		Out.bDescribe = FParse::Param(Cmd, "Describe");
 		Out.bAnalyticReferences = FParse::Param(Cmd, "AnalyticReferences");
+		Out.bAbiOverhead = FParse::Param(Cmd, "AbiOverhead");
 		Out.bConformance = FParse::Param(Cmd, "Conformance");
 		Out.bInjectFatal = FParse::Param(Cmd, "InjectFatal");
 		Out.bInjectTeardownFatal = FParse::Param(Cmd, "InjectTeardownFatal");
@@ -209,6 +215,10 @@ namespace PhysicsTest
 		if (FParse::Value(Cmd, "ConfigDir=", Text))
 		{
 			Out.ConfigDir = StringConv::Utf8ToPath(Text);
+		}
+		if (FParse::Value(Cmd, "StampDir=", Text))
+		{
+			Out.StampDir = StringConv::Utf8ToPath(Text);
 		}
 		// -RequireEffectiveKey=a.b,c.d: keys the run's preflight requires on top of the backend's (a comma list).
 		if (FParse::Value(Cmd, "RequireEffectiveKey=", Text, false) && !SplitList(Text, Out.ExtraRequiredKeys))
@@ -306,7 +316,8 @@ namespace PhysicsTest
 			|| !ReadInt("InjectStatePerturbation=", Out.InjectStatePerturbationFrame, 0, 10000000)
 			|| !ReadInt("InjectGateFault=", Out.InjectGateFaultFrame, 0, 10000000)
 			|| !ReadInt("InjectTickAllocation=", Out.InjectTickAllocationFrame, 0, 10000000)
-			|| !ReadInt("InjectSilentExit=", Out.InjectSilentExitFrame, 0, 10000000))
+			|| !ReadInt("InjectSilentExit=", Out.InjectSilentExitFrame, 0, 10000000)
+			|| !ReadInt("InjectForeignWork=", Out.InjectForeignWorkMs, 1, 60000))
 		{
 			return false;
 		}
@@ -403,6 +414,14 @@ namespace PhysicsTest
 		if (Out.bAnalyticReferences)
 		{
 			return true;   // needs nothing else (M8)
+		}
+		if (Out.bAbiOverhead)
+		{
+			if (Out.Backend.empty())
+			{
+				Out.Backend = "Null";   // M10: the criterion's backend
+			}
+			return true;
 		}
 		if (!Out.bList && !bSceneHashes && !bBusyHelper && Out.Backend.empty())
 		{

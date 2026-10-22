@@ -12,7 +12,7 @@
 //                        test only: [-InjectEngineErrorBits=0x..] [-InjectPreflightFault=g0|g9:<key>|listener|drawer]
 //                                   [-InjectSceneInstrumentFlags=0x8] [-InjectFatal] [-InjectTeardownFatal]
 //                                   [-InjectStatePerturbation=<frame>] [-InjectTickAllocation=<frame>]
-//                                   [-InjectSilentExit=<frame>]
+//                                   [-InjectSilentExit=<frame>] [-InjectForeignWork=<ms>]
 //   PhysicsTestBench.exe -Gate=G8 [-Runs=3] <run arguments>   DET1: N fresh processes of the run, equal final h_native
 //   PhysicsTestBench.exe -Gate=G11 <run arguments>            contacts off / on, every frame's hashes bit-identical
 //                        test only: [-InjectGateFault=<frame>] perturbs one child (G8: the last run, G11: contacts on), so
@@ -21,15 +21,22 @@
 //   PhysicsTestBench.exe -List | -Describe -Backend=.. | -Conformance -Backend=.. | -SceneHashes=<path>   (M3 / M6)
 //   PhysicsTestBench.exe -AnalyticReferences   the C++ analytic references as JSON (M8: Tools/ptbench/analytic.py must agree
 //                                              within 1e-9, CTest PhysicsTest.Py.AnalyticMatchesCpp)
-// -List, -Describe, -SceneHashes and -AnalyticReferences print pure JSON on stdout: every log line goes to stderr in these
-// modes (M6).
+//   PhysicsTestBench.exe -AbiOverhead [-Backend=Null]   the ABI call overhead on the TSC as JSON (M10: Null, 0 bodies, 4 calls
+//                                              per frame, the median over batches; the gate is < 100 ns per frame)
+//   M10: -Conformance also runs G10b (a fresh T = 1 bench run of M3.BoxPile 1k with the same configuration) and writes the
+//        conformance stamp to -StampDir (default Saved/Conformance); a run records the stamp of its own key (conformance_stamp)
+// -List, -Describe, -SceneHashes, -AnalyticReferences and -AbiOverhead print pure JSON on stdout: every log line goes to stderr
+// in these modes (M6).
 //
-// Run order (02 12.2; M7): parse -> run directory and the Fatal hook (exit.json 3) -> host controls (affinity, priority,
-// power throttling opt-out, timeBeginPeriod; before any SDK init or LoadLibrary) -> config (Base -> profile -> variant ->
-// command line) -> backend load + InitGamePhys -> engine-option preflight -> scene (BuildScene + flush, desc_sha256) ->
-// effective settings + preflight (required keys, G0, G9, G10a) -> Prepare -> spin pre-roll on the T cores -> frame 0 ->
-// timed loop (recorders between frames, never inside the timed buckets) -> untimed reads -> outputs, then exit.json last ->
-// teardown (scene, TermGamePhys; teardown.json); a PT_MODULE_UE_RUNTIME module ends the process with TerminateProcess.
+// Run order (02 12.2; M7, M10): parse -> run directory and the Fatal hook (exit.json 3) -> host controls (affinity, priority,
+// power throttling opt-out, timeBeginPeriod; before any SDK init or LoadLibrary) and the first TSC / QPC pair -> config (Base
+// -> profile -> variant -> command line) -> backend load + InitGamePhys -> thread census #1 (census_init) -> engine-option
+// preflight -> scene (BuildScene + flush, desc_sha256) -> effective settings + preflight (required keys, G0, G9, G10a) and the
+// stamp of this run's key (recorded, never refused here: the runner refuses) -> Prepare -> spin pre-roll on the T cores ->
+// census window begin -> frame 0 -> timed loop (TSC buckets; recorders between frames, never inside the timed buckets) ->
+// census window end (G10b, cpu_eff) -> the run's TSC calibration (every bucket converted again) -> untimed reads -> outputs,
+// then exit.json last -> teardown (scene, TermGamePhys; teardown.json); a PT_MODULE_UE_RUNTIME module ends the process with
+// TerminateProcess.
 // The Fatal hook writes exit.json (3) only until the run's final exit.json; a Fatal in the teardown goes to teardown.json
 // and the process ends with the run's own code (DL52).
 //
@@ -39,8 +46,8 @@
 // mask's CPUs and their SMT siblings - above -ContaminationPct of one core per core, -HostCheck=enforce), 5 capacity
 // exceeded (only the backend's errors.capacity_bits), 6 backend unavailable. Precedence when several apply: 2 (no loop ran),
 // 3, 5, 4.
-// Every timing stays UNOFFICIAL until the M10 stamps and a High performance power plan session: the manifest says so
-// ("unofficial": true, timing_label) even when timing_valid_for_headline is true (the run's own hygiene holds).
+// Every timing stays UNOFFICIAL unless the run is headline-valid, its conformance stamp is valid and the power plan is High
+// performance / Ultimate (M10; M11 runs the first such session): the manifest says so ("unofficial", timing_label).
 #pragma once
 
 #include "CoreTypes.h"
@@ -102,6 +109,8 @@ namespace PhysicsTest
 		int32 RepeatIndex = 0;               // -Repeat=<r>: the runner's repeat index (manifest order group)
 		int32 OrderIndex = 0;                // -Order=<o>: the position in the runner's shuffled block
 		uint64 BlockSeed = 0;                // -BlockSeed=<s>: the runner's shuffle seed
+		std::filesystem::path StampDir;      // -StampDir=<dir> (M10): where -Conformance writes stamps and a run looks for its own;
+		                                     // empty = <repo>/Saved/Conformance
 		double PreRollSeconds = 0.5;         // -PreRoll=<s>: spin pre-roll on the T cores before frame 0 (02 9.5)
 		EHostCheckPolicy HostCheck = EHostCheckPolicy::Enforce;
 		double ContaminationPct = 5.0;       // -ContaminationPct: % of one core other processes may use per core of the run (the
@@ -127,10 +136,14 @@ namespace PhysicsTest
 		int32 InjectSilentExitFrame = -1;    // -InjectSilentExit=<f>: the process ends with TerminateProcess(0) after frame f,
 		                                     // before any output or exit.json - a run that died half-way with a raw exit code
 		                                     // of 0, which the M8 runner must report as failed (exit.json missing)
+		int32 InjectForeignWorkMs = -1;      // -InjectForeignWork=<ms>: a helper thread started right after census #1 spins <ms>
+		                                     // ms of its own CPU time and exits (joined after census #2) - another thread's work
+		                                     // at T = 1, the G10b negative control (M10 fix round 0): G10b must fail
 		// ---- modes ----
 		bool bList = false;
 		bool bDescribe = false;
 		bool bAnalyticReferences = false;    // -AnalyticReferences (M8)
+		bool bAbiOverhead = false;           // -AbiOverhead (M10): the ABI call overhead of -Backend (default Null) as JSON
 		// -Conformance (M6, 02 14.3): the physics gate suite on this backend / variant / profile -> conformance.json in the
 		// run directory; exit 0 when every gate passes or skips, 2 when one fails. -Gates=G1,G9 selects (default: all).
 		bool bConformance = false;
@@ -170,6 +183,11 @@ namespace PhysicsTest
 		int32 ContactPoints = -1;
 		int32 Islands = -1;
 		int64 SolverNs = -1;                 // sum of the backend's phase timers (PT_INSTR_PHASES, PT_CAP_PHASE_TIMERS), -1 = none
+		// M10: two TSC and two QPC reads around FPhysScene::Tick (outside the buckets): the whole Tick in TSC ticks, and the TSC /
+		// QPC values at its end (timings.csv tick_tsc_ticks, tsc_end, qpc_end; Timing.FrameQpcTicks = the Tick's QPC ticks).
+		uint64 TickTsc = 0;
+		uint64 TscEnd = 0;
+		uint64 QpcEnd = 0;
 	};
 
 	class FTimingRecorder
@@ -177,14 +195,20 @@ namespace PhysicsTest
 	public:
 		void Reserve(int32 Frames) { Records.reserve(static_cast<size_t>(Frames)); }
 		void Record(const FFrameRecord& Record) { Records.push_back(Record); }
+		// M10: every bucket's ns value again from its raw TSC ticks with the run's calibration (02 9.3: the TSC is calibrated
+		// against QPC over the whole run); FrameNs stays PushNs + StepNs + PullNs. Also the ns per tick WriteCsv uses for tick_ns.
+		void Recalibrate(double InNsPerTick);
+		[[nodiscard]] double GetNsPerTick() const { return NsPerTick; }
 		// frame, sim_time_s, num_steps, push_ns, setup_ns, start_ns, wait_ns, end_ns, step_ns, pull_ns, frame_ns, frame_qpc_ticks,
-		// solver_ns, awake_bodies, contact_pairs, contact_points, islands, error_bits. A value the run did not measure is
-		// empty (solver_ns without phase timers), a counter it could not get is -1 (no counters frame, no listener).
+		// solver_ns, awake_bodies, contact_pairs, contact_points, islands, error_bits, and (M10) frame_tsc_ticks, tick_ns,
+		// tick_tsc_ticks, tsc_end, qpc_end. A value the run did not measure is empty (solver_ns without phase timers), a counter
+		// it could not get is -1 (no counters frame, no listener).
 		bool WriteCsv(const std::filesystem::path& Path) const;
 		[[nodiscard]] const std::vector<FFrameRecord>& GetRecords() const { return Records; }
 
 	private:
 		std::vector<FFrameRecord> Records;
+		double NsPerTick = 0.0;
 	};
 
 	// The resolved physics configuration of a run: Base -> Profile -> backend variant -> command line (02 10).
@@ -205,6 +229,8 @@ namespace PhysicsTest
 	[[nodiscard]] std::filesystem::path GetDefaultConfigDir();
 	// <repo>/Saved/Results
 	[[nodiscard]] std::filesystem::path GetDefaultResultsDir();
+	// <repo>/Saved/Conformance (M10: the conformance stamps, 02 12.4)
+	[[nodiscard]] std::filesystem::path GetDefaultStampDir();
 
 	// exit.json (schema physicstest.exit/1, M7): written and flushed last, after every other output (02 12.2 step 12).
 	struct FExitRecord
@@ -261,6 +287,9 @@ namespace PhysicsTest
 		// -AnalyticReferences (M8): the Analytic:: references (AnalyticReference.h) of the gate scenes' canonical inputs as JSON
 		// on stdout (schema physicstest.analytic/1); Tools/ptbench/analytic.py recomputes every case within 1e-9.
 		static EBenchExit AnalyticReferences();
+		// -AbiOverhead (M10): AbiGates::MeasureCallOverhead on -Backend (default Null) as JSON on stdout (physicstest.abi_overhead/1);
+		// exit 0 when the median is below 100 ns per frame (or in a Debug build, which records it), 2 above.
+		static EBenchExit AbiOverhead(const FBenchRunSpec& Spec);
 		// Once, first thing in main (M7 review, M8): the process-wide Fatal callback. Outside a run (-Describe, -List,
 		// -SceneHashes) a Fatal with a PT_MODULE_UE_RUNTIME module loaded ends the process with TerminateProcess (never the CRT
 		// exit that runs DLL_PROCESS_DETACH); -Conformance and -Gate= also write their exit.json (3, status fatal) first.

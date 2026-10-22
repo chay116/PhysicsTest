@@ -740,7 +740,7 @@ Chaos 행까지:
 
 **M8 실행 메모 [V]** (자세한 결과와 이유는 [Progress.md](Progress.md) M8)
 - **패키지와 설치:** 모듈은 `Tools/ptbench`에 바로 있고 `pyproject.toml`이 그 폴더를 패키지 `ptbench`로 잇는다 (위 산출물 경로 그대로). `.venv`에 `pip install --no-build-isolation --no-deps -e Tools/ptbench`로 설치한다. `.venv`의 setuptools 65.5.0이 wheel 패키지를 요구해 `Tools/ptbench/requirements-build.txt`(setuptools, wheel 고정)를 더했다. 분석 의존성(lock)은 그대로다.
-- **"무인으로 30분 안에":** smoke 60 run이 이 PC에서 약 4분에 끝났다 (Balanced, 사용 중인 데스크톱, `--allow-balanced`). 유휴 검사(시스템 전체 < 3%)는 이 데스크톱에서 2.5~4.9%를 오간다. 2 s 창을 하나씩 보며 한 창이라도 통과하면 되고, 최소 5창, `--idle-wait`(기본 120 s) 동안 기다린다 (5창 고정이던 첫 구현은 무인 시작을 셋 중 하나꼴로 거부했다, M8 수정 라운드 0). 그래도 넘으면 거부되고, `--allow-busy`로 우회하면 세션과 리포트 머리에 남는다.
+- **"무인으로 30분 안에":** smoke 60 run이 이 PC에서 약 4분에 끝났다 (Balanced, 사용 중인 데스크톱, `--allow-balanced`). 유휴 검사(시스템 전체 < 3%)는 이 데스크톱에서 2.5~4.9%를 오간다. 2 s 창을 하나씩 보며 한 창이라도 통과하면 되고, 최소 5창, `--idle-wait`(기본 120 s) 동안 기다린다 (5창 고정이던 첫 구현은 시작을 세 번 중 한두 번 거부했다, M8 수정 라운드 0). 그래도 넘으면 거부되고, `--allow-busy`로 우회하면 세션과 리포트 머리에 남는다.
 - **"도중에 죽은 run" 시험:** 벤치에 시험 전용 `-InjectSilentExit=<f>`(frame f 뒤 `TerminateProcess(0)`, 출력·`exit.json` 없음)를 더해 실제 프로세스로 시험한다. 러너는 그 run을 원시 코드 0인데도 `no_exit_json` 실패로 남긴다.
 - **"analytic.py와 C++ 기준값이 1e-9 이내":** 벤치의 `-AnalyticReferences`가 C++ `Analytic::*` 값을 입력과 함께 JSON으로 내고 `analytic.py`가 같은 입력으로 다시 계산한다 (CTest `PhysicsTest.Py.AnalyticMatchesCpp`). 값을 문서에서 옮겨 적는 대신 같은 빌드의 C++와 직접 비교한다.
 - **"Shipped와 MatchedAVX2를 한 표에 섞으면 오류":** 리포트의 표는 플래그 프로필별이라(02 §13) 정상 경로에서는 섞이지 않는다. 섞인 표(예: 플래그 키 없이 묶은 표, 두 빌드의 run을 한 표로 고른 경우)는 `validate.check_table`이 `TableError`로 거부한다. 시험은 실제 run의 manifest를 복사해 `build.flag_profile`만 바꾼 사본을 쓴다.
@@ -847,6 +847,15 @@ Chaos 행까지:
 - test-<engine> 세 exe와 prof exe가 빌드된다. test 대비 차이를 측정해 기록한다 (판정은 M11).
 
 **산출물:** BenchCore의 TSC·FThreadCensus, Conformance의 G10b와 스탬프 작성기, `Config/Schemas/stamp.schema.json`, ptbench의 CV 게이트·sentinel·comparability·claim 모듈, 프리셋 4개 추가.
+
+**M10 실행 메모 [V]** (자세한 결과와 이유는 [Progress.md](Progress.md) M10)
+- **TSC:** 버킷은 `FCycleCounter`(rdtscp + lfence)다. 보정 쌍(TSC, QPC)을 호스트 제어 뒤·pre-roll 앞뒤·60 프레임마다·루프 뒤에 읽고 첫 쌍과 마지막 쌍으로 `ns_per_tick`을 정해 모든 버킷을 다시 변환한다. "잔차"는 모든 쌍의 상대 위치 차 최댓값으로 정했다 (QPC 눈금 100 ns / 창 길이가 바닥이다). "P0·P1 배치 측정"은 윈도의 TSC 한 구간 / 프레임 수(`batch_frame_ns`)이고 (프레임 사이의 행 기록과 보정 쌍, 약 +190 ns/frame이 들어가는 하네스 바닥 지표다: P0 헤드라인 후보가 아니다, M10 수정 라운드 0), "ABI 오버헤드 게이트"는 벤치의 `-AbiOverhead` 모드(Null, 바디 0, 4호출 × 20000 프레임 묶음 31개의 중앙값)다. Debug 빌드는 값을 기록만 한다.
+- **센서스와 G10b:** cpu_eff의 분모에서 run CPU의 다른 프로세스 부하를 뺀다 (= own / (own + idle)): 다른 부하는 종료 코드 4가 맡는다. 분모에 둔 값은 `cpu_eff_raw`로 남긴다. G10b는 run마다 센서스 창으로 판정하고(창 < 50 ms이면 Skip, M10 첫 판 10 ms. 수정 라운드 1: 최소 창은 own CPU 시간이고, 다른 부하 > 5%인 경합 창의 실패는 마스크의 바쁜 cycle 대비로도 0.5%를 넘을 때만 Fail, 아니면 판정 없는 Skip이라 헤드라인 자격이 없다), `-Conformance`는 자식 run(`M3.BoxPile` 1k, 300 프레임. 창이 짧거나 경합이면 최대 세 번, 마지막도 Skip이면 Fail)으로 확인한다. M10 수정 라운드 0: 창 경계의 카운터를 열거 바깥에서 함께 읽고, 어느 센서스에도 없는 스레드의 cycle(unattributed, 경계 읽기의 기준선을 뺀 몫)도 외부로 센다. 음성 대조 `-InjectForeignWork`(CTest `Bench.G10bNegativeControl`). prof 빌드는 `TRACY_NO_CALLSTACK`으로 Tracy의 심볼 워커가 없어져 G10b가 통과한다 (prof는 여전히 헤드라인이 아니다).
+- **스탬프:** 키에 명령줄 오버라이드(`config_overrides`)를 더했다. 스탬프는 스위트 전체를 시험 주입 없이 돈 `-Conformance`만 쓴다 (M10 수정 라운드 0: DLL 백엔드의 스위트는 ABI 게이트 A0~A7·A10도 게이트마다 새 프로세스로 돌린다, `GateSuiteVersion` 10. 수정 라운드 1: 11, 스탬프의 G10b·ABI 게이트 Skip은 Fail). 러너는 perf 매트릭스에서만 스탬프를 요구하고 determinism·behavior 매트릭스는 상태를 기록만 한다 (수정 라운드 0). 러너는 `variant_sha256`·`physics_sha256`을 Python으로 다시 구현하지 않고 스탬프가 기록한 입력 파일(Base·프로필·변형 ini, `tolerances.json`)의 지금 원시 해시로 확인한다. 세 무효화 기준은 실제 Config와 실제 Null DLL 다시 빌드로 확인했고, CTest(`Py.Integration`)는 Config·exe·DLL 사본으로 같은 셋을 돈다 (DLL 다시 빌드는 사본에 바이트를 덧붙여 흉내 낸다).
+- **comparability key:** `thread_series`를 더했고 dt는 IEEE 비트로 넣는다. 프레임 수와 윈도는 `desc_sha256`(dt 시퀀스)과 `scene_sha256`에 이미 있다.
+- **주장 규칙:** MatchedAVX2 표가 없으면 주장하지 않는다 ("no claim"). 방향이 다르고 적어도 한쪽이 단독으로 성립하면 "ISA-dependent"다. 수정 라운드 1: MatchedAVX2 짝은 스레드 시리즈까지 같아야 하고, 네 셀 중 noisy가 있으면 주장하지 않는다. 바이너리 구성 대조군은 manifest `harness.sdks`(빌드에 든 SDK)로 가린다.
+- **CV 게이트:** 추가 블록은 문턱을 넘은 셀만 돈다 (블록마다 새 seed). 리포트는 그 셀의 모든 run으로 통계를 낸다.
+- **test-<engine>:** test에서 다른 두 SDK를 끈 exe다 (Null 정적·DLL은 있다). 차이는 smoke 셀로 재서 Progress M10 §4에 적었고 판정(1%)은 M11이다. `/Brepro`(`PT_REPRO_LINK`, 선택)는 PDB를 새로 쓸 때만 다시 링크한 SHA를 지킨다 (남은 PDB를 갱신하면 PDB age가 이미지에 들어간다).
 
 **선행:** M8.
 

@@ -9,7 +9,8 @@
 //   PhysicsTestBench.exe -Conformance -Backend=PhysX [-BackendProfile=UE4Compat] [-Profile=UEParity] [-Gates=G1,G9] [-Out=<dir>]
 //   PhysicsTestBench.exe -SceneHashes=<path>
 //   PhysicsTestBench.exe -AnalyticReferences                                                         (M8, Tools/ptbench)
-// -List, -Describe, -SceneHashes and -AnalyticReferences print pure JSON on stdout; their log lines go to stderr (M6, for the
+//   PhysicsTestBench.exe -AbiOverhead [-Backend=Null]                                                (M10: the ABI call cost, TSC)
+// -List, -Describe, -SceneHashes, -AnalyticReferences and -AbiOverhead print pure JSON on stdout; their log lines go to stderr (M6, for the
 // M7 / M8 tools).
 // Every option is in BenchmarkRunner.h.
 //
@@ -44,7 +45,7 @@ int wmain(int ArgC, wchar_t** ArgVW)
 	std::string Error;
 	const bool bParsed = FBenchRunSpec::FromCommandLine(FCommandLine::Get(), Spec, Error);
 	// A JSON mode owns stdout from the first line on: every log line (ours and the backends') goes to stderr (M6, lead (g)).
-	if (Spec.bList || Spec.bDescribe || Spec.bAnalyticReferences || !Spec.SceneHashesPath.empty())
+	if (Spec.bList || Spec.bDescribe || Spec.bAnalyticReferences || Spec.bAbiOverhead || !Spec.SceneHashesPath.empty())
 	{
 		Logging::SetAllLinesToStderr(true);
 	}
@@ -70,6 +71,10 @@ int wmain(int ArgC, wchar_t** ArgVW)
 	if (Spec.bAnalyticReferences)
 	{
 		Exit = FBenchmarkRunner::AnalyticReferences();
+	}
+	else if (Spec.bAbiOverhead)
+	{
+		Exit = FBenchmarkRunner::AbiOverhead(Spec);
 	}
 	else if (Spec.bList)
 	{

@@ -15,18 +15,30 @@
     { "name": "dbg-local", "inherits": [ "local-base", "dbg" ], "displayName": "dbg (local SDK mirror)" },
     { "name": "dev-local", "inherits": [ "local-base", "dev" ], "displayName": "dev (local SDK mirror)" },
     { "name": "test-local", "inherits": [ "local-base", "test" ], "displayName": "test (local SDK mirror)" },
-    { "name": "test-avx2-local", "inherits": [ "local-base", "test-avx2" ], "displayName": "test-avx2 (local SDK mirror)" }
+    { "name": "test-avx2-local", "inherits": [ "local-base", "test-avx2" ], "displayName": "test-avx2 (local SDK mirror)" },
+    { "name": "test-jolt-local", "inherits": [ "local-base", "test-jolt" ], "displayName": "test-jolt (local SDK mirror)" },
+    { "name": "test-physx-local", "inherits": [ "local-base", "test-physx" ], "displayName": "test-physx (local SDK mirror)" },
+    { "name": "test-bullet-local", "inherits": [ "local-base", "test-bullet" ], "displayName": "test-bullet (local SDK mirror)" },
+    { "name": "prof-local", "inherits": [ "local-base", "prof" ], "displayName": "prof (local SDK mirror; Tracy from PT_DEPS_CACHE or GitHub)" }
   ],
   "buildPresets": [
     { "name": "dbg-local", "configurePreset": "dbg-local" },
     { "name": "dev-local", "configurePreset": "dev-local" },
     { "name": "test-local", "configurePreset": "test-local" },
-    { "name": "test-avx2-local", "configurePreset": "test-avx2-local" }
+    { "name": "test-avx2-local", "configurePreset": "test-avx2-local" },
+    { "name": "test-jolt-local", "configurePreset": "test-jolt-local" },
+    { "name": "test-physx-local", "configurePreset": "test-physx-local" },
+    { "name": "test-bullet-local", "configurePreset": "test-bullet-local" },
+    { "name": "prof-local", "configurePreset": "prof-local" }
   ],
   "testPresets": [
     { "name": "dbg-local", "configurePreset": "dbg-local", "output": { "outputOnFailure": true } },
     { "name": "dev-local", "configurePreset": "dev-local", "output": { "outputOnFailure": true } },
     { "name": "test-local", "configurePreset": "test-local", "output": { "outputOnFailure": true } },
-    { "name": "test-avx2-local", "configurePreset": "test-avx2-local", "output": { "outputOnFailure": true } }
+    { "name": "test-avx2-local", "configurePreset": "test-avx2-local", "output": { "outputOnFailure": true } },
+    { "name": "test-jolt-local", "configurePreset": "test-jolt-local", "output": { "outputOnFailure": true } },
+    { "name": "test-physx-local", "configurePreset": "test-physx-local", "output": { "outputOnFailure": true } },
+    { "name": "test-bullet-local", "configurePreset": "test-bullet-local", "output": { "outputOnFailure": true } },
+    { "name": "prof-local", "configurePreset": "prof-local", "output": { "outputOnFailure": true } }
   ]
 }

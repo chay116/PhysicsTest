@@ -294,6 +294,13 @@
 - **M9 리드 결정 (2026-10-22, [Progress.md](Progress.md) M9 §11):** (1) `M6a` 5° 주기 기준은 카탈로그 씬 `Joint=Hinge`로 판정하고 `Joint=Ball` 변형은 보고만 한다 (Bullet ball +8.7%는 엔진 거동 발견, algorithmic). (2) 100:1 체인의 PhysX PGS·TGS 에너지 증가는 받아들인 엔진 거동이다 (algorithmic, PhysX 5.x에 joint projection 없음): 기준은 "fail — accepted engine behaviour"로 보고하고 조정하지 않는다. Bullet의 `pass (joints separated)`는 통과가 아니라 별도 발견(조인트 분리)이다. (3) G11 `Bullet.StaticAabbOff`는 좁힌 범위로 판정하고, 더미에서는 결과 중립이 아닌 by-design knob이다 (`Bullet.Default`와 같은 것으로 비교하지 않는다). (4) 실행 뒤 등록을 모두 승인했다: sign-off "lead 2026-10-22, M9 commit (accepted as engine behaviour / regression bound; mechanism recorded in Progress M9)" - `tolerances.json`(J1 Bullet ball 3 cm, G4 Bullet 모델 2)과 `behavior_rules.py`(`M4` Bullet 8% / PGS 6.5% / PGS creep 6 cm / TGS 0.3 cm, 사후 기본값 셋). `pending_sign_offs`는 모든 곳에서 0이다. (5) ABI v1.1 최종, 리드가 M9 커밋에 `abi-v1.1` 태그. (6) `tolerances.json` version 7, `GateSuiteVersion` 8.
 - 수정 라운드 0 (독립 검사 반영): 조인트 계약(§9.4 13)을 물리 게이트 J1로 옮겼다. doctest는 automation exe 안에서 레지스트리 SDK 엔진만 돌릴 수 있어(NO_REINIT DLL은 프로세스당 모듈 하나) Chaos 브리지가 실행할 확인이 없었다. J1은 `-Conformance`로 DLL 백엔드도 자기 프로세스에서 돌고, 조인트가 없으면 등록된 Skip(Null, 조인트 전의 Chaos)이다. Bullet ball 신장 예외는 `tolerances.json` J1의 post-run 등록(승인 대기)으로 옮겨 conformance.json `pending_sign_offs`에 드러난다. 거동 태그의 `restitution-threshold`(by-design)는 그 run의 임계가 합의값을 낸 엔진들과 다를 때만 붙인다: 같은 임계에서 튐 수가 다르면 엔진의 저속 반발 모델 차이(algorithmic)다.
 
+**M10 구현 메모 (DL11, DL20, DL21, DL39, R9) [V]** ([Progress.md](Progress.md) M10, [TimingContract.md](TimingContract.md) §2.1·§5.2·§7.1·§9.1, [02_Architecture.md](02_Architecture.md) §12.4·§13)
+- DL11 (M10 부분): 버킷은 TSC(rdtscp + lfence)이고 run 전체 QPC 2점 보정으로 ns가 된다 (잔차 < 1e-5, 관측 최대 2.1e-6). 스레드 센서스와 G10b(T = 1: cpu_eff ∈ [0.98, 1.02], 외부 스레드 cycle < 0.5%. M10 수정 라운드 0부터 어느 센서스에도 없는 스레드의 cycle도 외부로 세고, 창 < 50 ms는 Skip. 수정 라운드 1: 최소 창은 own CPU 시간, 다른 부하 > 5%인 경합 창의 실패는 마스크 바쁜 cycle 대비로도 0.5%를 넘을 때만 Fail이고 아니면 Skip)가 run마다 돌고 Fail이면(수정 라운드 1부터 T = 1의 판정 없는 Skip도) 헤드라인 자격이 없다. cpu_eff의 분모에서 run CPU의 다른 부하를 뺀다 (= own / (own + idle)): 다른 프로세스의 간섭은 종료 코드 4(DL11 오염)가 맡고, cpu_eff는 run 스레드가 잠들거나 막혔는지만 본다. 분모에 다른 부하를 둔 값은 `cpu_eff_raw`로 함께 남긴다.
+- DL20: 키에 `config_overrides`(명령줄 `-ini:`·`-ExecCmds=`)를 더했다. 같은 ini라도 오버라이드가 다르면 다른 엔진 설정이기 때문이다. 스탬프는 스위트 전체를 주입 없이 돈 `-Conformance`만 쓰고, `pending_sign_offs` > 0이면 무효다. 러너는 `variant_sha256`·`physics_sha256`(C++ 리졸버의 정규 해시)을 Python으로 다시 구현하지 않고, 스탬프가 기록한 입력 파일의 지금 원시 해시로 확인한다 (같은 exe + 같은 입력 ⇒ 같은 해시). 벤치가 run마다 정확한 키로 다시 확인하고 validate가 스탬프 없는 run을 거부한다. 리드 지시대로 거부는 프로세스를 띄우기 전이다 (종료 코드 3).
+- DL21: comparability key에 `thread_series`를 더했고 dt는 IEEE 비트로 넣는다. 주장 규칙은 MatchedAVX2 표가 없으면 주장하지 않는다 ("no claim: no MatchedAVX2 ratio"). 비율 CI는 러너의 반복을 블록으로 하는 block bootstrap이다 (B = 10000, seed는 입력에서).
+- DL39 (호스트 쪽 준비): Chaos의 TaskGraph 워커가 T = 1에서 일하지 않았다는 증명은 센서스 창의 외부 스레드 cycle이다. Chaos DLL은 스탬프 키에서 DLL 파일 해시로 들어간다 ([ChaosBackendGuide.md](ChaosBackendGuide.md) §3).
+- R9: manifest `unofficial`이 판정이 되었다 (헤드라인 자격 ∧ 유효 스탬프 ∧ High performance). 이 PC는 Balanced라 M10의 모든 run과 세션은 여전히 비공식이다 (Q9, M11).
+
 ### 4.2 마일스톤별 요약
 
 | 마일스톤 | 차단하는 질문 | 확인을 권장하는 질문 |
@@ -305,6 +312,7 @@
 | M7 | 없음 | Q3, Q9 (Balanced이면 측정에 플래그가 붙음) |
 | M8 | **Q17** (분석 패키지) | Q9 |
 | M9 | 없음 | Q4, Q11 |
+| M10 | 없음 | Q9 (Balanced이면 모든 run이 비공식) |
 | M11 | **Q9** (전원 계획). 결과 공개는 **Q1** | Q10 |
 | M12 | 없음 | Q18 |
 | M13 | 없음 | Q6, Q15, Q16 |

@@ -92,7 +92,10 @@
 
 - 생성자는 `FApp::ShouldUseThreadingForPerformance()`로 모드를 고른다 (ChaosScene.cpp:73-77 [V]). 그래서 생성 뒤 `SetThreadingMode_External`(PhysicsSolverBase.h:615 [V])로 명시적으로 덮어쓴다.
 - effective 키: `threads.single_worker`(CVar 값을 읽어 READBACK), `threads.max_num_workers`(READBACK), `chaos.threading_mode`(솔버에서 읽어 READBACK), `threads.workers`(T − 1, 실제 워커 수를 알 수 있으면 READBACK).
-- 호스트는 affinity를 정한 **뒤** `LoadLibraryExW`를 부른다 (UE 워커가 affinity를 상속한다). G10b(M10)가 T = 1의 단일 스레드를 cpu_eff로 증명한다.
+- 호스트는 affinity를 정한 **뒤** `LoadLibraryExW`를 부른다 (UE 워커가 affinity를 상속한다). G10b(M10)가 T = 1의 단일 스레드를 외부 + unattributed 스레드 cycle로 증명한다 (cpu_eff는 timing 스레드가 막히거나 잠든 것만 잡는다, 아래 한계).
+- **M10 구현 (호스트 쪽, [TimingContract.md](TimingContract.md) §7.1):** 스레드 센서스는 이 프로세스의 모든 스레드를 센다. PreInit이 만든 TaskGraph 워커는 센서스 #1(`InitGamePhys` 뒤, manifest `threads.census_init`)에 보이고, T = 1 run에서는 frame 0부터 마지막 프레임까지 그 스레드들의 cycle 합(과 어느 센서스에도 없는 스레드의 cycle, `unattributed`에서 경계 읽기의 기준선을 뺀 몫)이 own(main + 외부 스레드)의 0.5% 미만이어야 G10b Pass다 (cpu_eff ∈ [0.98, 1.02]도, 창의 own CPU 시간 ≥ 50 ms. 수정 라운드 1: 다른 프로세스가 run의 코어를 5% 넘게 쓴 경합 창에서는 마스크의 바쁜 cycle 대비로도 0.5%를 넘어야 Fail이고, 아니면 판정 없는 Skip이라 헤드라인 자격이 없다). 실패하면 그 run은 헤드라인 자격이 없고("G10b failed") `per_thread[]`가 어느 스레드가 일했는지 보인다. `p.Chaos.SingleWorkerPhysics=1`을 빠뜨린 구현은 여기서 걸린다 (§14).
+- **센서스의 한계 (M10 수정 라운드 0, [TimingContract.md](TimingContract.md) §7.1):** cpu_eff는 도는 timing 스레드에서는 구조로 약 1이라 timing 스레드가 막히거나 잠든 경우만 잡는다 (UE 워커가 일한 것은 외부 + unattributed 쪽이 잡는다). 창 안에서 생겨 끝난 스레드(짧은 TaskGraph 작업용 스레드가 그렇다면)는 이름 없이 `unattributed` 합계로만 보인다. own CPU 시간 50 ms보다 짧은 창은 Skip이다 (그 백엔드는 스탬프의 G10b가 증명하고, 수정 라운드 1부터 스탬프의 G10b Skip은 Fail이다). 지금 가정은 PreInit이 만든 TaskGraph 워커가 오래 사는 스레드라는 것이다 (센서스 #1·#2 둘 다에 보인다).
+- **스탬프 (M10):** Chaos는 DLL 백엔드라 스탬프 키의 `backend_module_sha256`이 DLL 파일 해시다. DLL을 다시 빌드하면 그 셀은 러너가 프로세스 전에 거부하므로 `python -I -m ptbench stamp --matrix <m>`(조합마다 `PhysicsTestBench -Conformance`)로 스탬프를 다시 만든다. 백엔드가 DLL인지는 exe 옆의 `PhysicsTestBench.backends.json`이 러너에 알린다. **M10 수정 라운드 0:** DLL 백엔드의 스위트 전체는 ABI 게이트 A0~A7·A10도 게이트마다 새 프로세스(`-Conformance -Gates=<A>`, `PT_MODULE_NO_REINIT` 규칙, §11)로 돌려 스탬프의 `gates[]`에 넣는다. 그래서 다시 빌드한 Chaos DLL은 그 바이너리에서 핸드셰이크(A1)·음성 사례(A4)·MXCSR 보존(A6)이 통과해야 유효한 스탬프를 얻는다 (`GateSuiteVersion` 10, M10 수정 라운드 1에서 11: G10b 규칙과 스탬프의 Skip → Fail).
 
 ---
 

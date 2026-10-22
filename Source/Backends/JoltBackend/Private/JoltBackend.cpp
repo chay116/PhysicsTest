@@ -46,8 +46,14 @@ namespace PhysicsTest::JoltBackend
 #else
 	#define PT_JOLT_BR_ASSERTS "\"JPH_ENABLE_ASSERTS\":0,"
 #endif
+#if defined(JPH_EXTERNAL_PROFILE)
+	#define PT_JOLT_BR_EXTERNAL_PROFILE "\"JPH_EXTERNAL_PROFILE\":1,"   // M10: the prof preset only (Tracy)
+#else
+	#define PT_JOLT_BR_EXTERNAL_PROFILE "\"JPH_EXTERNAL_PROFILE\":0,"
+#endif
 		PT_BUILD_REPORT_JSON(GJoltBuildReport, "\"backend\":\"Jolt\",\"jolt_version\":\"" PT_BR_STR(JPH_VERSION_MAJOR) "." PT_BR_STR(JPH_VERSION_MINOR) "."
-			PT_BR_STR(JPH_VERSION_PATCH) "\"," PT_JOLT_BR_PROFILE PT_JOLT_BR_RENDERER PT_JOLT_BR_FPE PT_JOLT_BR_AVX2 PT_JOLT_BR_ASSERTS);
+			PT_BR_STR(JPH_VERSION_PATCH) "\"," PT_JOLT_BR_PROFILE PT_JOLT_BR_RENDERER PT_JOLT_BR_FPE PT_JOLT_BR_AVX2 PT_JOLT_BR_ASSERTS
+			PT_JOLT_BR_EXTERNAL_PROFILE);
 
 		const char* const GRequiredEffectiveKeys[] = { "jolt.config_string", "jolt.temp_allocator_bytes" };
 

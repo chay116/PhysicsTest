@@ -34,6 +34,7 @@ add_library(pt_doctest INTERFACE)
 add_library(PT::Doctest ALIAS pt_doctest)
 target_include_directories(pt_doctest SYSTEM INTERFACE "${PT_DOCTEST_SOURCE_DIR}")
 
-# Tracy v0.14.1 is used only by the prof preset (M10). Pin recorded now (verified 2026-10-21 against the GitHub
-# archive and the cached tarball): https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.tar.gz
+# Tracy v0.14.1 is used only by the prof preset (M10): Tracy.cmake fetches it with this pin (verified 2026-10-21 against the
+# GitHub archive and the cached tarball, and again 2026-10-22 when M10 first downloaded it):
+# https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.tar.gz
 #   SHA256 bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1

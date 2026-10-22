@@ -6,17 +6,21 @@
 // preflight_failed, exit code 2); the manifest always has every group (null where the run stopped earlier).
 #include "BenchmarkRunner.h"
 
+#include "BenchChildRuns.h"
 #include "BenchCore.h"
 #include "BenchPreflight.h"
 #include "BenchRecorders.h"
 #include "BuildFlagsSha.h"
+#include "ConformanceStamp.h"
 #include "Containers/StringConv.h"
 #include "Abi/AbiGates.h"
 #include "BehaviorScenes.h"
 #include "GateScenes.h"
 #include "Gates/PhysicsGates.h"
+#include "Gates/ThreadGate.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformTime.h"
+#include "Hash/Sha256.h"
 #include "Logging/LogMacros.h"
 #include "Physics/AnalyticReference.h"
 #include "Physics/EffectiveSettings.h"
@@ -36,12 +40,14 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <system_error>
+#include <thread>
 
 DEFINE_LOG_CATEGORY_STATIC(LogPhysicsBench, Log, All);
 
@@ -66,11 +72,22 @@ namespace PhysicsTest
 			return static_cast<uint32>(Found->Canonical);
 		}
 
-		const char* GetUnofficialLabel()
+		// M10 (R9, docs/TimingContract.md 9): a run's timing is reportable only when the run kept the measurement protocol
+		// (timing_valid_for_headline), its conformance stamp is valid and the power plan is High performance / Ultimate. Every
+		// condition that fails is a reason; manifest unofficial = !reasons.empty(), timing_label quotes them.
+		std::string MakeTimingLabel(const std::vector<std::string>& Reasons)
 		{
-			return "UNOFFICIAL until M10: no conformance stamp yet (M10) and the session is not the M11 High performance power plan session (the plan "
-				"is only read and recorded, platform.power_scheme). timing_valid_for_headline says whether this run kept the M7 measurement protocol "
-				"(host controls, pre-roll, tier 0, preflight, uncontaminated host); it does not make the number reportable. Not for reports.";
+			if (Reasons.empty())
+			{
+				return "reportable: headline-valid run, valid conformance stamp, High performance / Ultimate power plan (M10). A headline number is still the "
+					"median of fresh-process runs that pass the runner's CV gate (Tools/ptbench, 02 12.5).";
+			}
+			std::string Text = "UNOFFICIAL: ";
+			for (size_t Index = 0; Index < Reasons.size(); ++Index)
+			{
+				Text += (Index == 0 ? "" : "; ") + Reasons[Index];
+			}
+			return Text + ". Not for reports.";
 		}
 
 		// The CRT this TU (and so every harness TU, one flag profile) was compiled against: /MD, /MDd, /MT, /MTd.
@@ -87,19 +104,82 @@ namespace PhysicsTest
 #endif
 		}
 
-		// 02 12.3 manifest fields this milestone does not record yet (M10).
+		// M10: a TSC / QPC pair every this many frames (between frames): the residual of the run's calibration (02 9.3) is read
+		// over the whole loop without a QPC read per bucket.
+		constexpr int32 CalibrationPairEvery = 60;
+
+		// 02 12.3 manifest fields this milestone does not record yet: none since M10 (an empty object; kept for later fields).
 		FJson MakeDeferredFieldsJson()
 		{
-			FJson Deferred;
-			Deferred["clock.tsc_hz"] = "M10 (TSC buckets)";
-			Deferred["clock.tsc_read_overhead_ns"] = "M10";
-			Deferred["threads.census_init"] = "M10 (FThreadCensus)";
-			Deferred["threads.census_window"] = "M10";
-			Deferred["threads.foreign_cycles_fraction"] = "M10";
-			Deferred["comparability_key"] = "M10";
-			Deferred["conformance_stamp"] = "M10";
-			Deferred["summary.cpu_eff"] = "M10 (G10b)";
-			return Deferred;
+			return FJson::object();
+		}
+
+		std::string ToHexBits(const double Value)
+		{
+			uint64 Bits = 0;
+			std::memcpy(&Bits, &Value, sizeof(Bits));
+			char Text[24];
+			std::snprintf(Text, sizeof(Text), "%016" PRIx64, Bits);
+			return Text;
+		}
+
+		// The census #1 thread list (manifest threads.census_init).
+		FJson MakeCensusThreadsJson(const FThreadCensus& Census)
+		{
+			FJson Json;
+			Json["valid"] = Census.IsValid();
+			Json["error"] = Census.GetError();
+			Json["threads"] = Census.GetThreads().size();
+			FJson List = FJson::array();
+			for (const FCensusThread& Thread : Census.GetThreads())
+			{
+				List.push_back({ { "tid", Thread.ThreadId }, { "name", Thread.Name }, { "main", Thread.bMain }, { "cycles", Thread.Cycles } });
+			}
+			Json["list"] = List;
+			return Json;
+		}
+
+		FJson MakeCensusWindowJson(const FCensusWindow& Window, const Gates::EG10bSkip G10bSkip)
+		{
+			FJson Json;
+			Json["valid"] = Window.bValid;
+			Json["error"] = Window.Error;
+			Json["window"] = "census #1 right before frame 0 (after the pre-roll), census #2 right after the last frame";
+			Json["T"] = Window.Threads;
+			Json["wall_s"] = Window.WallSeconds;
+			Json["wall_tsc"] = Window.WallTsc;
+			Json["own_s"] = Window.GetOwnSeconds();   // M10 fix round 1: own cycles at the window's TSC rate (G10b's minimum window)
+			Json["own_cycles"] = Window.OwnCycles;
+			Json["main_cycles"] = Window.MainCycles;
+			Json["foreign_cycles"] = Window.ForeignCycles;
+			Json["process_cycles"] = Window.ProcessCycles;
+			Json["unattributed_cycles"] = Window.UnattributedCycles;
+			Json["mask_busy_cycles"] = Window.MaskBusyCycles;
+			Json["other_on_mask_cycles"] = Window.OtherOnMaskCycles;
+			Json["other_on_mask_fraction"] = Window.GetOtherOnMaskFraction();   // M10 fix round 1: G10b's contended rule
+			Json["cpu_eff"] = Window.CpuEff;
+			Json["cpu_eff_raw"] = Window.CpuEffRaw;
+			Json["foreign_cycles_fraction"] = Window.ForeignFraction;
+			Json["bracket_cycles"] = Window.BracketCycles;   // M10 fix round 0: census #1's null-bracket baseline
+			Json["unattributed_fraction"] = Window.UnattributedFraction;   // max(0, unattributed - bracket) / own: G10b judges foreign + this
+			Json["threads_begin"] = Window.ThreadsBegin;
+			Json["threads_end"] = Window.ThreadsEnd;
+			// M10 fix round 1: why the run's G10b is Skip ("" = a verdict): multi_thread, no_census, short_window, contended.
+			Json["g10b_skip"] = Gates::ToString(G10bSkip);
+			FJson Threads = FJson::array();
+			for (const FCensusThreadDelta& Thread : Window.PerThread)
+			{
+				Threads.push_back({ { "tid", Thread.ThreadId }, { "name", Thread.Name }, { "main", Thread.bMain }, { "cycles", Thread.Cycles }, { "new", Thread.bNew },
+					{ "exited", Thread.bExited } });
+			}
+			Json["per_thread"] = Threads;
+			Json["note"] = "cycles = QueryThreadCycleTime (TSC units) over the window; own = main + foreign (the other threads of this process); "
+				"cpu_eff = own / (wall x T - other_on_mask), cpu_eff_raw = own / (wall x T); unattributed = max(0, process - own): a thread born and gone "
+				"inside the window, plus what the reads leave (bracket_cycles, measured with nothing inside); unattributed_fraction = max(0, unattributed - "
+				"bracket) / own; G10b at T = 1 (own CPU time own_s >= 50 ms): cpu_eff in [0.98, 1.02], foreign_cycles_fraction + unattributed_fraction < 0.5 %; "
+				"when other_on_mask_fraction > 5 % (contended) a failure counts only if the same cycles are also >= 0.5 % of mask_busy_cycles, else Skip "
+				"(g10b_skip contended: no single-thread proof, not headline-valid)";
+			return Json;
 		}
 
 		// R diag(I) R^T for a principal frame: the inertia tensor about the COM in body space.
@@ -670,21 +750,25 @@ namespace PhysicsTest
 		// One window of summary.windows (02 9.5, docs/ResultsSchema.md 2). Frame 0 is never in a window. A run shorter than the
 		// window clips it: "last" is the last frame the window covered in this run and "clipped" says so; a window without a
 		// frame has null statistics (never a 0 ns time).
-		FJson MakeWindowJson(const FStepWindow& Window, const std::vector<FFrameRecord>& Records)
+		FJson MakeWindowJson(const FStepWindow& Window, const std::vector<FFrameRecord>& Records, const double NsPerTick)
 		{
 			std::vector<double> FrameNs;
 			std::vector<double> StepNs;
 			std::vector<double> PushNs;
 			std::vector<double> PullNs;
+			std::vector<double> TickNs;
 			const int64 LastRun = static_cast<int64>(Records.size()) - 1;
 			const int64 Last = std::min<int64>(static_cast<int64>(Window.Last), LastRun);
-			for (int64 Frame = std::max<int64>(static_cast<int64>(Window.First), 1); Frame <= Last; ++Frame)
+			const int64 First = std::max<int64>(static_cast<int64>(Window.First), 1);
+			for (int64 Frame = First; Frame <= Last; ++Frame)
 			{
-				const FFrameTiming& Timing = Records[static_cast<size_t>(Frame)].Timing;
+				const FFrameRecord& Record = Records[static_cast<size_t>(Frame)];
+				const FFrameTiming& Timing = Record.Timing;
 				FrameNs.push_back(static_cast<double>(Timing.FrameNs));
 				StepNs.push_back(static_cast<double>(Timing.StepNs));
 				PushNs.push_back(static_cast<double>(Timing.PushNs));
 				PullNs.push_back(static_cast<double>(Timing.PullNs));
+				TickNs.push_back(static_cast<double>(Record.TickTsc) * NsPerTick);
 			}
 			const auto Stats = [](const std::vector<double>& Values) { return Values.empty() ? FJson(nullptr) : MakeStatsJson(ComputeDurationStats(Values)); };
 			FJson Entry;
@@ -697,6 +781,23 @@ namespace PhysicsTest
 			Entry["step_ns"] = Stats(StepNs);
 			Entry["push_ns"] = Stats(PushNs);
 			Entry["pull_ns"] = Stats(PullNs);
+			// M10: the whole Tick per frame (two TSC reads around FPhysScene::Tick: the buckets plus the harness's own work inside
+			// Tick) and the batch measurement of the window (02 9.3, M7 D-6): one TSC interval from the start of the first frame's
+			// Tick to the end of the last one, divided by the frames - no per-bucket rounding, and the bench's per-frame row work
+			// between the Ticks included. For P0 / P1 the difference to T_frame is the per-frame overhead floor.
+			Entry["tick_ns"] = Stats(TickNs);
+			if (!FrameNs.empty() && NsPerTick > 0.0)
+			{
+				const FFrameRecord& FirstRecord = Records[static_cast<size_t>(First)];
+				const FFrameRecord& LastRecord = Records[static_cast<size_t>(Last)];
+				const uint64 BatchBegin = FirstRecord.TscEnd - FirstRecord.TickTsc;
+				Entry["batch_frame_ns"] = LastRecord.TscEnd > BatchBegin ? FJson(static_cast<double>(LastRecord.TscEnd - BatchBegin) * NsPerTick
+					/ static_cast<double>(FrameNs.size())) : FJson(nullptr);
+			}
+			else
+			{
+				Entry["batch_frame_ns"] = nullptr;
+			}
 			return Entry;
 		}
 	}
@@ -705,6 +806,48 @@ namespace PhysicsTest
 	bool FRunManifest::Write(const std::filesystem::path& Path) const
 	{
 		return WriteText(Path, Json.dump(2) + "\n");
+	}
+
+	std::string FRunManifest::ComputeComparabilityKey() const
+	{
+		const auto Field = [this](const char* Group, const char* Key) -> nlohmann::json
+		{
+			if (!Json.contains(Group) || !Json[Group].is_object() || !Json[Group].contains(Key))
+			{
+				return nullptr;
+			}
+			return nlohmann::json::parse(Json[Group][Key].dump());
+		};
+		nlohmann::json Key = nlohmann::json::object();   // std::map: keys sorted (the canonical form)
+		Key["schema"] = "physicstest.comparability/1";
+		Key["scene_sha256"] = Field("scene", "scene_sha256");
+		Key["desc_sha256"] = Field("scene", "desc_sha256");
+		Key["physics_sha256"] = Field("profile", "physics_sha256");
+		Key["mass_rule"] = Field("profile", "mass_rule");
+		Key["flag_profile"] = Field("build", "flag_profile");
+		Key["tick_mode"] = Field("run", "tick_mode");
+		const nlohmann::json Dt = Field("run", "dt_s");
+		Key["dt_bits"] = Dt.is_number() ? nlohmann::json(ToHexBits(Dt.get<double>())) : nlohmann::json(nullptr);
+		Key["T"] = Field("threads", "T");
+		Key["thread_series"] = Field("threads", "series");
+		Key["sync_policy"] = Field("run", "sync_policy");
+		Key["mode"] = Field("run", "mode");
+		nlohmann::json Instrumentation = Field("run", "instrumentation");
+		if (Instrumentation.is_array())
+		{
+			std::vector<std::string> Names;
+			for (const nlohmann::json& Name : Instrumentation)
+			{
+				Names.push_back(Name.is_string() ? Name.get<std::string>() : Name.dump());
+			}
+			std::sort(Names.begin(), Names.end());
+			Instrumentation = Names;
+		}
+		Key["instrumentation"] = Instrumentation;
+		const nlohmann::json Sha = Field("harness", "git_sha");
+		const nlohmann::json Dirty = Field("harness", "dirty");
+		Key["harness_commit"] = (Sha.is_string() ? Sha.get<std::string>() : std::string()) + (Dirty.is_boolean() && Dirty.get<bool>() ? "+dirty" : "");
+		return FSHA256::HashString(Key.dump());
 	}
 
 	const char* ToString(const EBenchExit Exit)
@@ -740,12 +883,34 @@ namespace PhysicsTest
 	}
 
 	// ---- FTimingRecorder ---------------------------------------------------------------------------------------------
+	void FTimingRecorder::Recalibrate(const double InNsPerTick)
+	{
+		NsPerTick = InNsPerTick;
+		if (!(NsPerTick > 0.0))
+		{
+			return;
+		}
+		const auto ToNs = [this](const uint64 Ticks) { return static_cast<uint64>(static_cast<double>(Ticks) * NsPerTick + 0.5); };
+		for (FFrameRecord& Record : Records)
+		{
+			FFrameTiming& T = Record.Timing;
+			T.PushNs = ToNs(T.PushTsc);
+			T.SetupNs = ToNs(T.SetupTsc);
+			T.StartNs = ToNs(T.StartTsc);
+			T.WaitNs = ToNs(T.WaitTsc);
+			T.EndNs = ToNs(T.EndTsc);
+			T.StepNs = ToNs(T.StepTsc);
+			T.PullNs = ToNs(T.PullTsc);
+			T.FrameNs = T.PushNs + T.StepNs + T.PullNs;   // T_frame = sum(T_push) + sum(T_step) + T_pull (02 9.3)
+		}
+	}
+
 	bool FTimingRecorder::WriteCsv(const std::filesystem::path& Path) const
 	{
 		std::string Text = "frame,sim_time_s,num_steps,push_ns,setup_ns,start_ns,wait_ns,end_ns,step_ns,pull_ns,frame_ns,frame_qpc_ticks,solver_ns,awake_bodies,"
-			"contact_pairs,contact_points,islands,error_bits\n";
-		Text.reserve(Text.size() + Records.size() * 128);
-		char Line[512];
+			"contact_pairs,contact_points,islands,error_bits,frame_tsc_ticks,tick_ns,tick_tsc_ticks,tsc_end,qpc_end\n";
+		Text.reserve(Text.size() + Records.size() * 192);
+		char Line[640];
 		for (size_t Frame = 0; Frame < Records.size(); ++Frame)
 		{
 			const FFrameRecord& R = Records[Frame];
@@ -755,9 +920,15 @@ namespace PhysicsTest
 			{
 				std::snprintf(Solver, sizeof(Solver), "%" PRId64, R.SolverNs);
 			}
+			char TickNs[32] = "";
+			if (NsPerTick > 0.0 && R.TickTsc > 0)
+			{
+				std::snprintf(TickNs, sizeof(TickNs), "%" PRIu64, static_cast<uint64>(static_cast<double>(R.TickTsc) * NsPerTick + 0.5));
+			}
 			std::snprintf(Line, sizeof(Line), "%zu,%.17g,%u,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
-				",%" PRIu64 ",%s,%d,%d,%d,%d,%u\n", Frame, R.SimTime, T.NumSteps, T.PushNs, T.SetupNs, T.StartNs, T.WaitNs, T.EndNs, T.StepNs, T.PullNs,
-				T.FrameNs, T.FrameQpcTicks, Solver, R.AwakeBodies, R.ContactPairs, R.ContactPoints, R.Islands, T.EngineErrorBits);
+				",%" PRIu64 ",%s,%d,%d,%d,%d,%u,%" PRIu64 ",%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", Frame, R.SimTime, T.NumSteps, T.PushNs, T.SetupNs, T.StartNs,
+				T.WaitNs, T.EndNs, T.StepNs, T.PullNs, T.FrameNs, T.FrameQpcTicks, Solver, R.AwakeBodies, R.ContactPairs, R.ContactPoints, R.Islands,
+				T.EngineErrorBits, T.FrameTsc, TickNs, R.TickTsc, R.TscEnd, R.QpcEnd);
 			Text += Line;
 		}
 		return WriteText(Path, Text);
@@ -889,6 +1060,43 @@ namespace PhysicsTest
 		Json["cases"] = Cases;
 		std::printf("%s\n", Json.dump(2).c_str());
 		return EBenchExit::Ok;
+	}
+
+	// ---- -AbiOverhead (M10) -------------------------------------------------------------------------------------------
+	EBenchExit FBenchmarkRunner::AbiOverhead(const FBenchRunSpec& Spec)
+	{
+		AbiGates::FAbiGateTarget Target;
+		std::string Error;
+		if (!AbiGates::PrepareAbiGateTarget(Spec.Backend, Target, Error))
+		{
+			UE_LOG(LogPhysicsBench, Error, "-AbiOverhead: %s", Error.c_str());
+			return EBenchExit::BackendUnavailable;
+		}
+		const AbiGates::FAbiCallOverhead Overhead = AbiGates::MeasureCallOverhead(Target);
+		const bool bDebug = std::string(PT_BUILD_CONFIGURATION) == "Debug";
+		const bool bPass = Overhead.bValid && Overhead.MedianNsPerFrame < AbiGates::CallOverheadLimitNsPerFrame;
+		FJson Json;
+		Json["schema"] = "physicstest.abi_overhead/1";
+		Json["backend"] = Target.Label;
+		Json["preset"] = PT_BUILD_PRESET;
+		Json["configuration"] = PT_BUILD_CONFIGURATION;
+		Json["valid"] = Overhead.bValid;
+		Json["error"] = Overhead.Error;
+		Json["calls_per_frame"] = 4;
+		Json["bodies"] = 0;
+		Json["frames_per_batch"] = Overhead.FramesPerBatch;
+		Json["batches"] = Overhead.Batches;
+		Json["median_ns_per_frame"] = Overhead.MedianNsPerFrame;
+		Json["median_ns_per_call"] = Overhead.MedianNsPerFrame / 4.0;
+		Json["min_ns_per_frame"] = Overhead.MinNsPerFrame;
+		Json["max_ns_per_frame"] = Overhead.MaxNsPerFrame;
+		Json["ns_per_tick"] = Overhead.NsPerTick;
+		Json["limit_ns_per_frame"] = AbiGates::CallOverheadLimitNsPerFrame;
+		Json["gate"] = bPass ? "pass" : (bDebug ? "recorded (Debug build: not judged)" : "fail");
+		Json["method"] = "SetUpForFrame, StartFrame, WaitPhysScenes, EndFrame per frame through the raw C table, one TSC interval (rdtscp + lfence) per "
+			"batch, the median over batches after a warm-up batch (03 M10)";
+		std::printf("%s\n", Json.dump(2).c_str());
+		return bPass || (bDebug && Overhead.bValid) ? EBenchExit::Ok : EBenchExit::GateFailed;
 	}
 
 	// ---- FBenchmarkRunner --------------------------------------------------------------------------------------------
@@ -1117,6 +1325,26 @@ namespace PhysicsTest
 			std::unique_ptr<int64> InjectedTickAllocation;   // test only: the block -InjectTickAllocation allocates inside a Tick
 			FHostLoad Load;
 
+			// M10: the TSC clock (02 9.3), the thread census (02 12.2 steps 5 / 11, G10b) and the conformance stamp (02 12.4)
+			std::vector<FCycleCounter::FPair> CalibrationPairs;   // host controls, pre-roll, every CalibrationPairEvery frames, the end
+			FTscCalibration Calibration;
+			double ProvisionalNsPerTick = 0.0;  // the process-wide calibration the scene's buckets used before the run's own
+			double TscReadOverheadNs = 0.0;
+			bool bTscInvariant = false;
+			FThreadCensus CensusInit;           // census #1 (after InitGamePhys: the threads the engine made)
+			FThreadCensus CensusBegin;          // the window: right before frame 0 ...
+			FThreadCensus CensusEnd;            // ... and right after the last frame
+			FCensusWindow CensusWindow;
+			FGateReport G10bReport;
+			Gates::EG10bSkip G10bSkip = Gates::EG10bSkip::None;   // why G10bReport is Skip (M10 fix round 1: the headline rule)
+			bool bG10b = false;                 // the window was measured (the loop ran)
+			FConformanceStampKey StampKey;
+			FStampCheck Stamp;
+			bool bStampKey = false;
+			std::string StampKeyError;
+			std::filesystem::path StampDir;
+			std::string ExeSha256;
+
 			// results
 			BenchRecorders::FHashRow FinalHash;
 			PtStepStats StepStats = {};
@@ -1141,6 +1369,7 @@ namespace PhysicsTest
 		{
 			RunBegin = FClockBuckets::Begin();
 			RunId = MakeRunId();
+			ExeSha256 = HashFileSha256(GetExecutablePath());   // the manifest's harness.exe_sha256 and the stamp key (M10)
 			// ---- 1. the run directory, then the Fatal hook (exit.json 3) ------------------------------------------------------
 			OutDir = !Spec.OutDir.empty() ? Spec.OutDir : GetDefaultResultsDir() / StringConv::Utf8ToPath(Spec.Session) / RunId;
 			OutDir.make_preferred();
@@ -1281,6 +1510,14 @@ namespace PhysicsTest
 			ClockReadOverheadNs = MeasureClockReadOverheadNs();
 			Host = ReadHostFacts();
 			CpuFrequencies = FHostEnvironment::ReadCpuFrequencies(Controls.Mask);
+			// M10 (02 9.3): the TSC buckets. The process-wide calibration converts the scene's buckets until the run's own
+			// calibration (every pair from here to the end of the loop) converts them again; the read overhead is recorded.
+			FCycleCounter::EnsureCalibrated();
+			ProvisionalNsPerTick = FCycleCounter::GetNsPerTick();
+			bTscInvariant = FCycleCounter::IsInvariant();
+			TscReadOverheadNs = FCycleCounter::MeasureReadOverheadNs();
+			CalibrationPairs.reserve(64);
+			CalibrationPairs.push_back(FCycleCounter::ReadPair());
 			return true;
 		}
 
@@ -1378,6 +1615,9 @@ namespace PhysicsTest
 				Finish(EBenchExit::BackendUnavailable, "backend_unavailable", "backend", Error);
 				return false;
 			}
+			// M10 (02 12.2 step 5): thread census #1 - the threads the engine has after InitGamePhys (workers, dispatchers, a UE
+			// TaskGraph). Untimed; the window census around the loop says whether any of them worked.
+			CensusInit.Capture();
 			return true;
 		}
 
@@ -1494,6 +1734,27 @@ namespace PhysicsTest
 			Inputs.TolerancesError = TolerancesError;
 			Inputs.DtEngine = DtEngine;
 			Preflight = BenchPreflight::Run(Inputs);
+			// M10 (02 12.2 step 7, 12.4): the stamp of this run's key - recorded in the manifest (conformance_stamp), never a refusal
+			// here (the runner refuses unstamped cells before it starts a process; validate rejects runs without a valid stamp).
+			StampDir = Spec.StampDir.empty() ? GetDefaultStampDir() : std::filesystem::path(Spec.StampDir).make_preferred();
+			if (bTolerances)
+			{
+				StampKey.BenchExeSha256 = ExeSha256;
+				StampKey.BackendModuleSha256 = Module->IsDll() ? HashFileSha256(Module->GetDllPath()) : std::string();
+				StampKey.VariantSha256 = Files.VariantSha256;
+				StampKey.PhysicsSha256 = Config.PhysicsSha256();
+				StampKey.TolerancesSha256 = Tolerances.GetSha256();
+				StampKey.GateSuiteVersion = Gates::GateSuiteVersion;
+				StampKey.ConfigOverrides = ExtractConfigOverrides(Spec.CommandLine);
+				bStampKey = true;
+				Stamp = CheckConformanceStamp(StampKey, StampDir);
+				UE_LOG(LogPhysicsBench, Display, "conformance stamp %s: %s%s", Stamp.KeySha256.substr(0, 16).c_str(), Stamp.bValid ? "valid" : "not valid",
+					Stamp.bValid ? "" : (" (" + Stamp.Reason + ")").c_str());
+			}
+			else
+			{
+				StampKeyError = "tolerances: " + TolerancesError;
+			}
 			PreflightTicks = FClockBuckets::End(PhaseBegin);
 			// M9 (02 10): the preflight diff - every effective key next to its resolved value - and a summary in the log.
 			if (!Preflight.Diff.empty())
@@ -1619,21 +1880,54 @@ namespace PhysicsTest
 				}
 			}
 			const bool bNativeHash = Scene->GetBackendInfo().Has(PT_CAP_NATIVE_HASH);
+			CalibrationPairs.reserve(CalibrationPairs.size() + static_cast<size_t>(Frames / CalibrationPairEvery) + 8);
 			FHostLoadMonitor LoadMonitor;
 			LoadMonitor.Begin();
+			CalibrationPairs.push_back(FCycleCounter::ReadPair());
 			PhaseBegin = FClockBuckets::Begin();
 			FHostEnvironment::SpinPreRoll(Spec.PreRollSeconds, Controls.Mask);
 			PreRollTicks = FClockBuckets::End(PhaseBegin);
+			CalibrationPairs.push_back(FCycleCounter::ReadPair());
 			BackendAllocsBeforeLoop = ReadBackendAllocs();
+			// M10 (02 12.2 step 11): the census window begins here; its counters are read last, right before frame 0.
+			CensusBegin.Capture(FThreadCensus::ETiming::CountersLast);
+			// Test only (-InjectForeignWork=<ms>, the G10b negative control, M10 fix round 0): a helper thread that spins <ms> of its
+			// own CPU time inside the window. A short spin ends before census #2, so the helper is in neither census and only the
+			// process total shows it (unattributed); G10b must fail on it either way.
+			std::thread ForeignWork;
+			if (Spec.InjectForeignWorkMs > 0)
+			{
+				const uint64 Cycles = static_cast<uint64>(Spec.InjectForeignWorkMs * 1.0e6 / FCycleCounter::GetNsPerTick());
+				ForeignWork = std::thread([Cycles]
+				{
+					ULONG64 Begin = 0;
+					QueryThreadCycleTime(GetCurrentThread(), &Begin);
+					ULONG64 Now = Begin;
+					volatile uint64 Sink = 0;
+					while (Now - Begin < Cycles)
+					{
+						for (int32 Index = 0; Index < 1000; ++Index)
+						{
+							Sink = Sink + 1;
+						}
+						QueryThreadCycleTime(GetCurrentThread(), &Now);
+					}
+				});
+			}
 			const uint64 LoopNewBegin = FAllocationCounters::NumNew.load(std::memory_order_relaxed);
 			PhaseBegin = FClockBuckets::Begin();
 			for (int32 Frame = 0; Frame < Frames; ++Frame)
 			{
-				// Inside Tick: no allocation, no I/O, no log (02 9.3). The counters around it are two relaxed loads.
+				// Inside Tick: no allocation, no I/O, no log (02 9.3). The counters around it are two relaxed loads; the TSC and QPC
+				// reads around it (M10) are outside the buckets.
 				const uint64 NewBefore = FAllocationCounters::NumNew.load(std::memory_order_relaxed);
 				const uint64 DeleteBefore = FAllocationCounters::NumDelete.load(std::memory_order_relaxed);
 				TickFrame = Frame;
+				const uint64 QpcBefore = FPlatformTime::Cycles64();
+				const uint64 TscBefore = FCycleCounter::Read();
 				Scene->Tick(FrameDeltaSeconds);
+				const uint64 TscAfter = FCycleCounter::Read();
+				const uint64 QpcAfter = FPlatformTime::Cycles64();
 				const uint64 FrameNew = FAllocationCounters::NumNew.load(std::memory_order_relaxed) - NewBefore;
 				TickAllocations += FrameNew;
 				TickFrees += FAllocationCounters::NumDelete.load(std::memory_order_relaxed) - DeleteBefore;
@@ -1655,6 +1949,10 @@ namespace PhysicsTest
 				// Untimed recorder work between frames (only in the runs that ask for it; a headline run records the row only).
 				FFrameRecord Row;
 				Row.Timing = Scene->GetLastFrameTiming();
+				Row.Timing.FrameQpcTicks = QpcAfter - QpcBefore;   // M10: the QPC ticks of the whole Tick (the buckets read the TSC)
+				Row.TickTsc = TscAfter - TscBefore;
+				Row.TscEnd = TscAfter;
+				Row.QpcEnd = QpcAfter;
 				Row.SimTime = Scene->GetSimTime();
 				Row.AwakeBodies = Scene->GetStats().NumAwakeBodies;
 				const bool bCountersFrame = Test.CountersEvery > 0 && IsRecordedFrame(Test.CountersEvery, Frame, Frames);
@@ -1725,13 +2023,26 @@ namespace PhysicsTest
 					std::fflush(stderr);
 					TerminateProcess(GetCurrentProcess(), 0);
 				}
+				if ((Frame + 1) % CalibrationPairEvery == 0)
+				{
+					CalibrationPairs.push_back(FCycleCounter::ReadPair());   // between frames, untimed (02 9.3 calibration)
+				}
 				if (Frame == 0)
 				{
 					Frame0Ticks = FClockBuckets::End(PhaseBegin);
 					PhaseBegin = FClockBuckets::Begin();
 				}
 			}
+			// M10 fix round 1: the loop phase ends with its last frame (read before census #2, whose enumeration takes tens of ms,
+			// and before the -InjectForeignWork join), as in M7-M9.
 			LoopTicks = FClockBuckets::End(PhaseBegin);
+			// M10: the census window ends here, counters first (census #1's threads are read with them, through its handles).
+			CensusEnd.Capture(FThreadCensus::ETiming::CountersFirst, &CensusBegin);
+			if (ForeignWork.joinable())
+			{
+				ForeignWork.join();   // test only (-InjectForeignWork): after census #2, so a helper still spinning there is a new thread
+			}
+			bG10b = true;
 			LoopAllocations = FAllocationCounters::NumNew.load(std::memory_order_relaxed) - LoopNewBegin;
 			InjectedTickAllocation.reset();   // test only (-InjectTickAllocation): freed outside the loop
 			Load = LoadMonitor.End(Controls.Mask, Controls.CoreMask);
@@ -1749,6 +2060,18 @@ namespace PhysicsTest
 		void FBenchRun::DecideExit()
 		{
 			const FPhysicsTestSettings& Test = Config.TestSettings;
+			// M10 (02 9.3): the run's TSC calibration over every pair from the host controls to here, and every recorded bucket
+			// converted again with it; then the census window and G10b.
+			CalibrationPairs.push_back(FCycleCounter::ReadPair());
+			Calibration = CalibrateTsc(CalibrationPairs);
+			Recorder.Recalibrate(Calibration.bValid ? Calibration.NsPerTick : ProvisionalNsPerTick);
+			if (bG10b)
+			{
+				CensusWindow = MeasureCensusWindow(CensusBegin, CensusEnd, Controls.Mask, static_cast<uint32>(std::max(Test.NumThreads, 1)));
+				G10bReport = Gates::EvaluateG10b(CensusWindow, Spec.Backend + (Files.VariantName.empty() ? "" : "." + Files.VariantName) + " / " + Config.ProfileName,
+					&G10bSkip);
+				UE_LOG(LogPhysicsBench, Display, "%s", G10bReport.Summary().c_str());
+			}
 			FinalHash = Hashes.GetRows().empty() ? BenchRecorders::FHashRow() : Hashes.GetRows().back();
 			if (Scene)
 			{
@@ -1860,10 +2183,41 @@ namespace PhysicsTest
 			InvalidReasons.push_back(std::string("checks compiled in (PT_DO_CHECK=1, preset ") + PT_BUILD_PRESET + "): headline runs use the test presets");
 #endif
 			if (Spec.InjectEngineErrorBits != 0 || !Spec.InjectPreflightFault.empty() || Spec.InjectSceneInstrumentFlags != 0 || Spec.InjectStatePerturbationFrame >= 0
-				|| Spec.InjectTickAllocationFrame >= 0 || Spec.InjectSilentExitFrame >= 0)
+				|| Spec.InjectTickAllocationFrame >= 0 || Spec.InjectSilentExitFrame >= 0 || Spec.InjectForeignWorkMs > 0)
 			{
 				InvalidReasons.push_back("a test-only injection was used");
 			}
+			// M10 (docs/TimingContract.md 6, conditions 11-13): the single-thread proof, the TSC clock, no profiler build.
+			if (bG10b && G10bReport.Result == EGateResult::Fail)
+			{
+				InvalidReasons.push_back("G10b failed (T = 1 single-thread proof): " + (G10bReport.Failures.empty() ? std::string("?") : G10bReport.Failures.front()));
+			}
+			else if (bG10b && CensusWindow.Threads == 1 && (G10bSkip == Gates::EG10bSkip::NoCensus || G10bSkip == Gates::EG10bSkip::Contended))
+			{
+				// M10 fix round 1: a T = 1 run long enough for a verdict that has none carries no single-thread proof. Only the
+				// short-window Skip (P0's sub-ms windows) rests on the stamp's G10b run; T > 1 is the scaling series.
+				InvalidReasons.push_back(std::string("G10b gave no verdict (T = 1 single-thread proof): ") + Gates::ToString(G10bSkip) + " - "
+					+ (G10bReport.Notes.empty() ? std::string("?") : G10bReport.Notes.back()));
+			}
+			if (!bTscInvariant)
+			{
+				InvalidReasons.push_back("the CPU's TSC is not invariant (CPUID 0x80000007 EDX bit 8): the TSC buckets are not a clock");
+			}
+			if (bPreflightPassed && !Calibration.bValid)
+			{
+				InvalidReasons.push_back("the run's TSC / QPC calibration failed");
+			}
+			else if (bPreflightPassed && !(Calibration.MaxResidual < TscCalibrationResidualMax))
+			{
+				// M10 fix round 1 (02 9.3, 03 M10 criterion 1, docs/TimingContract.md 6 #12): the bound is checked on every run.
+				char Text[160];
+				std::snprintf(Text, sizeof(Text), "the run's TSC / QPC calibration residual %.3g >= %.0e (02 9.3): the TSC is not a straight QPC clock here",
+					Calibration.MaxResidual, TscCalibrationResidualMax);
+				InvalidReasons.push_back(Text);
+			}
+#if PT_BUILD_WITH_PROFILER
+			InvalidReasons.push_back(std::string("profiler build (preset ") + PT_BUILD_PRESET + ": Tracy zones, Jolt's external profile): phase breakdown only, never a headline (03 M10)");
+#endif
 			bTimingValid = InvalidReasons.empty();
 		}
 
@@ -1972,10 +2326,22 @@ namespace PhysicsTest
 			J["exit_code"] = static_cast<int32>(Exit);
 			J["timing_valid_for_headline"] = bTimingValid;
 			J["timing_invalid_reasons"] = InvalidReasons;
-			J["unofficial"] = true;
-			J["timing_label"] = GetUnofficialLabel();
-			J["comparability_key"] = nullptr;   // M10
-			J["conformance_stamp"] = nullptr;   // M10
+			J["unofficial"] = true;              // M10: decided at the end of the manifest (the reasons need every group)
+			J["timing_label"] = "";
+			J["comparability_key"] = nullptr;    // M10: FRunManifest::ComputeComparabilityKey, at the end
+			{
+				// M10 (02 12.2 step 7, 12.4): the stamp of this run's key, as the bench found it.
+				FJson StampJson;
+				StampJson["key_sha256"] = bStampKey ? FJson(Stamp.KeySha256) : FJson(nullptr);
+				StampJson["found"] = Stamp.bFound;
+				StampJson["valid"] = bStampKey && Stamp.bValid;
+				StampJson["reason"] = bStampKey ? Stamp.Reason : (StampKeyError.empty() ? std::string("no stamp key: the run stopped before its preflight") : StampKeyError);
+				StampJson["path"] = bStampKey ? FJson(StringConv::PathToUtf8(Stamp.Path)) : FJson(nullptr);
+				StampJson["stamp_utc"] = Stamp.StampUtc;
+				StampJson["stamp_dir"] = StringConv::PathToUtf8(StampDir);
+				StampJson["key"] = bStampKey ? FJson::parse(StampKey.ToCanonicalJson()) : FJson(nullptr);
+				J["conformance_stamp"] = StampJson;
+			}
 			J["run_id"] = RunId;
 			J["session"] = Spec.Session;
 			J["utc"] = GetUtcTimestamp();
@@ -1989,9 +2355,26 @@ namespace PhysicsTest
 				Harness["git_sha_configure"] = PT_BUILD_GIT_SHA;   // the configure-time value (PTBuildInfo.h), for comparison
 				const std::filesystem::path Exe = GetExecutablePath();
 				Harness["exe"] = StringConv::PathToUtf8(Exe.filename());
-				Harness["exe_sha256"] = HashFileSha256(Exe);
+				Harness["exe_sha256"] = ExeSha256;
 				Harness["preset"] = PT_BUILD_PRESET;
 				Harness["do_check"] = PT_DO_CHECK != 0;
+				Harness["profiler"] = PT_BUILD_WITH_PROFILER != 0;   // M10: the prof preset (never a headline)
+				// M10 fix round 1: the SDK backends compiled into this exe (PT_WITH_<SDK>): a build with one is a single-SDK exe, the
+				// binary composition control (02 14.3), whatever its preset is called (Tools/ptbench perf.py).
+				FJson Sdks = FJson::array();
+#if PT_BUILD_WITH_JOLT
+				Sdks.push_back("Jolt");
+#endif
+#if PT_BUILD_WITH_BULLET
+				Sdks.push_back("Bullet");
+#endif
+#if PT_BUILD_WITH_PHYSX
+				Sdks.push_back("PhysX");
+#endif
+#if PT_BUILD_WITH_CHAOS
+				Sdks.push_back("Chaos");
+#endif
+				Harness["sdks"] = Sdks;
 				J["harness"] = Harness;
 			}
 			{
@@ -2108,6 +2491,10 @@ namespace PhysicsTest
 				{
 					Injections["silent_exit_frame"] = Spec.InjectSilentExitFrame;   // only when the run ended before that frame
 				}
+				if (Spec.InjectForeignWorkMs > 0)
+				{
+					Injections["foreign_work_ms"] = Spec.InjectForeignWorkMs;   // test only: G10b's negative control
+				}
 				Run["test_injections"] = Injections;
 				J["run"] = Run;
 			}
@@ -2154,11 +2541,12 @@ namespace PhysicsTest
 					}
 				}
 				Threads["engine_thread_settings"] = EngineThreadKeys;
-				Threads["scaling_note"] = Test.NumThreads > 1 ? "cpu_eff 미검증 (M10): T > 1 scaling numbers are not yet backed by the thread census"
-					: "T = 1: the single-thread proof (cpu_eff, foreign thread cycles, G10b) is M10";
-				Threads["census_init"] = nullptr;      // M10
-				Threads["census_window"] = nullptr;    // M10
-				Threads["foreign_cycles_fraction"] = nullptr;   // M10
+				Threads["scaling_note"] = Test.NumThreads > 1 ? "T > 1: cpu_eff and the foreign thread cycles of the census window come with the run (M10); "
+					"S(T) / E(T) are read next to them (G10b judges T = 1 only)" : "T = 1: G10b (cpu_eff, foreign thread cycles) is in gates[]";
+				// M10 (02 12.2 steps 5 / 11): census #1 after InitGamePhys, the window around the loop.
+				Threads["census_init"] = CensusInit.IsValid() || !CensusInit.GetError().empty() ? MakeCensusThreadsJson(CensusInit) : FJson(nullptr);
+				Threads["census_window"] = bG10b ? MakeCensusWindowJson(CensusWindow, G10bSkip) : FJson(nullptr);
+				Threads["foreign_cycles_fraction"] = bG10b && CensusWindow.bValid ? FJson(CensusWindow.ForeignFraction) : FJson(nullptr);
 				J["threads"] = Threads;
 			}
 			{
@@ -2216,12 +2604,23 @@ namespace PhysicsTest
 			}
 			{
 				FJson Clock;
-				Clock["source"] = "QPC (FPlatformTime::Cycles64; MSVC steady_clock is QPC too, 02 9.3)";
+				Clock["source"] = "TSC (FCycleCounter: rdtscp + lfence per bucket), calibrated against QPC over the whole run (M10, 02 9.3)";
 				Clock["qpc_hz"] = Host.QpcHz;
 				Clock["qpc_tick_ns"] = Host.QpcHz > 0 ? 1.0e9 / static_cast<double>(Host.QpcHz) : 0.0;
 				Clock["read_overhead_ns"] = ClockReadOverheadNs;
-				Clock["read_overhead_method"] = "median of 32 batches of 20000 FClockBuckets::Begin() calls, after the host controls";
-				Clock["tsc_hz"] = nullptr;   // M10
+				Clock["read_overhead_method"] = "QPC: median of 32 batches of 20000 FClockBuckets::Begin() calls, after the host controls";
+				Clock["tsc_hz"] = Calibration.bValid ? FJson(Calibration.TscHz) : FJson(nullptr);
+				Clock["tsc_invariant"] = bTscInvariant;
+				Clock["tsc_read_overhead_ns"] = TscReadOverheadNs;
+				Clock["tsc_read_overhead_method"] = "median of 32 batches of 20000 FCycleCounter::Read() (rdtscp + lfence) calls, after the host controls";
+				Clock["ns_per_tick"] = Calibration.bValid ? FJson(Calibration.NsPerTick) : FJson(nullptr);
+				Clock["ns_per_tick_provisional"] = ProvisionalNsPerTick;
+				Clock["calibration"] = { { "valid", Calibration.bValid }, { "pairs", Calibration.Pairs }, { "span_s", Calibration.SpanSeconds },
+					{ "max_residual", Calibration.MaxResidual }, { "rms_residual", Calibration.RmsResidual }, { "max_pair_spread_ticks", Calibration.MaxPairSpreadTicks },
+					{ "pair_every_frames", CalibrationPairEvery },
+					{ "method", "two-point TSC / QPC calibration between the first pair (host controls) and the last (after the loop); residual = the largest "
+						"|(Q_i - Q_0) / (Q_n - Q_0) - (T_i - T_0) / (T_n - T_0)| over every pair (before / after the pre-roll and every pair_every_frames frames); "
+						"every bucket of timings.csv is converted with ns_per_tick (03 M10: residual < 1e-5)" } };
 				J["clock"] = Clock;
 			}
 			J["order"] = { { "repeat_index", Spec.RepeatIndex }, { "order_index", Spec.OrderIndex }, { "block_seed", Spec.BlockSeed } };
@@ -2302,10 +2701,10 @@ namespace PhysicsTest
 				FJson WindowsJson = FJson::object();
 				for (const FStepWindow& Window : Scenario->GetWindows(Params))
 				{
-					WindowsJson[Window.Name] = MakeWindowJson(Window, Records);
+					WindowsJson[Window.Name] = MakeWindowJson(Window, Records, Recorder.GetNsPerTick());
 				}
 				Summary["windows"] = WindowsJson;
-				Summary["cpu_eff"] = nullptr;   // M10
+				Summary["cpu_eff"] = bG10b && CensusWindow.bValid ? FJson(CensusWindow.CpuEff) : FJson(nullptr);   // M10: the census window (G10b)
 				Summary["note"] = "T_frame = sum(T_push) + sum(T_step) + T_pull; T_step is not comparable with Chaos (02 9.3)";
 				J["summary"] = Summary;
 			}
@@ -2326,6 +2725,10 @@ namespace PhysicsTest
 				for (const FGateReport& Report : Preflight.Reports)
 				{
 					GatesJson.push_back(MakeGateReportJson(Report));
+				}
+				if (bG10b)
+				{
+					GatesJson.push_back(MakeGateReportJson(G10bReport));   // M10: after the loop (census window)
 				}
 				J["gates"] = GatesJson;
 			}
@@ -2365,6 +2768,24 @@ namespace PhysicsTest
 			J["deferred_fields"] = MakeDeferredFieldsJson();
 			J["outputs"] = Outputs;
 			J["wall_time_s"] = FClockBuckets::TicksToNs(FClockBuckets::End(RunBegin)) * 1.0e-9;
+			// M10: the comparability key (02 13) from the groups above, and whether the timing is reportable (R9).
+			J["comparability_key"] = Scene ? FJson(Manifest.ComputeComparabilityKey()) : FJson(nullptr);
+			std::vector<std::string> Unofficial;
+			if (!bTimingValid)
+			{
+				Unofficial.push_back("not headline-valid (timing_invalid_reasons)");
+			}
+			if (!(bStampKey && Stamp.bValid))
+			{
+				Unofficial.push_back("no valid conformance stamp for this run's key (" + (bStampKey ? Stamp.Reason : std::string("no key")) + ")");
+			}
+			if (!IsHighPerformanceScheme(Host))
+			{
+				Unofficial.push_back("the power plan is not High performance / Ultimate (" + Host.PowerSchemeName + ")");
+			}
+			J["unofficial"] = !Unofficial.empty();
+			J["unofficial_reasons"] = Unofficial;
+			J["timing_label"] = MakeTimingLabel(Unofficial);
 			return Manifest;
 		}
 	}
@@ -2452,11 +2873,20 @@ namespace PhysicsTest
 		// -InjectEngineErrorBits (test only) is OR-ed into every physics-gate frame's engine error bits: G12 must fail.
 		std::vector<std::string> AbiGateIds;
 		std::vector<std::string> PhysicsGateIds;
+		// M10: G10b is not an in-process gate - it runs a fresh T = 1 bench run (its census window). It runs with the whole suite
+		// (no -Gates=) or when named.
+		bool bRunG10b = Spec.Gates.empty();
 		for (const std::string& Id : Spec.Gates)
 		{
+			if (Id == "G10b" || Id == "g10b" || Id == "G10B")
+			{
+				bRunG10b = true;
+				continue;
+			}
 			const bool bAbi = Id.size() >= 2 && (Id[0] == 'A' || Id[0] == 'a') && Id[1] >= '0' && Id[1] <= '9';
 			(bAbi ? AbiGateIds : PhysicsGateIds).push_back(Id);
 		}
+		const bool bOnlyG10b = !Spec.Gates.empty() && AbiGateIds.empty() && PhysicsGateIds.empty();
 		if (!AbiGateIds.empty())
 		{
 			const FPhysicsBackendModule* Loaded = FPhysicsBackendRegistry::Get().FindOrLoadModule(Spec.Backend, Error);
@@ -2512,7 +2942,29 @@ namespace PhysicsTest
 			}
 			Reports.push_back(Found->second(AbiTarget));
 		}
-		if (!PhysicsGateIds.empty() || AbiGateIds.empty())
+		// M10 fix round 0 (02 14.2: the ABI gates apply to every backend; 12.4): the whole suite of a DLL backend runs the ABI gates
+		// too, each in a fresh process, so its stamp - keyed by the DLL's SHA-256 - certifies them on that binary (a rebuilt Chaos
+		// bridge in M13 is stamped only after A0-A7 and A10 passed on it). A static backend is part of the exe, whose ABI gates
+		// CTest runs (PhysicsTest.Abi.*).
+		if (Spec.Gates.empty())
+		{
+			const FPhysicsBackendModule* Loaded = FPhysicsBackendRegistry::Get().FindOrLoadModule(Spec.Backend, Error);
+			if (Loaded == nullptr)
+			{
+				UE_LOG(LogPhysicsBench, Error, "conformance: %s", Error.c_str());
+				return Finish(EBenchExit::BackendUnavailable, "backend_unavailable", "backend", Error, {});
+			}
+			if (Loaded->IsDll())
+			{
+				for (const char* Id : ConformanceAbiGateIds)
+				{
+					std::string Lower = Id;
+					Lower[0] = 'a';
+					Reports.push_back(RunConformanceAbiGate(Spec, OutDir / ("abi_" + Lower), Id, Target.GetLabel()));
+				}
+			}
+		}
+		if (!bOnlyG10b && (!PhysicsGateIds.empty() || AbiGateIds.empty()))
 		{
 			std::vector<FGateReport> PhysicsReports;
 			if (!Gates::RunPhysicsGates(Target, PhysicsGateIds, PhysicsReports, Error))
@@ -2521,6 +2973,11 @@ namespace PhysicsTest
 				return Finish(EBenchExit::GateFailed, "gate_failed", "gate", Error, {});
 			}
 			Reports.insert(Reports.end(), PhysicsReports.begin(), PhysicsReports.end());
+		}
+		if (bRunG10b)
+		{
+			// The module of this process stays idle meanwhile (the child is another process with its own module).
+			Reports.push_back(RunConformanceG10b(Spec, OutDir / "g10b_run", Target.GetLabel()));
 		}
 
 		int32 Passed = 0;
@@ -2626,6 +3083,79 @@ namespace PhysicsTest
 			Json["scene_sha256"] = Scenes;
 		}
 		Json["gates"] = GateList;
+		// M10 (02 12.4, 03 M10 task 4): the stamp - the whole suite only (no -Gates= selection) and no test-only injection.
+		{
+			FJson StampJson;
+			const bool bFullSuite = Spec.Gates.empty();
+			const bool bInjected = Spec.InjectEngineErrorBits != 0 || Spec.bInjectFatal || Spec.InjectForeignWorkMs > 0;
+			std::string StampError;
+			if (!bFullSuite || bInjected)
+			{
+				StampJson["written"] = false;
+				StampJson["reason"] = !bFullSuite ? "a -Gates= selection is not the suite: no stamp" : "a test-only injection was used: no stamp";
+			}
+			else if (Module == nullptr)
+			{
+				StampJson["written"] = false;
+				StampJson["reason"] = "the backend module is not loaded: " + Error;
+			}
+			else
+			{
+				FStampDocument Document;
+				Document.Key.BenchExeSha256 = HashFileSha256(GetExecutablePath());
+				Document.Key.BackendModuleSha256 = Module->IsDll() ? HashFileSha256(Module->GetDllPath()) : std::string();
+				Document.Key.VariantSha256 = Files.VariantSha256;
+				Document.Key.PhysicsSha256 = Config.PhysicsSha256();
+				Document.Key.TolerancesSha256 = Tolerances.GetSha256();
+				Document.Key.GateSuiteVersion = Gates::GateSuiteVersion;
+				Document.Key.ConfigOverrides = ExtractConfigOverrides(Spec.CommandLine);
+				Document.Backend = Spec.Backend;
+				Document.VariantRequested = Spec.BackendProfile;
+				Document.Variant = Files.VariantName;
+				Document.Profile = Config.ProfileName;
+				Document.Preset = PT_BUILD_PRESET;
+				Document.FlagProfile = PT_BUILD_FLAG_PROFILE;
+				Document.Configuration = PT_BUILD_CONFIGURATION;
+				Document.GitSha = PT_GIT_SHA;
+				Document.bGitDirty = PT_GIT_DIRTY != 0;
+				Document.ExePath = GetExecutablePath();
+				Document.ModuleKind = Module->IsDll() ? "dll" : "static";
+				Document.ModulePath = Module->IsDll() ? Module->GetDllPath() : std::filesystem::path();
+				Document.ConfigDir = ConfigDir;
+				Document.Inputs.push_back({ "base_ini", ConfigDir / "BasePhysicsTest.ini" });
+				Document.Inputs.push_back({ "profile_ini", Files.ProfilePath });
+				if (!Files.VariantPath.empty())
+				{
+					Document.Inputs.push_back({ "variant_ini", Files.VariantPath });
+				}
+				Document.Inputs.push_back({ "tolerances", Gates::GetTolerancesPath(ConfigDir) });
+				for (const FGateReport& Report : Reports)
+				{
+					FStampGate Gate;
+					Gate.Id = Report.Gate;
+					Gate.Result = Report.Result;
+					Gate.Failures = Report.Failures;
+					Gate.Reason = Report.Result == EGateResult::Fail ? (Report.Failures.empty() ? std::string("failed") : Report.Failures.front())
+						: (Report.Result == EGateResult::Skip ? (Report.Notes.empty() ? std::string("skipped") : Report.Notes.back()) : std::string());
+					Document.Gates.push_back(Gate);
+				}
+				Document.PendingSignOffs = PendingSignOffs;
+				Document.ConformanceDir = OutDir;
+				Document.CommandLine = Spec.CommandLine;
+				const std::filesystem::path StampDir = Spec.StampDir.empty() ? GetDefaultStampDir() : std::filesystem::path(Spec.StampDir).make_preferred();
+				std::filesystem::path StampPath;
+				const bool bWritten = WriteConformanceStamp(Document, StampDir, StampPath, StampError);
+				StampJson["written"] = bWritten;
+				StampJson["reason"] = bWritten ? std::string() : StampError;
+				StampJson["key_sha256"] = Document.Key.ComputeSha256();
+				StampJson["key"] = FJson::parse(Document.Key.ToCanonicalJson());
+				StampJson["path"] = bWritten ? FJson(StringConv::PathToUtf8(StampPath)) : FJson(nullptr);
+				StampJson["valid"] = bWritten && Failed == 0 && PendingSignOffs == 0;
+				UE_LOG(LogPhysicsBench, Display, "conformance stamp %s: %s -> %s", Document.Key.ComputeSha256().substr(0, 16).c_str(),
+					Failed == 0 && PendingSignOffs == 0 ? "valid" : "not valid", bWritten ? StringConv::PathToUtf8(StampPath).c_str() : StampError.c_str());
+			}
+			Json["stamp"] = StampJson;
+		}
 		Json["wall_time_s"] = FClockBuckets::TicksToNs(FClockBuckets::End(RunBegin)) * 1.0e-9;
 		const std::filesystem::path Path = OutDir / "conformance.json";
 		if (!WriteText(Path, Json.dump(2) + "\n"))

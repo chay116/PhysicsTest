@@ -14,6 +14,7 @@
 //   A7 effective keys       the generic set + the backend's declared set, each line well-formed
 //   A9 (DLL hygiene) is Tools/check_modules.py + the PtAbiUeCompatCheck build (CTest), not a function here.
 //   A10 frame model         see RunA10FrameModel.
+//   M10: MeasureCallOverhead, the ABI call cost on the TSC (a gate on Null: < 100 ns per frame of 4 calls).
 // Every A0-A7 gate drives a backend's raw C table. Precondition: the module is not initialised; postcondition: it is
 // terminated again (PrepareAbiGateTarget gets there through the registry module).
 #pragma once
@@ -66,5 +67,24 @@ namespace PhysicsTest
 		// run on that initialisation (a PT_MODULE_NO_REINIT backend cannot be initialised again after a Term); it is left
 		// terminated.
 		FGateReport RunA10FrameModel(std::string_view BackendName);
+
+		// [확장 M10] The ABI call overhead (03 M10 criterion 1; the M2 QPC batch measurement, 02 7.8, now on the TSC): a scene
+		// with 0 bodies and 4 calls per frame (SetUpForFrame, StartFrame, WaitPhysScenes, EndFrame) through the raw C table,
+		// timed per batch of FramesPerBatch frames with two TSC reads (no clock read per call), after a warm-up batch. The value
+		// is the median over Batches of the per-frame cost. The gate: below CallOverheadLimitNsPerFrame on Null (Release
+		// builds; a Debug build records it). The module is initialised for the measurement and terminated again.
+		struct FAbiCallOverhead
+		{
+			bool bValid = false;
+			std::string Error;
+			int32 FramesPerBatch = 0;
+			int32 Batches = 0;
+			double MedianNsPerFrame = 0.0;
+			double MinNsPerFrame = 0.0;
+			double MaxNsPerFrame = 0.0;
+			double NsPerTick = 0.0;              // the process-wide TSC calibration used for the conversion
+		};
+		inline constexpr double CallOverheadLimitNsPerFrame = 100.0;
+		[[nodiscard]] FAbiCallOverhead MeasureCallOverhead(const FAbiGateTarget& Target, int32 FramesPerBatch = 20000, int32 Batches = 31);
 	}
 }

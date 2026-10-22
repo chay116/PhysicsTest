@@ -961,6 +961,9 @@ def _value(value: Any) -> float:
         return math.nan
 
 
+OBSERVATION_COLUMNS = ["run_key", "label", "backend", "variant", "probe", "profile", "scenario", "scene", "scenario_group", "perturb", "chaotic", "metric", "value"]
+
+
 def _observation_rows(runs: list[BehaviorRun], results: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for run in runs:
@@ -1014,7 +1017,8 @@ def build_observations(runs: list[BehaviorRun], results: dict[int, dict[str, Any
     series' value, and the replicas give the series' spread (max - min over the base and its replicas)."""
     from . import behavior_rules as rules
 
-    frame = pd.DataFrame(_observation_rows(runs, results))
+    # M10 fix round 0: an empty table keeps its columns, so the criteria code (scene filters) runs on it instead of a KeyError
+    frame = pd.DataFrame(_observation_rows(runs, results), columns=OBSERVATION_COLUMNS)
     if frame.empty:
         return frame
     # a run that put a body to sleep while it still moved is no reference for the time to sleep
@@ -2233,7 +2237,16 @@ def main(args) -> int:
     """python -I -m ptbench behavior <inputs> [--out DIR] [--json FILE]: the console summary; with --out also the Markdown
     section (index.md), its PNGs, differences.csv and behavior.json. Exit code 0 analysed, 1 a criterion failed (fail, not
     'fail (pending override)' or 'fail (accepted engine behaviour)' - the lead's decisions, behavior_rules.LEAD_DECISIONS),
-    2 no behaviour run in the inputs."""
+    2 a path that does not exist (M10 fix round 0, like the other analysis commands) or no behaviour run in the inputs."""
+    from . import load as _load
+
+    missing = [p for p in args.inputs if not pathlib.Path(p).exists()]
+    if missing:
+        print(f"ptbench behavior: no such path: {', '.join(missing)}")
+        return 2
+    if not _load.discover(args.inputs):
+        print("ptbench behavior: no run found under " + ", ".join(args.inputs))
+        return 2
     analysis = analyze(args.inputs)
     if not analysis.results:
         print("ptbench behavior: no behaviour run (states.ptst + scene_desc.json) under " + ", ".join(args.inputs)

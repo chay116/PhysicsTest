@@ -34,6 +34,7 @@ RESERVED_SWITCHES = {
     "backend": "targets[].backend", "backendprofile": "targets[].variant", "profile": "profiles[]", "scenario": "scenes[].scenario",
     "threads": "threads[]", "frames": "scenes[].frames", "repeat": "the runner's block bookkeeping", "order": "the runner's block bookkeeping",
     "blockseed": "the runner's block bookkeeping", "session": "the runner's session id",
+    "stampdir": "the runner passes its --stamp-dir to every run (M10: the run records the stamp it finds there)",
 }
 # Switches that make the process something other than one matrix run (no run directory the runner could judge).
 MODE_SWITCHES = ("gate", "list", "describe", "conformance", "analyticreferences", "scenehashes", "busyhelper")
@@ -232,6 +233,27 @@ def load_matrix(name_or_path: str) -> Matrix:
     except MatrixError as error:
         raise MatrixError(f"{path}: {error}") from None
     return matrix
+
+
+def select_targets(matrix: Matrix, labels: list[str] | None) -> Matrix:
+    """M10: the matrix with only the targets named (--target, repeatable): e.g. the binary composition control runs the Jolt targets
+    of a matrix with the test-jolt exe. The document keeps its name, seed and every other field; its "$comment" gets
+    "[ptbench --target: <labels>]" appended (session.json keeps the document, so the selection is on record). A sentinel outside
+    the selection is dropped (the session then says "no sentinel cell declared"). MatrixError for an unknown label."""
+    if not labels:
+        return matrix
+    known = [t["label"] for t in matrix.document["targets"]]
+    unknown = [label for label in labels if label not in known]
+    if unknown:
+        raise MatrixError(f"--target {', '.join(unknown)}: not a target of matrix '{matrix.name}' ({', '.join(known)})")
+    document = dict(matrix.document)
+    document["targets"] = [t for t in matrix.document["targets"] if t["label"] in labels]
+    sentinel = document.get("sentinel")
+    if isinstance(sentinel, dict) and sentinel.get("label") not in labels:
+        document.pop("sentinel")
+    selected = Matrix(path=matrix.path, document=document, sha256=matrix.sha256)
+    selected.document["$comment"] = (str(matrix.document.get("$comment", "")) + f" [ptbench --target: {', '.join(labels)}]").strip()
+    return selected
 
 
 def _matches(rule: dict[str, Any], cell: Cell) -> bool:

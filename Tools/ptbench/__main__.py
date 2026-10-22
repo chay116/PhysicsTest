@@ -36,25 +36,49 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=float, help="override the per-run timeout (s)")
     p.add_argument("--bench-arg", action="append", help="an extra bench switch for every run (repeatable), e.g. --bench-arg=-HostCheck=record")
     p.add_argument("--dry-run", action="store_true", help="print the planned order only")
-    p.add_argument("--report", action="store_true", help="build the report when the session ends")
+    p.add_argument("--report", action="store_true", help="build the report when the session ends (a determinism matrix: the DET1 matrix)")
+    p.add_argument("--stamp-dir", help="the conformance stamps (default Saved/Conformance); passed to every run as -StampDir (M10)")
+    p.add_argument("--target", action="append", help="run only this target label of the matrix (repeatable; M10: e.g. a test-<engine> exe's engine)")
+    p.add_argument("--require-stamps", action="store_true",
+                   help="refuse the session when a cell has no valid conformance stamp, whatever the matrix's stamp policy (a perf matrix requires them anyway; "
+                        "determinism and behaviour matrices record them)")
+    p.add_argument("--skip-unstamped", action="store_true", help="run only the cells with a valid conformance stamp; the others are recorded as unstamped (M10)")
+    p.add_argument("--allow-unstamped", action="store_true",
+                   help="run cells without a valid conformance stamp (tests, development): recorded as a bypass, the session stays unofficial (M10)")
     gate_flags(p)
+
+    p = sub.add_parser("stamp", help="PhysicsTestBench -Conformance for every stamp target of a matrix without a valid stamp (M10, 02 12.4)")
+    p.add_argument("--matrix", help="a name in Config/Matrices or a path (required unless --prune)")
+    p.add_argument("--preset", help="out/<preset>/bin/PhysicsTestBench.exe (default: the matrix's preset, else test)")
+    p.add_argument("--exe", help="an explicit PhysicsTestBench.exe")
+    p.add_argument("--stamp-dir", help="where the stamps go (default Saved/Conformance)")
+    p.add_argument("--target", action="append", help="only this target label of the matrix (repeatable)")
+    p.add_argument("--bench-arg", action="append", help="an extra switch of the session (only -ini: / -ExecCmds= / -ConfigDir= reach the conformance)")
+    p.add_argument("--check", action="store_true", help="only report each target's stamp state (nothing is run)")
+    p.add_argument("--force", action="store_true", help="run the conformance also for targets with a valid stamp")
+    p.add_argument("--prune", action="store_true",
+                   help="remove the stamps of --stamp-dir whose exe or DLL backend is gone or was rebuilt, with their conformance runs "
+                        "(M10 fix round 0; with --check: only list them)")
 
     p = sub.add_parser("load", help="validate the outputs against Config/Schemas and write tidy parquet (runs, frames, effective, gates)")
     p.add_argument("inputs", nargs="+", help="session directories and / or run directories")
     p.add_argument("--out", help="parquet directory (default <session>/analysis)")
 
+    unstamped_help = "accept runs without a valid conformance stamp into the tables (M8 / M9 sessions, tests): marked in every table (M10)"
     p = sub.add_parser("validate", help="classify the runs (accepted / rejected with reasons) and check every table")
     p.add_argument("inputs", nargs="+")
-    p.add_argument("--window", default=None)
+    p.add_argument("--allow-unstamped", action="store_true", help=unstamped_help)
 
-    p = sub.add_parser("perf", help="per-cell statistics (median, p95, p99, CV), N-scaling alpha, S(T), the overhead model")
+    p = sub.add_parser("perf", help="per-cell statistics (median, p95, p99, CV, bootstrap CI), N-scaling alpha, S(T), the overhead model, claims")
     p.add_argument("inputs", nargs="+")
     p.add_argument("--window", default=None)
+    p.add_argument("--allow-unstamped", action="store_true", help=unstamped_help)
 
     p = sub.add_parser("report", help="report/<date>/index.md + PNG for a session (or run directories, -Gate=G8 directories, several sessions)")
     p.add_argument("inputs", nargs="+", metavar="session", help="a session directory; also run / -Gate=G8 directories or a directory that holds several")
     p.add_argument("--out", help="the report directory (default <first input>/report/<date>)")
     p.add_argument("--window", default=None)
+    p.add_argument("--allow-unstamped", action="store_true", help=unstamped_help)
 
     p = sub.add_parser("determinism", help="the DET1 matrix and the first divergent frame")
     p.add_argument("inputs", nargs="+", help="-Gate=G8 directories (gate_g8.json), sessions of a determinism matrix, or run directories")
@@ -90,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import runner
 
         return runner.main(args)
+    if args.command == "stamp":
+        from . import stamps
+
+        return stamps.main(args)
     if args.command == "analytic":
         from . import analytic
 

@@ -9,6 +9,7 @@ pt_add_module(PtBenchmark STATIC ALIAS PT::Benchmark
 	SOURCES
 		Public/BenchmarkRunner.h
 		Private/RunManifest.h
+		Private/BenchChildRuns.h
 		Private/BenchConfig.cpp
 		Private/BenchmarkRunner.cpp
 		Private/BenchMultiRun.cpp

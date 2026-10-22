@@ -45,7 +45,7 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
 	endfunction()
 
 	function(pt_configure_build_info)
-		foreach(_opt WITH_JOLT WITH_BULLET WITH_PHYSX WITH_CHAOS WITH_VIEWER)
+		foreach(_opt WITH_JOLT WITH_BULLET WITH_PHYSX WITH_CHAOS WITH_VIEWER WITH_PROFILER)
 			if(PT_${_opt})
 				set(PT_BUILD_${_opt} 1)
 			else()

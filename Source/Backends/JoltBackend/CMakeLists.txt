@@ -27,3 +27,18 @@ target_compile_definitions(PtBackendJolt PRIVATE _NO_CRT_STDIO_INLINE)
 target_link_libraries(PtBackendJolt INTERFACE legacy_stdio_definitions)
 pt_target_defaults(PtBackendJolt)
 set_property(TARGET PtBackendJolt PROPERTY FOLDER "PhysicsTest/Backends")
+
+# M10 prof preset (PT_WITH_PROFILER): Jolt is built with JPH_EXTERNAL_PROFILE, so every program that links Jolt needs
+# JPH::ExternalProfileMeasurement. PtJoltProfiler routes Jolt's JPH_PROFILE scopes to Tracy zones and rides on PT::Jolt (the
+# SDK smoke and seam probes link Jolt without the backend). It is Jolt-side glue (/arch:AVX2 like Jolt, JPH names only):
+# PhysicsTest.Probe.AdapterComdats lists it with the SDK libraries.
+if(PT_WITH_PROFILER)
+	add_library(PtJoltProfiler STATIC Private/JoltProfiler.cpp)
+	target_link_libraries(PtJoltProfiler PRIVATE Jolt PT::Tracy PT::BackendCommon)
+	# PT_BACKEND_NS=Jolt: a TU under Source/Backends keeps any Kit / BackendCommon symbol in the backend's inline namespace like
+	# the adapter's (same /arch:AVX2 flags; PhysicsTest.Probe.BackendIsolation checks every backend TU).
+	target_compile_definitions(PtJoltProfiler PRIVATE PT_BACKEND_NS=Jolt _NO_CRT_STDIO_INLINE)
+	pt_target_defaults(PtJoltProfiler)   # the harness compile policy (/W4 /WX /utf-8): it is our TU, Jolt's headers are wrapped
+	target_link_libraries(pt_jolt INTERFACE PtJoltProfiler)
+	set_property(TARGET PtJoltProfiler PROPERTY FOLDER "PhysicsTest/Backends")
+endif()

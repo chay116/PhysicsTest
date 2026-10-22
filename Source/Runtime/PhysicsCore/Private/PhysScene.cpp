@@ -4,6 +4,7 @@
 
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/PtProfiler.h"
 #include "Hash/Sha256.h"
 #include "Logging/LogMacros.h"
 #include "Misc/AssertionMacros.h"
@@ -74,9 +75,11 @@ namespace PhysicsTest
 			return FTransform(FQuat::Slerp(A.GetRotation(), B.GetRotation(), Alpha), From + (B.GetTranslation() - From) * Alpha);
 		}
 
+		// M10: the buckets read the TSC (FCycleCounter, rdtscp + lfence); ticks -> ns with the process-wide calibration (the bench
+		// converts the raw ticks again with its per-run calibration, docs/TimingContract.md 2.1).
 		uint64 TicksToNs(const uint64 Ticks)
 		{
-			return static_cast<uint64>(static_cast<double>(Ticks) * 1.0e9 * FPlatformTime::GetSecondsPerCycle64() + 0.5);
+			return static_cast<uint64>(FCycleCounter::TicksToNs(Ticks) + 0.5);
 		}
 
 		// Canonical byte stream for the run hashes (02 12.3): every value as a fixed-width little-endian field (doubles and
@@ -420,16 +423,17 @@ namespace PhysicsTest
 	// game-thread writes take effect when they are made). Forces and kinematic targets stay with the scene (frame rules).
 	void FPhysScene::FImpl::FlushQueueOnly()
 	{
+		PT_PROFILE_SCOPE("PhysScene T_push (flush)");   // prof preset only (M10): nothing in other builds
 		if (!Backend->HasPendingCommands())
 		{
 			return;   // no commands: no call, T_push 0 (02 9.3)
 		}
-		const uint64 PushBegin = FPlatformTime::Cycles64();
+		const uint64 PushBegin = FCycleCounter::Read();
 		const PtResult FlushResult = Backend->FlushCommands();
-		const uint64 PushEnd = FPlatformTime::Cycles64();
+		const uint64 PushEnd = FCycleCounter::Read();
 		CheckBackend(FlushResult, "ApplyBodyCommands");
 		Timing.PushNs += TicksToNs(PushEnd - PushBegin);
-		Timing.FrameQpcTicks += PushEnd - PushBegin;
+		Timing.PushTsc += PushEnd - PushBegin;
 	}
 
 	// UE's AddForce / AddTorque (SingleParticlePhysicsProxy.h:706-720, :757-771 [V]): a simulated body wakes when the
@@ -484,25 +488,26 @@ namespace PhysicsTest
 	void FPhysScene::FImpl::RunBackendFrame(const FVector& FrameGravity, const FSetUpForFrameParams& Params, const uint32 ExpectedSteps,
 		const uint32 ExpectedPushedSteps)
 	{
-		const uint64 PushBegin = FPlatformTime::Cycles64();
+		PT_PROFILE_SCOPE("PhysScene backend frame (T_push + T_step)");   // prof preset only (M10)
+		const uint64 PushBegin = FCycleCounter::Read();
 		const bool bHasCommands = Backend->HasPendingCommands();
 		const PtResult FlushResult = bHasCommands ? Backend->FlushCommands() : PT_OK;   // no commands: no call, T_push 0 (02 9.3)
-		const uint64 PushEnd = FPlatformTime::Cycles64();
+		const uint64 PushEnd = FCycleCounter::Read();
 		CheckBackend(FlushResult, "ApplyBodyCommands");
 
 		const PtResult SetUpResult = Backend->SetUpForFrame(&FrameGravity, Params.DeltaSeconds, Params.MinPhysicsDeltaTime, Params.MaxPhysicsDeltaTime,
 			Params.MaxSubstepDeltaTime, Params.MaxSubsteps, Params.bSubstepping);
-		const uint64 SetUpEnd = FPlatformTime::Cycles64();
+		const uint64 SetUpEnd = FCycleCounter::Read();
 		const PtResult StartResult = SetUpResult >= 0 ? Backend->StartFrame() : SetUpResult;
-		const uint64 StartEnd = FPlatformTime::Cycles64();
+		const uint64 StartEnd = FCycleCounter::Read();
 		const PtResult WaitResult = StartResult >= 0 ? Backend->WaitPhysScenes() : StartResult;
-		const uint64 WaitEnd = FPlatformTime::Cycles64();
+		const uint64 WaitEnd = FCycleCounter::Read();
 		// EndFrame writes all four fields (docs/Abi.md 5.8); the host still pre-fills NumPushedSteps with "not reported", as the
 		// Kit does, so a backend outside the Kit that writes only the M5 fields cannot trip the push check below.
 		PtFrameResult Frame = {};
 		Frame.NumPushedSteps = PT_INDEX_NONE;
 		const PtResult EndResult = WaitResult >= 0 ? Backend->EndFrame(Frame) : WaitResult;
-		const uint64 EndEnd = FPlatformTime::Cycles64();
+		const uint64 EndEnd = FCycleCounter::Read();
 		CheckBackend(SetUpResult, "SetUpForFrame");
 		CheckBackend(StartResult, "StartFrame");
 		CheckBackend(WaitResult, "WaitPhysScenes");
@@ -514,7 +519,12 @@ namespace PhysicsTest
 		Timing.WaitNs += TicksToNs(WaitEnd - StartEnd);
 		Timing.EndNs += TicksToNs(EndEnd - WaitEnd);
 		Timing.StepNs += TicksToNs(EndEnd - PushEnd);
-		Timing.FrameQpcTicks += (bHasCommands ? PushEnd - PushBegin : 0u) + (EndEnd - PushEnd);
+		Timing.PushTsc += bHasCommands ? PushEnd - PushBegin : 0u;
+		Timing.SetupTsc += SetUpEnd - PushEnd;
+		Timing.StartTsc += StartEnd - SetUpEnd;
+		Timing.WaitTsc += WaitEnd - StartEnd;
+		Timing.EndTsc += EndEnd - WaitEnd;
+		Timing.StepTsc += EndEnd - PushEnd;
 		Timing.EngineErrorBits |= Frame.EngineErrorBits;
 		if (Frame.NumStepsTaken != ExpectedSteps)
 		{
@@ -546,6 +556,8 @@ namespace PhysicsTest
 	FPhysScene::FPhysScene(const FPhysSceneInitParams& Params)
 		: Impl(std::make_unique<FImpl>())
 	{
+		// M10: the buckets' TSC -> ns calibration happens here, untimed, never inside a frame's first bucket.
+		FCycleCounter::EnsureCalibrated();
 		Impl->DebugName = Params.DebugName;
 		Impl->BackendName = Params.BackendName;
 		if (Impl->BackendName.empty())
@@ -954,6 +966,7 @@ namespace PhysicsTest
 
 	void FPhysScene::Tick(const float DeltaSeconds)
 	{
+		PT_PROFILE_SCOPE("PhysScene::Tick");   // prof preset only (M10)
 		// UWorld::Tick physics part (LevelTick.cpp:1740-1778, PhysLevel.cpp:194-212 [V]): SetUpForFrame first, then
 		// StartFrame, which broadcasts OnPhysScenePreTick (UE5 FPhysScene_Chaos::OnStartFrame).
 		const FSetUpForFrameParams Params = FStepPlanner::MakeSetUpForFrameParams(DeltaSeconds, Impl->Settings, Impl->TestSettings);
@@ -1075,14 +1088,15 @@ namespace PhysicsTest
 
 	void FPhysScene::EndFrame()
 	{
+		PT_PROFILE_SCOPE("PhysScene::EndFrame (T_pull)");   // prof preset only (M10)
 		checkf(Impl->Phase == EPhysSceneFramePhase::Waited, "FPhysScene::EndFrame without WaitPhysScenes");
 		Impl->Phase = EPhysSceneFramePhase::Idle;
 		Impl->bIsSimulating = false;
 		// [T_pull] once per frame: the bodies whose state may have changed -> FBodyInstance::State.
-		const uint64 PullBegin = FPlatformTime::Cycles64();
+		const uint64 PullBegin = FCycleCounter::Read();
 		uint32 Count = 0;
 		const PtResult PullResult = Impl->Backend->PullBodyStates(PT_READ_ACTIVE_ONLY, Count);
-		const uint64 PullEnd = FPlatformTime::Cycles64();
+		const uint64 PullEnd = FCycleCounter::Read();
 		Impl->CheckBackend(PullResult, "ReadBodyStates");
 		// Forces live until a frame pushes steps (both drivers; the Harness driver's UE4 rule keeps them for one frame).
 		// Kinematic targets: Native, the backend holds what it was sent; Harness, until a step runs (PtBackendAbi.h body
@@ -1101,8 +1115,9 @@ namespace PhysicsTest
 
 		FFrameTiming& Timing = Impl->Timing;
 		Timing.PullNs = TicksToNs(PullEnd - PullBegin);
-		Timing.FrameQpcTicks += PullEnd - PullBegin;
+		Timing.PullTsc = PullEnd - PullBegin;
 		Timing.FrameNs = Timing.PushNs + Timing.StepNs + Timing.PullNs;   // T_frame = sum(T_push) + sum(T_step) + T_pull
+		Timing.FrameTsc = Timing.PushTsc + Timing.StepTsc + Timing.PullTsc;
 		Timing.NumSteps = static_cast<uint32>(Impl->LastPlan.NumSteps > 0 ? Impl->LastPlan.NumSteps : 0);
 		Impl->LastTiming = Timing;
 		Impl->Stats.Last = Timing;

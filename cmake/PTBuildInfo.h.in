@@ -16,6 +16,7 @@
 #define PT_BUILD_WITH_PHYSX   @PT_BUILD_WITH_PHYSX@
 #define PT_BUILD_WITH_CHAOS   @PT_BUILD_WITH_CHAOS@
 #define PT_BUILD_WITH_VIEWER  @PT_BUILD_WITH_VIEWER@
+#define PT_BUILD_WITH_PROFILER @PT_BUILD_WITH_PROFILER@   // M10 prof preset: Tracy zones + Jolt external profile (never a headline)
 
 #define PT_BUILD_GIT_SHA      "@PT_BUILD_GIT_SHA@"     // the harness repository HEAD at configure time ("" outside git)
 #define PT_BUILD_GIT_DIRTY    @PT_BUILD_GIT_DIRTY@        // 1: uncommitted changes at configure time (git status --porcelain)

@@ -5,7 +5,7 @@ Three checks, none of which changes anything on the machine (01 Q9, 04 Q9: the u
                localised). Balanced is refused unless --allow-balanced; a bypassed session is marked in every table.
   idle         the whole system must be below 3 % busy over a 2 s window (GetSystemTimes). Windows are tried one after the
                other until one passes, at least IDLE_MIN_WINDOWS of them and for up to --idle-wait seconds (default 120 s:
-               this desktop idles at 2.5-4.9 %, so a fixed five windows refused about half of the unattended starts); the
+               this desktop idles at 2.5-4.9 %, so a fixed five windows refused one or two starts in three); the
                time waited and every window are recorded. --allow-busy turns a failure into a recorded warning; --skip-idle
                (tests) does not measure and is recorded as a bypass of this check too.
   processes    no other PhysicsTest process (PhysicsTestBench, PhysicsTestViewer, PhysicsTestAutomation, ...) may run.

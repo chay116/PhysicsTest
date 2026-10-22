@@ -18,7 +18,16 @@
   - a short session end to end: session.json and every manifest validate, the report is written with its UNOFFICIAL head,
     a report over the session's run directories alone still marks the power plan, and `ptbench perf` with a captured
     (redirected) stdout ends normally
-The runner tests pass the environment-gate bypasses (CTest runs in parallel on a desktop in use) and -HostCheck=record.
+  - M10: the conformance stamps with this build's bench (03 M10 criterion 3): stamped cells run and their manifests find
+    their stamp; one edited key value of the variant ini (PhysX.UE4Compat.ini BounceThresholdVelocity, or the first SDK
+    variant of a single-SDK build) refuses that variant's cells before any process starts and gives a direct bench run another
+    variant_sha256 and no stamp; a different Null DLL ("rebuilt") refuses the Null DLL cells; an
+    edited tolerances.json refuses every cell; --skip-unstamped runs only the stamped cells. On copies (Config, the exe and
+    the DLL in the test directory), never the repository's files
+  - M10: every manifest's comparability key equals the one recomputed from its fields; a run of the timing protocol proves
+    G10b and the TSC calibration residual stays below 1e-5
+The runner tests pass the environment-gate bypasses (CTest runs in parallel on a desktop in use) and -HostCheck=record; every
+session except the stamp tests' runs with --allow-unstamped (stamp_policy "allow").
 """
 from __future__ import annotations
 
@@ -26,6 +35,7 @@ import csv
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -33,11 +43,14 @@ import unittest
 
 import pandas as pd
 
-from ptbench import common, envcheck, runner
-from ptbench.analysis import determinism, load, report, validate
+from ptbench import common, envcheck, runner, stamps
+from ptbench.analysis import comparability, determinism, load, report, validate
 from ptbench.matrix import Matrix, MatrixError
 
 EXE = os.environ.get("PT_BENCH_EXE", "")
+# M10 fix round 1: the invalidation case edits one engine key's value of the SDK variant (not a comment: the bench's canonical
+# variant_sha256 has to change too, not only the file's raw hash).
+VARIANT_KEY_EDITS = {"PhysX": ("BounceThresholdVelocity", "200", "250"), "Jolt": ("Baumgarte", "0.2", "0.25"), "Bullet": ("WarmstartingFactor", "0.85", "0.8")}
 OUT = pathlib.Path(os.environ.get("PT_TEST_OUT", "")) if os.environ.get("PT_TEST_OUT") else None
 
 
@@ -51,6 +64,7 @@ def _matrix(directory: pathlib.Path, name: str, scenes: list, bench_args: list, 
         "schema": "physicstest.matrix/1", "name": name, "description": "integration test", "purpose": "perf", "repeats": repeats, "block_seed": 42,
         "cooldown_s": 0.0, "timeout_s": timeout, "contaminated_retries": retries, "bench_args": bench_args,
         "targets": targets or [{"label": "null", "backend": "Null"}], "profiles": ["Normalized"], "scenes": scenes, "threads": [1],
+        "cv_gate": False,   # M10: the runner mechanics with a fixed run count (the CV gate's logic: test_unit CvGateAndSentinelTests)
     }
     path = directory / f"{name}.json"
     common.write_json_atomic(path, document)
@@ -60,8 +74,13 @@ def _matrix(directory: pathlib.Path, name: str, scenes: list, bench_args: list, 
     return Matrix(path=path, document=document, sha256=common.sha256_file(path))
 
 
-def _bench(*args: str) -> int:
-    return subprocess.run([EXE, *args], capture_output=True, timeout=300, check=False).returncode
+def _bench(*args: str, exe: str | None = None) -> int:
+    return subprocess.run([exe or EXE, *args], capture_output=True, timeout=300, check=False).returncode
+
+
+def _available_backends(exe: str) -> list[str]:
+    completed = subprocess.run([exe, "-List"], capture_output=True, timeout=120, check=False)
+    return list(json.loads(completed.stdout.decode("utf-8")).get("backends", [])) if completed.returncode == 0 else []
 
 
 @unittest.skipUnless(EXE and OUT, "PT_BENCH_EXE and PT_TEST_OUT are required (CTest PhysicsTest.Py.Integration sets them)")
@@ -74,7 +93,9 @@ class IntegrationTests(unittest.TestCase):
         cls.exe = pathlib.Path(EXE)
 
     def _session(self, matrix: Matrix) -> tuple[pathlib.Path, int, dict]:
-        session_dir, code = runner.run_matrix(matrix, self.exe, None, self.out / "sessions", _gate(), log=lambda *_: None)
+        # The test's own (empty) stamp directory: the user's Saved/Conformance must never decide what a test sees (M10).
+        session_dir, code = runner.run_matrix(matrix, self.exe, None, self.out / "sessions", _gate(), log=lambda *_: None, stamp_policy="allow",
+                                              stamp_dir=self.out / "no_stamps")
         document = common.read_json(session_dir / "session.json")
         self.assertEqual(common.schema_errors(document, "session.schema.json"), [])
         return session_dir, code, document
@@ -114,7 +135,8 @@ class IntegrationTests(unittest.TestCase):
         gate = envcheck.run_envcheck(allow_balanced=False, allow_concurrent=True, skip_idle=True, scheme_reader=lambda: envcheck.parse_power_scheme(balanced))
         self.assertTrue(gate["refused"])
         matrix = _matrix(self.out, "refused", [{"scenario": "S00.FreeFall"}], ["-HostCheck=record"])
-        session_dir, code = runner.run_matrix(matrix, self.exe, None, self.out / "sessions", gate, log=lambda *_: None)
+        session_dir, code = runner.run_matrix(matrix, self.exe, None, self.out / "sessions", gate, log=lambda *_: None, stamp_policy="allow",
+                              stamp_dir=self.out / "no_stamps")
         document = common.read_json(session_dir / "session.json")
         self.assertEqual((code, document["status"], document["runs"]), (3, "refused", []))
         self.assertEqual(common.schema_errors(document, "session.schema.json"), [])
@@ -154,7 +176,8 @@ class IntegrationTests(unittest.TestCase):
         # a run starts (the bench would read only the first occurrence: FParse::Value).
         targets = [{"label": "null", "backend": "Null"}, {"label": "null.Pct7", "backend": "Null", "bench_args": ["-ContaminationPct=7"]}]
         matrix = _matrix(self.out, "switches", [{"scenario": "S00.FreeFall", "frames": 5}], ["-HostCheck=record", "-PreRoll=0"], targets=targets)
-        session_dir, code = runner.run_matrix(matrix, self.exe, None, self.out / "sessions", _gate(), extra_args=["-HashEvery=1"], log=lambda *_: None)
+        session_dir, code = runner.run_matrix(matrix, self.exe, None, self.out / "sessions", _gate(), extra_args=["-HashEvery=1"], log=lambda *_: None, stamp_policy="allow",
+                              stamp_dir=self.out / "no_stamps")
         document = common.read_json(session_dir / "session.json")
         self.assertEqual(common.schema_errors(document, "session.schema.json"), [])
         self.assertEqual(len(document["runs"]), 2)
@@ -167,7 +190,8 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(manifest["platform"]["host_load"]["threshold_pct"], 7.0 if run["label"] == "null.Pct7" else 5.0)   # the target's
             self.assertFalse(run["teardown_killed"])
         with self.assertRaisesRegex(MatrixError, "appears twice"):
-            runner.run_matrix(matrix, self.exe, None, self.out / "sessions", _gate(), extra_args=["-PreRoll=0.5"], log=lambda *_: None)
+            runner.run_matrix(matrix, self.exe, None, self.out / "sessions", _gate(), extra_args=["-PreRoll=0.5"], log=lambda *_: None, stamp_policy="allow",
+                              stamp_dir=self.out / "no_stamps")
 
     def test_viz_manifest_is_rejected(self):
         run_dir = self.out / "viz"
@@ -243,9 +267,16 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(sorted(set(loaded.runs["repeat"])), [0, 1])
         written = load.write_parquet(loaded, session_dir / "analysis")
         self.assertEqual(len(written), 4)
-        path = report.build_report(session_dir)
+        # M10: the bench's comparability key equals the analysis's recomputation from the manifest's fields.
+        self.assertTrue((loaded.runs["comparability_key"] == loaded.runs["comparability_key_recomputed"]).all())
+        self.assertEqual(loaded.runs["comparability_key"].nunique(), 2)   # P0 and M3: one table each (Null and the Null DLL share it)
+        # Without stamps no run is accepted (R9); --allow-unstamped accepts them and every table says so.
+        self.assertFalse(validate.classify(loaded.runs)["accepted"].any())
+        path = report.build_report(session_dir, allow_unstamped=True)
         text = path.read_text(encoding="utf-8")
         self.assertIn("UNOFFICIAL", text)
+        self.assertIn("적합성 스탬프 없는 run도 받음", text)
+        self.assertIn("## 2b. 비교와 주장 규칙", text)
         not_hp = not document["environment"]["power_plan_high_performance"]
         if not_hp:
             self.assertIn("전원 계획이 High performance가 아니다", text.split("## 1.")[0])   # the head of the report says so
@@ -274,8 +305,11 @@ class IntegrationTests(unittest.TestCase):
         joint scene either refused as unsupported (no joint capability) or meeting 03's 5 deg period criterion."""
         from ptbench.analysis import behavior, behavior_rules
 
-        targets = [{"label": "jolt.Default", "backend": "Jolt", "variant": "Default"}, {"label": "bullet.Default", "backend": "Bullet", "variant": "Default"},
-                   {"label": "physx.UE4Compat", "backend": "PhysX", "variant": "UE4Compat"}]
+        available = _available_backends(EXE)
+        targets = [t for t in ({"label": "jolt.Default", "backend": "Jolt", "variant": "Default"}, {"label": "bullet.Default", "backend": "Bullet", "variant": "Default"},
+                               {"label": "physx.UE4Compat", "backend": "PhysX", "variant": "UE4Compat"}) if t["backend"] in available]
+        if not targets:
+            self.skipTest("no SDK backend in this build")
         scenes = [{"scenario": "M1.SingleBoxDrop", "params": {"Case": "a"}}, {"scenario": "M4.InclineFriction", "params": {"Mu": "0.30"}},
                   {"scenario": "M5.BouncingBalls"}, {"scenario": "M6a.Pendulum", "params": {"Angle": "5", "Joint": "Hinge"}}]
         document = {
@@ -293,7 +327,7 @@ class IntegrationTests(unittest.TestCase):
         analysis = behavior.analyze([session_dir])
         self.assertEqual(analysis.errors, [])
         self.assertEqual(analysis.skipped, [])
-        self.assertEqual(len(analysis.results) + len(analysis.unsupported), 24)
+        self.assertEqual(len(analysis.results) + len(analysis.unsupported), 8 * len(targets))
         obs = analysis.observations
 
         def value(label, profile, scenario, metric):
@@ -301,30 +335,186 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(len(rows), 1, (label, profile, scenario, metric))
             return float(rows.iloc[0]["value"])
 
-        for label in ("jolt.Default", "bullet.Default", "physx.UE4Compat"):
+        labels = [t["label"] for t in targets]
+        for label in labels:
             for profile in ("Normalized", "UEParity"):
                 self.assertLess(value(label, profile, "M1.SingleBoxDrop", "fall_dz_max_cm"), 2e-3)        # the fall is the damped discrete fall
-        self.assertLess(abs(value("jolt.Default", "Normalized", "M4.InclineFriction", "d2s_err_pct")), 0.05)
-        self.assertLess(abs(value("jolt.Default", "UEParity", "M4.InclineFriction", "d2s_err_pct")), 0.05)   # the damped reference (UE 0.01)
+        if "jolt.Default" in labels:
+            self.assertLess(abs(value("jolt.Default", "Normalized", "M4.InclineFriction", "d2s_err_pct")), 0.05)
+            self.assertLess(abs(value("jolt.Default", "UEParity", "M4.InclineFriction", "d2s_err_pct")), 0.05)   # the damped reference (UE 0.01)
         for e in ("0.3", "0.5", "0.7", "0.9"):
-            self.assertLess(value("jolt.Default", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-4)       # model 0
-            self.assertLess(value("physx.UE4Compat", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-4)    # model 1 (M6 D-3)
-            self.assertLess(value("bullet.Default", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-3)     # model 2 (M9 commit)
-        self.assertEqual(len(analysis.ue_vs_normalized), 3)
+            if "jolt.Default" in labels:
+                self.assertLess(value("jolt.Default", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-4)       # model 0
+            if "physx.UE4Compat" in labels:
+                self.assertLess(value("physx.UE4Compat", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-4)    # model 1 (M6 D-3)
+            if "bullet.Default" in labels:
+                self.assertLess(value("bullet.Default", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-3)     # model 2 (M9 commit)
+        self.assertEqual(len(analysis.ue_vs_normalized), len(targets))
         for row in analysis.ue_vs_normalized:
             self.assertLess(abs(row["dz_residual_cm"]), 2e-3)                    # the profile difference in the fall window is UE's damping
             self.assertGreater(row["dz_if_jolt_native_cm"], 4 * row["dz_measured_cm"])   # 0.05 would show about 5x the measured difference
         differences = analysis.differences
         self.assertTrue(set(differences["tag"]) <= set(behavior_rules.TAGS))
-        self.assertEqual(int((differences["rule"] == "unexplained").sum()), 0, differences[differences["rule"] == "unexplained"][["label", "scene", "metric"]].to_dict("records"))
-        period = [c for c in analysis.criteria if c["id"] == "M6a.period"]
-        self.assertEqual(len(period), 3)
+        if len(targets) == 3:
+            # The tag rules explain a difference against the other engines' runs (the consensus and the engine-pair rules); a
+            # single-SDK build (test-<engine>, M10) has no other engine, so only the full set must leave nothing unexplained.
+            self.assertEqual(int((differences["rule"] == "unexplained").sum()), 0, differences[differences["rule"] == "unexplained"][["label", "scene", "metric"]].to_dict("records"))
+        # The criteria name every main engine; a single-SDK build (test-<engine>, M10) has not run the others ("not run").
+        period = [c for c in analysis.criteria if c["id"] == "M6a.period" and c["series"] in labels]
+        self.assertEqual(len(period), len(targets))
+        for row in analysis.criteria:
+            if row["id"] == "M6a.period" and row["series"] not in labels:
+                self.assertEqual(row["verdict"], "not run", row)
         for row in period:
             self.assertIn(row["verdict"], ("unsupported", "pass"), row)          # joints land in M9: then 03's 5 deg criterion must hold
         text = report.build_report(session_dir).read_text(encoding="utf-8")
         self.assertIn("## 7. 거동", text)
         self.assertIn("거동 run", text.split("## 6.")[0])                        # section 5 summarises the behaviour runs instead of listing them
         self.assertTrue((next((session_dir / "report").iterdir()) / "behavior.json").is_file())
+
+    # ---- M10: conformance stamps with this build's bench (03 M10 criterion 3) ------------------------------------------------
+    def _stamp_fixture(self, name: str) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, dict, str]:
+        """A copy of Config, the exe, the Null DLL and the backend catalog in the test directory, and the SDK variant the
+        invalidation case edits (PhysX.UE4Compat when this build has PhysX, else the first SDK backend's Default)."""
+        root = self.out / name
+        shutil.rmtree(root, ignore_errors=True)
+        config = root / "Config"
+        shutil.copytree(common.repo_root() / "Config", config)
+        bin_dir = root / "bin"
+        bin_dir.mkdir(parents=True)
+        source_bin = pathlib.Path(EXE).parent
+        for file in ("PhysicsTestBench.exe", "PtBackend_Null.dll", stamps.CATALOG_FILE):
+            shutil.copy2(source_bin / file, bin_dir / file)
+        available = _available_backends(EXE)
+        sdk = next(((b, v) for b, v in (("PhysX", "UE4Compat"), ("Jolt", "Default"), ("Bullet", "Default")) if b in available), None)
+        if sdk is None:
+            self.skipTest("no SDK backend in this build")
+        targets = [{"label": "null.Dll", "backend": "NullDll"}, {"label": f"{sdk[0].lower()}.{sdk[1]}", "backend": sdk[0], "variant": sdk[1]}]
+        document = {"schema": "physicstest.matrix/1", "name": name, "description": "integration test (stamps)", "purpose": "perf", "repeats": 1, "block_seed": 5,
+                    "cooldown_s": 0.0, "timeout_s": 120.0, "contaminated_retries": 0, "bench_args": [f"-ConfigDir={config}", "-HostCheck=record", "-PreRoll=0"],
+                    "targets": targets, "profiles": ["Normalized"], "scenes": [{"scenario": "S00.FreeFall", "frames": 5}], "threads": [1], "cv_gate": False}
+        path = root / f"{name}.json"
+        common.write_json_atomic(path, document)
+        matrix = Matrix(path=path, document=document, sha256=common.sha256_file(path))
+        return root, bin_dir / "PhysicsTestBench.exe", config, {"matrix": matrix, "sdk": sdk}, targets[1]["label"]
+
+    def _stamped_session(self, root, exe, matrix, name, policy="require"):
+        return runner.run_matrix(matrix, exe, None, root / "sessions", _gate(), log=lambda *_: None, stamp_policy=policy, stamp_dir=root / "stamps",
+                                 session_name=name)
+
+    def test_stamps_refuse_stale_cells_before_any_process(self):
+        root, exe, config, fixture, sdk_label = self._stamp_fixture("stamps")
+        matrix = fixture["matrix"]
+        self.assertEqual(stamps.run_stamp(matrix, exe, root / "stamps", log=lambda *_: None), 0)
+        stamp_files = sorted((root / "stamps").glob("*.json"))
+        self.assertEqual(len(stamp_files), 2)
+        for path in stamp_files:
+            document = common.read_json(path)
+            self.assertEqual(common.schema_errors(document, "stamp.schema.json"), [])
+            self.assertTrue(document["valid"])
+            self.assertEqual(stamps.key_sha256(document["key"]), path.stem)   # Python and C++ hash the same canonical key
+            self.assertIn("G10b", [g["id"] for g in document["gates"]])
+            self.assertEqual(document["pending_sign_offs"], 0)
+            # M10 fix round 0: a DLL backend's stamp certifies the ABI gates on that DLL (one process each); a static one's does not.
+            abi = [g["id"] for g in document["gates"] if g["id"].startswith("A")]
+            self.assertEqual(abi, ["A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A10"] if document["target"]["backend"] == "NullDll" else [])
+        # Stamped: the session runs, and every run finds its stamp (the bench recomputes the key in-process).
+        session_dir, code = self._stamped_session(root, exe, matrix, "ok")
+        self.assertEqual(code, 0)
+        session = common.read_json(session_dir / "session.json")
+        self.assertEqual(common.schema_errors(session, "session.schema.json"), [])
+        self.assertEqual(len(session["runs"]), 2)
+        for run in session["runs"]:
+            stamp = common.read_json(session_dir / run["out_dir"] / "manifest.json")["conformance_stamp"]
+            self.assertTrue(stamp["valid"], stamp)
+            self.assertIn(stamp["key_sha256"], [p.stem for p in stamp_files])
+
+        def refused(name, policy="require"):
+            session_dir, code = self._stamped_session(root, exe, matrix, name, policy)
+            document = common.read_json(session_dir / "session.json")
+            self.assertEqual(common.schema_errors(document, "session.schema.json"), [])
+            return session_dir, code, document, {c["label"]: c["stamp"] for c in document["cells"]}
+
+        # (1) one key of the variant ini changed (its value): that variant's cells are refused, nothing starts.
+        sdk_backend, sdk_variant = fixture["sdk"]
+        ini = config / "Profiles" / "Backend" / f"{sdk_backend}.{sdk_variant}.ini"
+        original = ini.read_bytes()
+        key_name, old_value, new_value = VARIANT_KEY_EDITS[sdk_backend]
+        edited, count = re.subn(rb"(?m)^" + re.escape(f"{key_name}={old_value}".encode()) + rb"(\r?)$", f"{key_name}={new_value}".encode() + rb"\1", original, count=1)
+        self.assertEqual(count, 1, f"{ini.name} has no line {key_name}={old_value}")
+        ini.write_bytes(edited)
+        session_dir, code, document, states = refused("variant")
+        self.assertEqual((code, document["status"], document["runs"]), (3, "refused", []))
+        self.assertFalse((session_dir / "runs").exists())
+        self.assertEqual((states["null.Dll"]["state"], states[sdk_label]["state"]), ("valid", "stale"))
+        self.assertIn(ini.name, states[sdk_label]["reason"])
+        # The bench's own check agrees: under the edited key its canonical variant_sha256 differs from the stamp's, so a direct run
+        # finds no stamp for its key (whatever its preflight says about the new value).
+        [sdk_stamp] = [common.read_json(path) for path in stamp_files if common.read_json(path)["target"]["backend"] == sdk_backend]
+        direct_variant = root / "direct_variant"
+        rc = _bench(f"-Backend={sdk_backend}", f"-BackendProfile={sdk_variant}", "-Scenario=S00.FreeFall", "-Frames=5", "-HostCheck=record", "-PreRoll=0",
+                    f"-ConfigDir={config}", f"-StampDir={root / 'stamps'}", f"-Out={direct_variant}", exe=str(exe))
+        edited_manifest = common.read_json(direct_variant / "manifest.json")
+        self.assertNotEqual(edited_manifest["profile"]["variant_sha256"], sdk_stamp["key"]["variant_sha256"], rc)
+        self.assertFalse(edited_manifest["conformance_stamp"]["valid"], edited_manifest["conformance_stamp"])
+        self.assertNotIn(edited_manifest["conformance_stamp"]["key_sha256"], [p.stem for p in stamp_files])
+        # --skip-unstamped runs the stamped cell only.
+        session_dir, code, document, states = refused("variant_skip", "skip")
+        self.assertEqual(code, 1)
+        self.assertEqual([r["label"] for r in document["runs"]], ["null.Dll"])
+        self.assertEqual({c["label"]: c["state"] for c in document["cells"]}[sdk_label], "unstamped")
+        self.assertIn("--skip-unstamped", document["bypasses"])
+        ini.write_bytes(original)
+        # (2) the Null DLL "rebuilt" (other bytes): the Null DLL cells are refused, the SDK cell is not.
+        dll = exe.parent / "PtBackend_Null.dll"
+        dll_bytes = dll.read_bytes()
+        dll.write_bytes(dll_bytes + b"\0rebuilt")
+        session_dir, code, document, states = refused("dll")
+        self.assertEqual((code, document["runs"]), (3, []))
+        self.assertEqual((states["null.Dll"]["state"], states[sdk_label]["state"]), ("stale", "valid"))
+        self.assertIn("PtBackend_Null.dll changed", states["null.Dll"]["reason"])
+        dll.write_bytes(dll_bytes)
+        # (3) tolerances.json changed: every cell is refused.
+        tolerances = config / "Golden" / "tolerances.json"
+        original_tolerances = tolerances.read_bytes()
+        tolerances.write_bytes(original_tolerances + b"\n")
+        session_dir, code, document, states = refused("tolerances")
+        self.assertEqual((code, document["runs"]), (3, []))
+        self.assertTrue(all(state["state"] == "stale" and "tolerances" in state["reason"] for state in states.values()), states)
+        # The bench's own check agrees: a run under the edited tolerances finds no stamp for its key.
+        direct = root / "direct"
+        self.assertEqual(_bench("-Backend=NullDll", "-Scenario=S00.FreeFall", "-Frames=5", "-HostCheck=record", "-PreRoll=0", f"-ConfigDir={config}",
+                                f"-StampDir={root / 'stamps'}", f"-Out={direct}", exe=str(exe)), 0)
+        self.assertFalse(common.read_json(direct / "manifest.json")["conformance_stamp"]["valid"])
+        tolerances.write_bytes(original_tolerances)
+        session_dir, code = self._stamped_session(root, exe, matrix, "restored")
+        self.assertEqual(code, 0)
+
+    def test_protocol_run_proves_g10b_and_calibrates_the_tsc(self):
+        run_dir = self.out / "g10b"
+        backend = next((b for b in ("Jolt", "PhysX", "Bullet") if b in _available_backends(EXE)), "Null")
+        frames = "300" if backend != "Null" else "3000"
+        self.assertEqual(_bench(f"-Backend={backend}", "-Scenario=M3.BoxPile", f"-Frames={frames}", "-HostCheck=record", "-PreRoll=0.5", f"-Out={run_dir}"), 0)
+        manifest = common.read_json(run_dir / "manifest.json")
+        [g10b] = [g for g in manifest["gates"] if g["id"] == "G10b"]
+        window = manifest["threads"]["census_window"]
+        # M10 fix round 1: G10b's minimum is 50 ms of the process's own CPU time (own_s, not wall_s), and a window long enough
+        # for a verdict can still have none when parallel CTest benches starve CPU 0 (g10b_skip "contended": the dedicated,
+        # RUN_SERIAL PhysicsTest.Bench.G10b<engine> tests prove the Pass).
+        if window["own_s"] < 0.050:
+            self.assertEqual((g10b["result"], window["g10b_skip"]), ("Skip", "short_window"), g10b)
+        elif g10b["result"] == "Skip":
+            self.assertEqual(window["g10b_skip"], "contended", g10b)
+            self.assertGreater(window["other_on_mask_fraction"], 0.05, g10b)
+        else:
+            self.assertEqual((g10b["result"], window["g10b_skip"]), ("Pass", ""), g10b)
+            self.assertLess(window["foreign_cycles_fraction"] + window["unattributed_fraction"], 0.005)
+        calibration = manifest["clock"]["calibration"]
+        self.assertTrue(calibration["valid"])
+        self.assertLess(calibration["max_residual"], 1e-5)
+        self.assertTrue(manifest["clock"]["tsc_invariant"])
+        self.assertGreater(manifest["clock"]["tsc_hz"], 1e8)
+        self.assertEqual(manifest["comparability_key"], comparability.key_from_manifest(manifest))
 
 
 if __name__ == "__main__":

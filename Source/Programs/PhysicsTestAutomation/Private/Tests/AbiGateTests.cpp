@@ -312,50 +312,25 @@ TEST_CASE("PhysicsTest.Abi.HostRefusesBadModules")
 
 TEST_CASE("PhysicsTest.Abi.CallOverheadNull")
 {
-	// 03 M2: the ABI cost of Null with 0 bodies, 4 calls per frame (SetUpForFrame, StartFrame, WaitPhysScenes, EndFrame),
-	// as a QPC batch average. Recorded only (the TSC-based 100 ns gate is M10).
+	// 03 M2 recorded the ABI cost of Null with 0 bodies, 4 calls per frame (SetUpForFrame, StartFrame, WaitPhysScenes, EndFrame)
+	// as a QPC batch average. 03 M10 makes it a gate on the TSC: the median over batches of the per-frame cost is below
+	// 100 ns (AbiGates::MeasureCallOverhead; also PhysicsTestBench -AbiOverhead). A Debug build (/Od) records it only.
 	for (const char* Name : GAbiTargets)
 	{
 		AbiGates::FAbiGateTarget Target;
 		std::string Error;
 		REQUIRE_MESSAGE(AbiGates::PrepareAbiGateTarget(Name, Target, Error), Error);
-		const PtBackendApi& Api = *Target.Api;
-		const PtInitParams Init = MakeInit();
-		REQUIRE(Api.InitGamePhys(&Init) == PT_OK);
-		const PtSceneDesc Desc = MakeDesc();
-		PtSceneId Scene = 0;
-		REQUIRE(Api.CreateScene(&Desc, &Scene) == PT_OK);
-		const PtVec3 Gravity = { 0.0, 0.0, -980.0 };
-		const auto RunFrames = [&](const int32 Frames)
-		{
-			bool bOk = true;
-			for (int32 Frame = 0; Frame < Frames; ++Frame)
-			{
-				PtFrameResult Result;
-				bOk = Api.SetUpForFrame(Scene, &Gravity, 1.0f / 60.0f, 0.0f, 0.0f, 0.0f, 1, 0u) == PT_OK && Api.StartFrame(Scene) == PT_OK
-					&& Api.WaitPhysScenes(Scene) == PT_OK && Api.EndFrame(Scene, &Result) == PT_OK && bOk;
-			}
-			return bOk;
-		};
-		REQUIRE(RunFrames(10000));   // warm-up
-		double Best = 1e30;
-		const int32 Frames = 200000;
-		for (int32 Batch = 0; Batch < 5; ++Batch)
-		{
-			const uint64 Begin = FPlatformTime::Cycles64();
-			REQUIRE(RunFrames(Frames));
-			const uint64 End = FPlatformTime::Cycles64();
-			const double NsPerCall = FPlatformTime::ToSeconds64(End - Begin) * 1.0e9 / (4.0 * Frames);
-			Best = NsPerCall < Best ? NsPerCall : Best;
-		}
-		char Line[200];
-		std::snprintf(Line, sizeof(Line), "ABI call cost, %s, 0 bodies: %.1f ns per call (best of 5 batches of %d frames x 4 calls, QPC %llu Hz)", Name, Best,
-			Frames, static_cast<unsigned long long>(FPlatformTime::GetCyclesPerSecond64()));
+		const AbiGates::FAbiCallOverhead Overhead = AbiGates::MeasureCallOverhead(Target);
+		REQUIRE_MESSAGE(Overhead.bValid, Overhead.Error);
+		char Line[240];
+		std::snprintf(Line, sizeof(Line), "ABI call cost, %s, 0 bodies: median %.1f ns per frame of 4 calls (%.1f ns per call; min %.1f, max %.1f; %d batches of %d frames, TSC)",
+			Name, Overhead.MedianNsPerFrame, Overhead.MedianNsPerFrame / 4.0, Overhead.MinNsPerFrame, Overhead.MaxNsPerFrame, Overhead.Batches, Overhead.FramesPerBatch);
 		MESSAGE(Line);
 		std::printf("PT_ABI_COST %s\n", Line);
-		CHECK(Best > 0.0);
-		CHECK(Api.DestroyScene(Scene) == PT_OK);
-		CHECK(Api.TermGamePhys() == PT_OK);
+		CHECK(Overhead.MedianNsPerFrame > 0.0);
+#if !defined(_DEBUG)
+		CHECK(Overhead.MedianNsPerFrame < AbiGates::CallOverheadLimitNsPerFrame);
+#endif
 	}
 }
 

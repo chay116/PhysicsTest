@@ -221,6 +221,10 @@ namespace PhysicsTest::BenchPreflight
 				{
 					Report.Check(Config->Native.find(Forbidden) == std::string::npos, std::string("Jolt configuration string has ") + Forbidden + ": " + Config->Native);
 				}
+				// M10: Jolt's external profile (its JPH_PROFILE scopes as Tracy zones) belongs to the prof preset and to no other build.
+				const bool bExternalProfile = Config->Native.find("(External Profile)") != std::string::npos;
+				Report.Check(bExternalProfile == (PT_BUILD_WITH_PROFILER != 0), std::string("Jolt configuration string ") + (bExternalProfile ? "has" : "lacks")
+					+ " (External Profile) in a " + (PT_BUILD_WITH_PROFILER != 0 ? "profiler" : "non-profiler") + " build: " + Config->Native);
 				Report.Note("jolt.config_string: " + Config->Native);
 			}
 			for (const FJson& Define : Facts.value("jolt_public_defines", FJson::array()))

@@ -1,7 +1,7 @@
 {
   "schema": "physicstest.matrix/1",
   "name": "smoke",
-  "description": "03_WorkPlan M8 smoke matrix: jolt.Default, bullet.Default, physx.UE4Compat, physx.SdkDefault x {P0.EmptyStep, M3.BoxPile 1k, 5k} x T=1 x R=5 (Normalized), the measurement protocol's defaults (pre-roll 0.5 s, -HostCheck=enforce). Unattended in < 30 min; every number stays UNOFFICIAL (M10 stamps, M11 power plan).",
+  "description": "03_WorkPlan M8 smoke matrix: jolt.Default, bullet.Default, physx.UE4Compat, physx.SdkDefault x {P0.EmptyStep, M3.BoxPile 1k, 5k} x T=1 x R=5 (Normalized), the measurement protocol's defaults (pre-roll 0.5 s, -HostCheck=enforce). Unattended in < 30 min. M10: every cell needs a valid conformance stamp (python -I -m ptbench stamp --matrix smoke), the CV gate adds up to two blocks for a cell above 2 % (then noisy), and the jolt.Default M3.BoxPile 1k sentinel runs at the start, the middle and the end (drift > 2 % flags the session). Every number stays UNOFFICIAL until the M11 High performance session.",
   "purpose": "perf",
   "preset": "test",
   "repeats": 5,
@@ -23,5 +23,7 @@
     { "scenario": "M3.BoxPile", "params": { "N": "1000" } },
     { "scenario": "M3.BoxPile", "params": { "N": "5000" } }
   ],
-  "threads": [ 1 ]
+  "threads": [ 1 ],
+  "cv_gate": { "threshold_pct": 2.0, "max_extra_blocks": 2 },
+  "sentinel": { "label": "jolt.Default", "profile": "Normalized", "scenario": "M3.BoxPile", "params": { "N": "1000" }, "T": 1, "runs": 1, "drift_pct": 2.0 }
 }

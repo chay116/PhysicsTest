@@ -43,18 +43,54 @@
       "displayName": "test-avx2 - as test, MatchedAVX2 flag profile",
       "description": "ISA sensitivity (M7, 02 4.2): every SDK and adapter /arch:AVX2, harness none (same desc_sha256 as test).",
       "cacheVariables": { "PT_FLAG_PROFILE": "MatchedAVX2" }
+    },
+    {
+      "name": "test-jolt",
+      "inherits": "test",
+      "displayName": "test-jolt - as test, Jolt is the only SDK",
+      "description": "Binary composition control (M10, 02 4.4 / 14.3): the test exe with one SDK; M11 compares it with test (within 1%).",
+      "cacheVariables": { "PT_WITH_BULLET": "OFF", "PT_WITH_PHYSX": "OFF" }
+    },
+    {
+      "name": "test-physx",
+      "inherits": "test",
+      "displayName": "test-physx - as test, PhysX is the only SDK",
+      "description": "Binary composition control (M10, 02 4.4 / 14.3): the test exe with one SDK; M11 compares it with test (within 1%).",
+      "cacheVariables": { "PT_WITH_JOLT": "OFF", "PT_WITH_BULLET": "OFF" }
+    },
+    {
+      "name": "test-bullet",
+      "inherits": "test",
+      "displayName": "test-bullet - as test, Bullet is the only SDK",
+      "description": "Binary composition control (M10, 02 4.4 / 14.3): the test exe with one SDK; M11 compares it with test (within 1%).",
+      "cacheVariables": { "PT_WITH_JOLT": "OFF", "PT_WITH_PHYSX": "OFF" }
+    },
+    {
+      "name": "prof",
+      "inherits": "base",
+      "displayName": "prof - Release, Tracy zones + Jolt external profile",
+      "description": "Phase breakdown only (M10, 02 4.4): Tracy v0.14.1 client (on demand, localhost) and Jolt's JPH_PROFILE scopes as Tracy zones. Never a headline: every run says timing_valid_for_headline false.",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PT_DO_CHECK": "OFF", "PT_WITH_VIEWER": "OFF", "PT_WITH_PROFILER": "ON" }
     }
   ],
   "buildPresets": [
     { "name": "dbg", "configurePreset": "dbg" },
     { "name": "dev", "configurePreset": "dev" },
     { "name": "test", "configurePreset": "test" },
-    { "name": "test-avx2", "configurePreset": "test-avx2" }
+    { "name": "test-avx2", "configurePreset": "test-avx2" },
+    { "name": "test-jolt", "configurePreset": "test-jolt" },
+    { "name": "test-physx", "configurePreset": "test-physx" },
+    { "name": "test-bullet", "configurePreset": "test-bullet" },
+    { "name": "prof", "configurePreset": "prof" }
   ],
   "testPresets": [
     { "name": "dbg", "configurePreset": "dbg", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "test", "configurePreset": "test", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
-    { "name": "test-avx2", "configurePreset": "test-avx2", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+    { "name": "test-avx2", "configurePreset": "test-avx2", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "test-jolt", "configurePreset": "test-jolt", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "test-physx", "configurePreset": "test-physx", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "test-bullet", "configurePreset": "test-bullet", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "prof", "configurePreset": "prof", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
   ]
 }

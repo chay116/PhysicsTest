@@ -16,7 +16,7 @@
 | 6 | stb | `a7d4c2175630e1ea5b6f8dd00ab96fed0b97b96d`, SHA-256 `ae498e10fadeba0c2e7aa86c71cc9989c4d895201cd26b8b72061c76cfde4edf` | github.com/nothings/stb (archive) | MIT **또는** Unlicense(퍼블릭 도메인) 택일. 하네스는 MIT로 받는다 | Copyright (c) 2017 Sean Barrett | `PT::Stb`, 뷰어 캡처(M4) |
 | 7 | nlohmann/json | v3.12.0, SHA-256 `42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa` (release asset `json.tar.xz`) | github.com/nlohmann/json | MIT | Copyright (c) 2013-2025 Niels Lohmann | `PT::Json`, manifest·결과 포맷(M3+) |
 | 8 | doctest | v2.5.3, SHA-256 `174ebc4e769928959614789c5b4e9c3d0a0f81a62bb608756b127bfebfb21331` | github.com/doctest/doctest (archive) | MIT | Copyright (c) 2016-2023 Viktor Kirilov | `PT::Doctest`, `PhysicsTestAutomation` |
-| 9 | Tracy Profiler | v0.14.1, SHA-256 `bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1` | github.com/wolfpld/tracy (archive) | BSD-3-Clause | Copyright (c) 2017-2026 Bartosz Taudul | **prof 프리셋 전용 (M10).** M0에서는 받지 않고 고정값만 기록한다 (`cmake/ThirdParty/SmallDeps.cmake`) |
+| 9 | Tracy Profiler | v0.14.1, SHA-256 `bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1` | github.com/wolfpld/tracy (archive) | BSD-3-Clause | Copyright (c) 2017-2026 Bartosz Taudul | **prof 프리셋 전용 (M10).** M0에서는 고정값만 기록했고, M10부터 prof 프리셋이 `cmake/ThirdParty/Tracy.cmake`로 받아 클라이언트(`public/TracyClient.cpp`)만 빌드한다. 받은 archive의 SHA-256이 고정값과 같음을 2026-10-22에 다시 확인했다. 다른 프리셋은 받지 않는다 |
 
 - SHA-256은 2026-10-21에 GitHub 아카이브를 다시 받아 계산했고, 타당성 검토 때 받아 둔 tarball과 같았다 [V].
 - Python 분석 도구(`Tools/ptbench`, M8+)의 패키지는 저장소에 넣지 않고 `.venv`에만 설치한다. 버전은 `Tools/ptbench/requirements.lock`에 있다 (numpy, pandas, pyarrow, scipy, matplotlib, jsonschema와 그 의존성. 각 패키지의 라이선스는 설치된 패키지 메타데이터를 따른다).

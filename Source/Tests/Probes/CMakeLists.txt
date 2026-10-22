@@ -157,10 +157,15 @@ if(PT_WITH_VIEWER)
 endif()
 if(PT_WITH_JOLT)
 	set(_pt_adapter_owned "JPH@@|@JoltBackend@PhysicsTest@@|@Jolt@Abi@PhysicsTest@@")
+	# M10 prof preset: PtJoltProfiler (JPH::ExternalProfileMeasurement for Tracy) is Jolt-side glue with JPH names only.
+	set(_pt_jolt_sdk_libs Jolt)
+	if(PT_WITH_PROFILER)
+		set(_pt_jolt_sdk_libs "Jolt$<SEMICOLON>PtJoltProfiler")
+	endif()
 	pt_add_script_test(PhysicsTest.Probe.AdapterComdats
 		SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake"
 		ARGS "-DPT_MAPS=${_pt_adapter_maps}"
-			-DPT_ADAPTER_LIBS=PtBackendJolt "-DPT_ADAPTER_OWNED=${_pt_adapter_owned}" -DPT_SDK_LIBS=Jolt "-DPT_SDK_OWNED=JPH@@" -DPT_STRICT=${_pt_adapter_strict})
+			-DPT_ADAPTER_LIBS=PtBackendJolt "-DPT_ADAPTER_OWNED=${_pt_adapter_owned}" "-DPT_SDK_LIBS=${_pt_jolt_sdk_libs}" "-DPT_SDK_OWNED=JPH@@" -DPT_STRICT=${_pt_adapter_strict})
 	add_test(NAME PhysicsTest.Probe.AdapterComdatsNegative
 		COMMAND "${CMAKE_COMMAND}" "-DPT_MAPS=${CMAKE_CURRENT_SOURCE_DIR}/Fixtures/AdapterComdatsNegative.map" -DPT_ADAPTER_LIBS=PtBackendJolt
 			"-DPT_ADAPTER_OWNED=${_pt_adapter_owned}" -DPT_SDK_LIBS=Jolt "-DPT_SDK_OWNED=JPH@@" -DPT_STRICT=ON -P "${CMAKE_CURRENT_SOURCE_DIR}/CheckAdapterComdats.cmake")

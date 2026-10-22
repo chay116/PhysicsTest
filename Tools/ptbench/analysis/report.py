@@ -16,7 +16,11 @@ shown as refused, never computed (also not in the per-cell CV list), and a table
 carries a note (validate.table_notes). A series without a value in the chosen window (--window impact on a scene that
 declares only a headline window) is written as such and left out of the figures.
 Figures: per table the run values (bars = median, dots = runs), per M3.BoxPile table the per-frame median / IQR, and the
-N-scaling of each series. CV is reported only: "CV < 2 %" is a target until the M10 gate.
+N-scaling of each series.
+M10: one table per comparability key (validate.tables), with the median's bootstrap 95 % CI, cpu_eff and the CV gate's
+'noisy' mark per series; section 2b applies the claim rule (block-bootstrap ratio CI, |rho - 1| >= 3 %, the same direction in
+Shipped and MatchedAVX2, else ISA-dependent); the head and section 1 carry the sentinel's drift, the CV gate and the stamp check
+of every session. Runs without a valid conformance stamp are rejected unless --allow-unstamped (then every table says so).
 M9: when the inputs hold behaviour runs (run.mode Behavior) or runs the bench refused as unsupported, section 5 summarises them
 in one line each (they never enter a timing table) and section 7 is the behaviour analysis (analysis/behavior.py: criteria,
 tagged cross-engine differences, the M1 UEParity vs Normalized table, scene tables, chaotic sensitivity, variant knobs, the
@@ -264,7 +268,7 @@ def power_facts(sessions: dict[str, dict[str, Any]], runs: pd.DataFrame) -> dict
             "runs_with_plan": runs_with_plan}
 
 
-def conditions(sessions: dict[str, dict[str, Any]], runs: pd.DataFrame) -> dict[str, str]:
+def conditions(sessions: dict[str, dict[str, Any]], runs: pd.DataFrame, allow_unstamped: bool = False) -> dict[str, str]:
     """The measurement condition every table and figure carries (03 M8 "우회한 세션은 모든 표에 표시된다", TimingContract 5.2):
     {"figure": one ASCII line for the PNG titles (matplotlib's default font has no Hangul, so the GUID-based plan kind is
     used, not the localised name), "markdown": one line under every table heading}."""
@@ -282,6 +286,13 @@ def conditions(sessions: dict[str, dict[str, Any]], runs: pd.DataFrame) -> dict[
     if bypasses:
         figure.append("gate bypassed: " + ", ".join(bypasses))
         markdown.append(f"환경 게이트 우회 **`{', '.join(bypasses)}`**")
+    if allow_unstamped:
+        figure.append("unstamped runs accepted")
+        markdown.append("**적합성 스탬프 없는 run도 받음 (`--allow-unstamped`)**")
+    drifted = [d.get("session_id") for d in sessions.values() if (d.get("sentinel") or {}).get("flagged")]
+    if drifted:
+        figure.append("sentinel drift")
+        markdown.append(f"**sentinel 플래그: {', '.join(map(str, drifted))}**")
     return {"figure": " · ".join(figure), "markdown": "> 조건: " + " · ".join(markdown) + "."}
 
 
@@ -324,13 +335,27 @@ def _session_header(sessions: dict[str, dict[str, Any]], runs: pd.DataFrame) -> 
         lines.append("> 세션 파일 없이 run 디렉터리에서 만든 리포트다. 전원 계획은 각 run의 manifest에서 읽었다.")
     elif len(documents) > 1:
         lines.append(f"> 세션 {len(documents)}개를 합친 리포트다: " + ", ".join(f"`{d.get('session_id')}`" for d in documents) + ".")
-    reasons = _union(document.get("unofficial_reasons", []) for document in documents)
+    reasons = _union(document.get("unofficial_reasons", []) for document in documents if document.get("unofficial", True))
     if not documents:
-        reasons = ["no conformance stamp (M10)", "no CV gate / claim rules (M10)"]
+        run_reasons = []
+        if not runs.empty and "unofficial_reasons" in runs.columns:
+            for text in runs["unofficial_reasons"].dropna():
+                for reason in (json.loads(text) if isinstance(text, str) and text.startswith("[") else []):
+                    if reason not in run_reasons:
+                        run_reasons.append(reason)
+        reasons = run_reasons[:4] or ["run directories without a session: no stamp check, CV gate or sentinel of the runner"]
     if power["not_high_performance"] and not any("power plan" in r for r in reasons):
         reasons.append("power plan is not High performance: " + "; ".join(power["schemes"]))
-    lines.append("> **비공식 (UNOFFICIAL)** — " + "; ".join(reasons) + ". CV < 2 %는 목표로만 적는다 (게이트는 M10). "
-                 "이 조건은 아래 모든 표의 제목 밑과 모든 그림의 제목 위에도 적는다.")
+    for document in documents:
+        sentinel = document.get("sentinel") or {}
+        if sentinel.get("flagged"):
+            lines.append(f"> **sentinel 플래그 (`{document.get('session_id')}`): {sentinel.get('reason')}** — 세션 전체의 수치가 시간에 따라 움직였다 (02 §12.5).")
+    if reasons:
+        lines.append("> **비공식 (UNOFFICIAL)** — " + "; ".join(reasons) + ". "
+                     "이 조건은 아래 모든 표의 제목 밑과 모든 그림의 제목 위에도 적는다.")
+    else:
+        lines.append("> 보고 가능한 세션: High performance 전원 계획, 게이트 우회 없음, 모든 셀 스탬프 유효, sentinel drift 2 % 이하 (M10). "
+                     "비교 문장은 §2b의 주장 규칙을 따른다.")
     # One paragraph per line: adjacent '>' lines would render as one blockquote paragraph.
     separated: list[str] = []
     for line in lines:
@@ -363,16 +388,95 @@ def _session_rows(session: dict[str, Any], classified: pd.DataFrame, window: str
               f"윈도 `{window}`, 판정 = `exit.json` (원시 종료 코드는 기록만) |")
     md.append(f"| {prefix}run | 계획 {summary.get('planned_runs')}, 시도 {summary.get('attempts')} (재시도 {summary.get('retries')}), 결과 {json.dumps(summary.get('outcomes', {}), ensure_ascii=False)}, "
               f"셀 상태 {json.dumps(summary.get('cells_by_state', {}), ensure_ascii=False)}, exit.json 없음 {summary.get('no_exit_json')}, 타임아웃 {summary.get('timed_out')} |")
+    stamps = session.get("stamps") or {}
+    if stamps:
+        unstamped = len(stamps.get("unstamped_cells") or [])
+        md.append(f"| {prefix}적합성 스탬프 (M10) | 정책 `{stamps.get('policy')}`, 스탬프 디렉터리 `{stamps.get('stamp_dir')}`, 대상 {len(stamps.get('targets') or [])}개, "
+                  f"스탬프 없는 셀 {unstamped}개{' (돌리지 않음)' if stamps.get('policy') == 'skip' and unstamped else ''} |")
+    gate = session.get("cv_gate") or {}
+    if gate.get("enabled"):
+        noisy = gate.get("noisy") or []
+        md.append(f"| {prefix}CV 게이트 (M10) | CV > {gate.get('threshold_pct')} %이면 추가 블록 최대 {gate.get('max_extra_blocks')}회: 추가 블록 {len(gate.get('blocks') or [])}개, "
+                  f"noisy 셀 {len(noisy)}개 |")
+    sentinel = session.get("sentinel") or {}
+    if sentinel.get("declared"):
+        points = ", ".join(f"{p['point']} {_fmt(p.get('value_ns'))}" for p in sentinel.get("points", []))
+        drift = sentinel.get("drift_pct")
+        md.append(f"| {prefix}sentinel (M10) | `{sentinel['declared'].get('cell_id')}`: {points}; drift {'-' if drift is None else f'{drift:.2f} %'} "
+                  f"(문턱 {sentinel.get('threshold_pct', 2.0)} %){' — **플래그: ' + str(sentinel.get('reason')) + '**' if sentinel.get('flagged') else ''} |")
+    elif sentinel:
+        md.append(f"| {prefix}sentinel (M10) | 선언 없음{(' — ' + sentinel['note']) if sentinel.get('note') else ''} |")
+    return md
+
+
+def section_claims(cells: pd.DataFrame, condition: str = "") -> list[str]:
+    """§2b (M10): the ratio of every pair of series of a table with its block-bootstrap CI, and the claim rule over the Shipped and
+    MatchedAVX2 tables (claims.py). Only a 'faster' / 'slower' verdict may be written as a sentence about the engines; M10 fix
+    round 1: a pair with a noisy cell (CV gate) has none."""
+    md = ["## 2b. 비교와 주장 규칙 (M10)", ""]
+    if condition:
+        md += [condition, ""]
+    md += ["\"A가 씬 S에서 B보다 빠르다\"는 블록 bootstrap 비율 CI가 1을 포함하지 않고, |ρ − 1| ≥ 3 %이고, Shipped와 MatchedAVX2에서 방향이 같을 때만 쓴다. "
+           "방향이 다르면 ISA-dependent다 (02 §13). ρ = T_frame(A) / T_frame(B)이며 1보다 작으면 A가 빠르다. "
+           "블록이 5개뿐이면 percentile bootstrap CI가 거칠어 점추정이 CI 끝에 놓이기도 한다: 보고용 주장은 R = 10 세션(03 M11 헤드라인 세션)으로 낸다. "
+           "CV 게이트 뒤에도 noisy인 셀(§3)이 A나 B에 하나라도 있으면(어느 플래그 프로필이든) 주장하지 않는다: 보고할 수 있는 셀이 아니다 (TimingContract §9). "
+           "그때 사유에 noisy 셀과 CI만으로의 판정을 적는다.", ""]
+    ratio_rows = perf.ratios(cells) if not cells.empty else pd.DataFrame()
+    if ratio_rows.empty:
+        md += ["비교할 쌍이 없다 (한 표에 시리즈가 둘 이상이고 공통 블록이 둘 이상이어야 한다).", ""]
+        return md
+    md += ["| 표 | A | B | ρ | 95 % CI | 블록 |", "|---|---|---|---|---|---|"]
+    for row in ratio_rows.to_dict("records"):
+        ci = f"[{row['ci_low']:.4f}, {row['ci_high']:.4f}]" if _finite(row.get("ci_low")) else "-"
+        rho = f"{row['rho']:.4f}" if _finite(row.get("rho")) else "-"
+        a = f"{row['a']}{' ⚠ noisy' if perf._flag(row.get('a_noisy')) else ''}"
+        b = f"{row['b']}{' ⚠ noisy' if perf._flag(row.get('b_noisy')) else ''}"
+        md.append(f"| {_esc(short_title(row['table']))} | {a} | {b} | {rho} | {ci} | {row['blocks']} |")
+    md.append("")
+    claim_rows = perf.claim_table(ratio_rows)
+    if claim_rows.empty:
+        md += ["Shipped 표가 없어 주장 규칙을 적용할 쌍이 없다.", ""]
+        return md
+    md += ["| 씬 | A | B | ρ Shipped | ρ MatchedAVX2 | 판정 | 사유 |", "|---|---|---|---|---|---|---|"]
+    for row in claim_rows.to_dict("records"):
+        avx2 = f"{row['rho_avx2']:.4f}" if _finite(row.get("rho_avx2")) else "-"
+        verdict = {"faster": "**A가 빠르다**", "slower": "**A가 느리다**"}.get(row["verdict"], row["verdict"])
+        md.append(f"| {_esc(row['scene'])} ({row['profile']}) | {row['a']} | {row['b']} | {row['rho_shipped']:.4f} | {avx2} | {verdict} | {_esc(row['reason'] or '-')} |")
+    md += ["", "판정이 '빠르다 / 느리다'인 쌍만 문장으로 쓸 수 있다 (noisy 셀이 있는 쌍은 no claim). 세션이 비공식이면 주장도 비공식이다.", ""]
+    return md
+
+
+def section_composition(cells: pd.DataFrame, condition: str = "") -> list[str]:
+    """§2c (M10, 02 14.3): the binary composition control - test-<engine> against test, measured here, judged in M11 (1 %)."""
+    table = perf.composition_table(cells) if not cells.empty else pd.DataFrame()
+    if table.empty:
+        return []
+    md = ["## 2c. 바이너리 구성 대조군 (test-<engine> 대 test; M10 측정, 판정은 M11)", ""]
+    if condition:
+        md += [condition, ""]
+    md += ["diff = median(test-<engine>) / median(test) − 1. 단일 SDK exe는 manifest `harness.sdks`(빌드에 든 SDK)가 하나인 exe이고, 기준은 같은 레이블의 "
+           "SDK가 가장 많은 exe다 (M10 수정 라운드 1: preset 이름이 아니라 빌드 내용으로 고른다. `harness.sdks`가 없는 예전 manifest만 preset 이름 test-<engine>으로). "
+           "두 값은 다른 세션의 run이라 블록을 공유하지 않으므로 CI는 독립 표본 percentile bootstrap이다 (B = 10000). "
+           "M11 기준은 |diff| ≤ 1 %이고, 넘으면 그 엔진의 헤드라인을 단일 SDK exe로 다시 잡는다 (02 §14.3). 마지막 열은 그 기준을 미리 대 본 참고값이다: "
+           "판정은 M11 (High performance, A-B-A)이 한다.", "",
+           "| 씬 | 엔진 | preset | n / n(test) | median | median (test) | diff | 95 % CI | M11 기준 ≤ 1 % (참고) |", "|---|---|---|---|---|---|---|---|---|"]
+    for row in table.to_dict("records"):
+        ci = f"[{row['ci_low_pct']:+.2f} %, {row['ci_high_pct']:+.2f} %]" if _finite(row.get("ci_low_pct")) else "-"
+        diff = f"{row['diff_pct']:+.2f} %" if _finite(row.get("diff_pct")) else "-"
+        md.append(f"| {_esc(row['scene'])} ({row['profile']}) | {row['label']} | {row['preset']} | {row['n']} / {row['n_test']} | {_fmt(row['median_ns'])} | "
+                  f"{_fmt(row['median_test_ns'])} | {diff} | {ci} | {'예' if row['within_1pct'] else '아니오'} |")
+    md.append("")
     return md
 
 
 def section_cv(cells: pd.DataFrame, condition: str = "", window: str = "headline") -> list[str]:
     """§3: the CV of every cell. A cell of a refused table is listed as refused, with no number (never computed); a cell
     without a value in the window says so."""
-    md = ["## 3. 셀별 CV (M3.BoxPile 5k 포함 모든 셀)", ""]
+    md = ["## 3. 셀별 CV와 CV 게이트 (M3.BoxPile 5k 포함 모든 셀)", ""]
     if condition:
         md += [condition, ""]
-    md += ["| 셀 | n | median | CV | 목표 (< 2 %) |", "|---|---|---|---|---|"]
+    md += ["M10 CV 게이트 (러너): CV > 2 %인 셀은 추가 블록을 최대 2회 더 돌리고, 그래도 넘으면 **noisy**로 표시한다 (02 §12.5).", ""]
+    md += ["| 셀 | n | median | CV | CV 게이트 |", "|---|---|---|---|---|"]
     if not cells.empty:
         for row in cells.sort_values(["table", "label"]).to_dict("records"):
             name = f"{row['label']} · {row['scene']} · {row['profile']} · {row.get('flag_profile')} · T{row['T']}"
@@ -382,7 +486,9 @@ def section_cv(cells: pd.DataFrame, condition: str = "", window: str = "headline
             if not _finite(row["median_ns"]):
                 md.append(f"| {_esc(name)} | 0 | - | - | 윈도 `{window}`에 값 없음 |")
                 continue
-            target = "-" if row["cv_pct"] is None or math.isnan(row["cv_pct"]) else ("충족" if row["cv_pct"] < 2.0 else "미달 (보고만)")
+            target = "-" if row["cv_pct"] is None or math.isnan(row["cv_pct"]) else ("통과" if row["cv_pct"] <= 2.0 else "미달")
+            if row.get("noisy"):
+                target = "**noisy** (추가 블록 뒤에도 > 2 %)"
             md.append(f"| {_esc(name)} | {row['n_runs']} | {_fmt(row['median_ns'])} | {_cv(row['cv_pct'])} | {target} |")
     md.append("")
     return md
@@ -398,7 +504,7 @@ def has_behaviour_runs(classified: pd.DataFrame) -> bool:
     return bool((mode == "Behavior").any() or (status == "unsupported").any())
 
 
-def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window: str | None = None) -> pathlib.Path:
+def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window: str | None = None, allow_unstamped: bool = False) -> pathlib.Path:
     inputs = [str(session_or_inputs)] if not isinstance(session_or_inputs, (list, tuple)) else [str(p) for p in session_or_inputs]
     loaded = load_module.load(inputs)
     session = loaded.session
@@ -408,13 +514,13 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
     date = _dt.date.today().isoformat()
     out_dir = pathlib.Path(out_dir) if out_dir else base / "report" / date
     out_dir.mkdir(parents=True, exist_ok=True)
-    classified = validate.classify(loaded.runs) if not loaded.runs.empty else loaded.runs
-    cells = perf.cell_stats(classified, loaded.frames, window) if not classified.empty else pd.DataFrame()
+    classified = validate.classify(loaded.runs, allow_unstamped=allow_unstamped) if not loaded.runs.empty else loaded.runs
+    cells = perf.cell_stats(classified, loaded.frames, window, loaded.sessions) if not classified.empty else pd.DataFrame()
     labels = _series_order(loaded, cells) if not cells.empty else []
     colors = {label: SERIES_COLORS[i] for i, label in enumerate(labels[: len(SERIES_COLORS)])}
 
     title = session.get("session_id") if session else base.name
-    condition = conditions(loaded.sessions, loaded.runs)
+    condition = conditions(loaded.sessions, loaded.runs, allow_unstamped)
     md = [f"# 벤치 리포트 — {title} (UNOFFICIAL)", ""]
     md += _session_header(loaded.sessions, loaded.runs)
     md.append("")
@@ -438,10 +544,12 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
     md.append(f"| 분석 | run {len(classified)}개 중 {accepted}개 채택, {len(classified) - accepted}개 거부 (§5) |")
     md.append("")
 
-    md.append(f"## 2. 표 (scene × profile × flag profile × T, 윈도 `{window}`)")
+    md.append(f"## 2. 표 (comparability key마다 하나, 윈도 `{window}`)")
     md.append("")
-    md.append("값은 run마다 윈도의 `T_frame` 평균이다. median = run 값의 중앙값, CV = run 값의 표본 표준편차 / 평균, p95·p99 = 셀의 모든 run의 윈도 프레임을 합친 nearest-rank. "
-              "⚠는 CV ≥ 2 % (목표 미달, M8은 보고만). 엔진 간 비교는 `T_frame`만 한다 (TimingContract §2).")
+    md.append("값은 run마다 윈도의 `T_frame` 평균이다 (M10: TSC 버킷, run 전체 QPC 보정). median = run 값의 중앙값과 그 percentile bootstrap 95 % CI (B = 10000), "
+              "CV = run 값의 표본 표준편차 / 평균, p95·p99 = 셀의 모든 run의 윈도 프레임을 합친 nearest-rank, cpu_eff = 센서스 창의 이 프로세스 cycle / T개 코어의 cycle. "
+              "⚠는 CV > 2 %, **noisy**는 CV 게이트의 추가 블록 뒤에도 넘은 셀. 표 하나 = comparability key 하나 (02 §13): 엔진과 변형은 시리즈다. "
+              "엔진 간 비교는 `T_frame`만 한다 (TimingContract §2).")
     md.append("")
     figure_index = 0
     tables_out = validate.tables(classified) if not classified.empty else []
@@ -461,15 +569,17 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
         for note in validate.table_notes(group):
             md.append(f"> **주의:** {note}")
             md.append("")
-        md.append("| series | n | median | p95 | p99 | CV | min – max | frame 0 (median) |")
-        md.append("|---|---|---|---|---|---|---|---|")
+        md.append("| series | n | median | 95 % CI | p95 | p99 | CV | min – max | cpu_eff | frame 0 (median) |")
+        md.append("|---|---|---|---|---|---|---|---|---|---|")
         ordered = table_cells.sort_values("label", key=lambda s: s.map(lambda v: labels.index(v) if v in labels else 99))
         for row in ordered.to_dict("records"):
             if not _finite(row["median_ns"]):
-                md.append(f"| {row['label']} | 0 | 윈도 `{window}`에 값 없음 | - | - | - | - | {_fmt(row['frame0_median_ns'])} |")
+                md.append(f"| {row['label']} | 0 | 윈도 `{window}`에 값 없음 | - | - | - | - | - | - | {_fmt(row['frame0_median_ns'])} |")
                 continue
-            md.append(f"| {row['label']} | {row['n_runs']} | {_fmt(row['median_ns'])} | {_fmt(row['p95_ns'])} | {_fmt(row['p99_ns'])} | {_cv(row['cv_pct'])} | "
-                      f"{_fmt(row['min_ns'])} – {_fmt(row['max_ns'])} | {_fmt(row['frame0_median_ns'])} |")
+            ci = f"{_fmt(row['ci_low_ns'])} – {_fmt(row['ci_high_ns'])}" if _finite(row.get("ci_low_ns")) else "-"
+            cpu = f"{row['cpu_eff']:.4f}" if _finite(row.get("cpu_eff")) else "-"
+            md.append(f"| {row['label']} | {row['n_runs']} | {_fmt(row['median_ns'])} | {ci} | {_fmt(row['p95_ns'])} | {_fmt(row['p99_ns'])} | "
+                      f"{_cv(row['cv_pct'])}{' **noisy**' if row.get('noisy') else ''} | {_fmt(row['min_ns'])} – {_fmt(row['max_ns'])} | {cpu} | {_fmt(row['frame0_median_ns'])} |")
         md.append("")
         figure_index += 1
         figure = f"table_{figure_index:02d}.png"
@@ -498,6 +608,8 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
                 md.append(f"![{short_title(name)} per frame]({figure})")
                 md.append("")
 
+    md += section_claims(cells, condition["markdown"])
+    md += section_composition(cells, condition["markdown"])
     md += section_cv(cells, condition["markdown"], window)
 
     md.append("## 4. 스케일링과 오버헤드 모델 (원시, 비공식)")
@@ -583,10 +695,12 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
     md.append("- 러너: 셀 = target × profile × scene × T, 반복 r마다 seed 고정 블록 셔플(splitmix64 + Fisher-Yates), run마다 fresh process, 쿨다운, 타임아웃. "
               "판정은 `exit.json`이다: 없으면 프로세스가 끝까지 가지 못한 실패이고 원시 종료 코드로 성공을 판정하지 않는다 (02 §12.2, DL52). "
               f"{retry_text}.")
-    md.append("- 채택 조건 (validate): `exit.json` 0, 두 스키마 통과, Bench 모드, 계측 tier 0, preflight 게이트 통과, 오염 없음, `timing_valid_for_headline` 참. "
-              "한 표에 플래그 프로필이 섞이거나 `desc_sha256`이 다르면 표 자체를 거부하고 통계를 내지 않는다 (§3에도 '표 거부'로만 적는다). "
-              "한 표의 run이 여러 빌드(exe, git, preset)에서 왔으면 표 아래에 주의를 적는다 (comparability key는 M10).")
-    md.append("- bootstrap CI, comparability key, CV 게이트, sentinel, 주장 규칙은 M10이다. 이 리포트의 비율과 순위는 주장이 아니다.")
+    md.append("- 채택 조건 (validate): `exit.json` 0, 두 스키마 통과, Bench 모드, 계측 tier 0, 게이트(G0, G9, G10a, G10b) 통과, 오염 없음, `timing_valid_for_headline` 참, "
+              "comparability key가 manifest 필드와 일치, 유효한 적합성 스탬프 (R9; `--allow-unstamped`면 받되 모든 표에 표시). sentinel run은 셀 값이 아니다. "
+              "표는 comparability key마다 하나이고, 그 안에서 플래그 프로필이나 `desc_sha256`이 섞이면 표 자체를 거부하고 통계를 내지 않는다 (§3에도 '표 거부'로만 적는다). "
+              "같은 시리즈가 여러 preset(test, test-<engine>)에서 오면 `label@preset`으로 나눈다 (바이너리 구성 대조군).")
+    md.append("- M10: median의 95 % CI는 percentile bootstrap (B = 10000), 비율 ρ의 CI는 블록(러너의 반복) bootstrap이다. 비교 문장은 §2b의 주장 규칙을 따른다. "
+              "CV 게이트와 sentinel은 러너가 세션 안에서 적용했다 (§1).")
     md.append("")
     if has_behaviour_runs(classified):
         # M9: the behaviour section (02 13 behavior) over the same inputs; its PNGs, differences.csv and behavior.json go
@@ -602,7 +716,14 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
 
 
 def main(args) -> int:
+    missing = [p for p in args.inputs if not pathlib.Path(p).exists()]
+    if missing:
+        print(f"ptbench report: no such path: {', '.join(missing)}")
+        return 2
+    if not load_module.discover(args.inputs):
+        print("ptbench report: no session, -Gate=G8 or run directory under " + ", ".join(args.inputs))
+        return 1
     inputs = args.inputs if len(args.inputs) > 1 else args.inputs[0]
-    path = build_report(inputs, pathlib.Path(args.out) if args.out else None, args.window)
+    path = build_report(inputs, pathlib.Path(args.out) if args.out else None, args.window, allow_unstamped=args.allow_unstamped)
     print(f"report: {path}")
     return 0

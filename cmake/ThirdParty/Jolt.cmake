@@ -20,6 +20,14 @@ block(SCOPE_FOR VARIABLES)   # keep Jolt's generic option names (USE_AVX2, ENABL
 	set(JPH_USE_CPU_COMPUTE                 OFF)
 	set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF) # we draw from our own scene data (M4), not Jolt's DebugRenderer
 	set(PROFILER_IN_DEBUG_AND_RELEASE       OFF) # JPH_PROFILE_ENABLED costs ~1.3-2x; prof preset only (M10)
+	set(JPH_USE_EXTERNAL_PROFILE            OFF)
+	if(PT_WITH_PROFILER)
+		# M10 prof preset: Jolt's JPH_PROFILE scopes become Tracy zones (JPH_EXTERNAL_PROFILE: the adapter implements
+		# JPH::ExternalProfileMeasurement in JoltProfiler.cpp). Jolt's configuration string then says "(External Profile)",
+		# which G0 accepts only in a profiler build (BenchPreflight.cpp).
+		set(PROFILER_IN_DEBUG_AND_RELEASE   ON)
+		set(JPH_USE_EXTERNAL_PROFILE        ON)
+	endif()
 	set(FLOATING_POINT_EXCEPTIONS_ENABLED   OFF) # FP traps on Jolt threads + Vec3 W-lane fixups
 	# Left at defaults: DOUBLE_PRECISION OFF, CROSS_PLATFORM_DETERMINISTIC OFF (/fp:fast), USE_ASSERTS OFF,
 	# OBJECT_LAYER_BITS 16, ENABLE_OBJECT_STREAM ON, CPP_RTTI_ENABLED OFF (/GR-), CPP_EXCEPTIONS_ENABLED OFF,

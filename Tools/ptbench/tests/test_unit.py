@@ -18,9 +18,9 @@ from unittest import mock
 
 import pandas as pd
 
-from ptbench import __main__, analytic, common, envcheck, runner
+from ptbench import __main__, analytic, common, envcheck, runner, stamps
 from ptbench import matrix as matrix_module
-from ptbench.analysis import determinism, load, perf, report, validate
+from ptbench.analysis import bootstrap, claims, comparability, determinism, load, perf, report, validate
 from ptbench.matrix import expand_cells, load_matrix, plan_blocks
 
 BALANCED_TEXT = "전원 구성표 GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (균형 조정)"
@@ -272,7 +272,7 @@ def _row(**overrides):
     row = {"exit_json": True, "exit_code": 0, "exit_status": "ok", "exit_json_valid": True, "manifest": True, "manifest_valid": True, "mode": "Bench",
            "instrumentation": "[]", "gates_failed": "[]", "contaminated": False, "timing_valid_for_headline": True, "timing_invalid_reasons": "[]",
            "flag_profile": "Shipped", "desc_sha256": "a" * 64, "process_exit_code": 0, "label": "jolt.Default", "scene": "M3.BoxPile[N=1000]",
-           "profile": "Normalized", "T": 1, "run_key": "k", "schema_errors": "[]"}
+           "profile": "Normalized", "T": 1, "run_key": "k", "schema_errors": "[]", "stamp_valid": True, "stamp_reason": ""}
     row.update(overrides)
     return row
 
@@ -298,8 +298,13 @@ class ValidateTests(unittest.TestCase):
         reasons = validate.reject_reasons(_row(exit_code=4, exit_status="contaminated_host", contaminated=True, gates_failed='["G9"]', instrumentation='["counters"]',
                                                timing_valid_for_headline=False))
         text = " ".join(reasons)
-        for expected in ("exit.json 4", "contaminated host", "preflight gate failed: G9", "instrumentation tier counters", "not headline-valid"):
+        for expected in ("exit.json 4", "contaminated host", "gate failed: G9", "instrumentation tier counters", "not headline-valid"):
             self.assertIn(expected, text)
+        # M8 review: the contamination is named once, not again inside the quoted headline reasons.
+        reasons = validate.reject_reasons(_row(exit_code=4, exit_status="contaminated_host", contaminated=True, timing_valid_for_headline=False,
+                                               timing_invalid_reasons='["exit code 4 (contaminated_host)", "contaminated host"]'))
+        self.assertEqual(" ".join(reasons).count("contaminated host"), 1, reasons)
+        self.assertEqual(reasons[-1], "not headline-valid")
 
     def test_mixed_flag_profiles_are_an_error(self):
         table = pd.DataFrame([_row(), _row(flag_profile="MatchedAVX2", label="physx.UE4Compat")])
@@ -362,8 +367,8 @@ class ValidateTests(unittest.TestCase):
         errors = [error for _, _, error in built if error]
         self.assertEqual(len(errors), 1)  # the Shipped table mixes two desc_sha256 values
         self.assertIn("desc_sha256 differs", errors[0])
-        mixed = validate.tables(classified, keys=("scene", "profile", "T"))
-        self.assertIn("flag profiles mixed", mixed[0][2])
+        with self.assertRaisesRegex(validate.TableError, "flag profiles mixed"):
+            validate.check_table(classified[classified["label"] == "jolt.Default"], "a table grouped without the flag profile")
 
 
 class DeterminismTests(unittest.TestCase):
@@ -425,10 +430,12 @@ class DeterminismTests(unittest.TestCase):
             odd[3] = ("0xdead", "q", good[3][2])
             different = determinism.analyze_group({"name": "g", "source": "s", "runs": runs + [self._write_run(path, "r4", odd), died]})
             self.assertEqual(different["verdict"], "DIFFERENT")
-            args = argparse.Namespace(inputs=["x"], out=None, json=None)
+            args = argparse.Namespace(inputs=[str(path)], out=None, json=None)
             with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 with mock.patch.object(determinism, "analyze", return_value=[result]):
                     self.assertEqual(determinism.main(args), 3)
+                # M10 (M8 review): a path that does not exist is a usage error (exit 2), never an empty result
+                self.assertEqual(determinism.main(argparse.Namespace(inputs=[str(path / "no_such_dir")], out=None, json=None)), 2)
                 with mock.patch.object(determinism, "analyze", return_value=[result, different]):
                     self.assertEqual(determinism.main(args), 1)
             self.assertIn("DET1 INCOMPLETE", stdout.getvalue())
@@ -524,11 +531,13 @@ class RunnerTests(unittest.TestCase):
 
     def _fake_bench(self, code: str) -> tuple[pathlib.Path, list[str]]:
         # The interpreter stands in for the bench: execute appends -Out=<dir> (sys.argv[1] of -c) and runs it in that directory.
-        return pathlib.Path(sys.executable), ["-I", "-c", code]
+        # M10 (M8 review): the base interpreter, not the .venv launcher - the launcher runs the real interpreter as a child, which
+        # could still hold child.log when the killed launcher's directory is cleaned up (a rare PermissionError in CTest).
+        return pathlib.Path(getattr(sys, "_base_executable", None) or sys.executable), ["-I", "-c", code]
 
     def test_a_teardown_hang_after_exit_json_is_killed_and_keeps_its_verdict(self):
         exe, args = self._fake_bench("import json, time\nopen('exit.json', 'w').write('{}')\ntime.sleep(60)")
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             started = time.perf_counter()
             result = runner.execute(exe, args, pathlib.Path(directory) / "run", timeout_s=50.0, teardown_grace_s=0.5, poll_s=0.1)
             self.assertLess(time.perf_counter() - started, 20.0)
@@ -538,7 +547,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_a_run_without_exit_json_times_out(self):
         exe, args = self._fake_bench("import time\ntime.sleep(60)")
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             result = runner.execute(exe, args, pathlib.Path(directory) / "run", timeout_s=1.0, teardown_grace_s=0.5, poll_s=0.1)
             self.assertEqual((result["teardown_killed"], result["timed_out"]), (False, True))
 
@@ -557,7 +566,7 @@ class RunnerTests(unittest.TestCase):
                 raise KeyboardInterrupt
             return real_wait(self, timeout)
 
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             with mock.patch.object(popen_class, "wait", interrupted_wait), mock.patch.object(runner.subprocess, "Popen", popen):
                 with self.assertRaises(KeyboardInterrupt):
                     runner.execute(exe, args, pathlib.Path(directory) / "run", timeout_s=30.0)
@@ -766,6 +775,23 @@ class SchemaTests(unittest.TestCase):
         for path in sorted(common.matrices_dir().glob("*.json")):
             self.assertEqual(common.schema_errors(common.read_json(path), "matrix.schema.json"), [], path)
 
+    def test_headline_rule_has_the_m10_fix_round_1_conditions(self):
+        # M10 fix round 1 (TimingContract 6 #11, #12): a headline-valid manifest has a calibration residual below 1e-5 and, at T = 1,
+        # a G10b verdict or a short-window Skip (no_census / contended carry no single-thread proof). The rule's "then" alone,
+        # against the fields it constrains.
+        import jsonschema
+
+        schema = common.validator("manifest.schema.json").schema
+        [rule] = [r for r in schema["allOf"] if "M8 headline consistency" in r.get("$comment", "")]
+        then = jsonschema.Draft202012Validator(rule["then"])
+        self.assertTrue(list(then.iter_errors({"clock": {"calibration": {"valid": True, "max_residual": 2e-5}}})))
+        self.assertEqual(list(then.iter_errors({"clock": {"calibration": {"valid": True, "max_residual": 2e-6}}})), [])
+        for kind, rejected in (("contended", True), ("no_census", True), ("short_window", False), ("", False)):
+            errors = list(then.iter_errors({"threads": {"census_window": {"T": 1, "g10b_skip": kind}}}))
+            self.assertEqual(bool(errors), rejected, kind)
+        self.assertEqual(list(then.iter_errors({"threads": {"census_window": {"T": 2, "g10b_skip": "no_census"}}})), [])   # T > 1: scaling
+        self.assertEqual(list(then.iter_errors({"threads": {"census_window": None}})), [])
+
     def test_session_schema_rejects_an_ok_run_without_exit_json(self):
         run = {"run_name": "r0_000_x", "attempt": 0, "cell_id": "c", "cell_key": "x", "repeat": 0, "order": 0, "block_seed": 1, "out_dir": "runs/x", "wall_s": 1.0,
                "timed_out": False, "process_exit_code": 0, "exit_json": False, "exit_code": None, "outcome": "ok", "retried": False}
@@ -783,6 +809,607 @@ class SchemaTests(unittest.TestCase):
 # are imported here (unittest collects every TestCase in the module namespace).
 from ptbench.tests.test_behavior import (AnalyticBehaviourTests, AnalyzerTests, BehaviourMatrixTests, GeometryTests,  # noqa: E402,F401
                                          StatesFileTests, TagTests)
+
+
+# ---- M10 ----------------------------------------------------------------------------------------------------------------------
+
+def _interval(rho: float, low: float, high: float, n: int = 10) -> bootstrap.Interval:
+    return bootstrap.Interval(rho, low, high, n, bootstrap.B_DEFAULT)
+
+
+class ClaimRuleTests(unittest.TestCase):
+    """03 M10: "주장 규칙을 합성 데이터 세 경우(CI가 1을 포함, |rho - 1| < 3 %, 방향 불일치)로 검증한다"."""
+
+    @staticmethod
+    def _blocks(values: list[float]) -> dict[int, float]:
+        return dict(enumerate(values))
+
+    def test_ci_includes_1_is_no_claim(self):
+        # Synthetic blocks: A and B overlap (A sometimes faster, sometimes slower): the block-bootstrap CI straddles 1.
+        a = self._blocks([100.0, 104.0, 97.0, 103.0, 99.0, 101.0, 96.0, 104.0, 98.0, 102.0])
+        b = self._blocks([101.0, 99.0, 103.0, 98.0, 102.0, 100.0, 104.0, 97.0, 101.0, 99.0])
+        shipped = bootstrap.block_bootstrap_ratio(a, b, seed=1)
+        avx2 = bootstrap.block_bootstrap_ratio(a, b, seed=2)
+        self.assertLessEqual(shipped.low, 1.0)
+        self.assertGreaterEqual(shipped.high, 1.0)
+        claim = claims.evaluate("A", "B", "S", shipped, avx2)
+        self.assertEqual(claim.verdict, claims.VERDICT_NONE)
+        self.assertIn("includes 1", claim.reason)
+
+    def test_small_effect_is_no_claim(self):
+        # A is consistently 1.5 % faster: the CI excludes 1, but |rho - 1| < 3 %.
+        b = self._blocks([1000.0 + 2 * i for i in range(10)])
+        a = {k: v * 0.985 for k, v in b.items()}
+        shipped = bootstrap.block_bootstrap_ratio(a, b, seed=3)
+        self.assertTrue(shipped.high < 1.0)
+        claim = claims.evaluate("A", "B", "S", shipped, bootstrap.block_bootstrap_ratio(a, b, seed=4))
+        self.assertEqual(claim.verdict, claims.VERDICT_NONE)
+        self.assertIn("< 3 %", claim.reason)
+
+    def test_direction_mismatch_is_isa_dependent(self):
+        b = self._blocks([1000.0 + 3 * i for i in range(10)])
+        faster = {k: v * 0.90 for k, v in b.items()}    # Shipped: A 10 % faster
+        slower = {k: v * 1.08 for k, v in b.items()}    # MatchedAVX2: A 8 % slower
+        claim = claims.evaluate("A", "B", "S", bootstrap.block_bootstrap_ratio(faster, b, seed=5), bootstrap.block_bootstrap_ratio(slower, b, seed=6))
+        self.assertEqual(claim.verdict, claims.VERDICT_ISA)
+        self.assertIn("ISA-dependent", claim.text)
+
+    def test_a_claim_needs_both_flag_profiles(self):
+        good = _interval(0.90, 0.88, 0.92)
+        self.assertEqual(claims.evaluate("A", "B", "S", good, _interval(0.91, 0.89, 0.93)).verdict, claims.VERDICT_FASTER)
+        self.assertEqual(claims.evaluate("A", "B", "S", _interval(1.10, 1.08, 1.12), _interval(1.09, 1.07, 1.11)).verdict, claims.VERDICT_SLOWER)
+        self.assertEqual(claims.evaluate("A", "B", "S", good, None).verdict, claims.VERDICT_NONE)
+        self.assertEqual(claims.evaluate("A", "B", "S", None, good).verdict, claims.VERDICT_NONE)
+        # Same direction, but MatchedAVX2's own CI includes 1: no claim (not ISA-dependent).
+        self.assertEqual(claims.evaluate("A", "B", "S", good, _interval(0.99, 0.97, 1.01)).verdict, claims.VERDICT_NONE)
+        # Both inside the noise with opposite signs: no claim, not ISA-dependent.
+        self.assertEqual(claims.evaluate("A", "B", "S", _interval(0.995, 0.98, 1.01), _interval(1.004, 0.99, 1.02)).verdict, claims.VERDICT_NONE)
+
+    def test_claim_table_pairs_shipped_with_avx2(self):
+        rows = []
+        for flag, factor in (("Shipped", 0.9), ("MatchedAVX2", 0.92)):
+            for label, scale in (("a", factor), ("b", 1.0)):
+                values = [1000.0 * scale * (1 + 0.001 * i) for i in range(6)]
+                rows.append({"table": f"scene=S | profile=N | flag_profile={flag} | T=1 | key=k{flag}", "table_error": "", "scene": "S", "profile": "N",
+                             "flag_profile": flag, "T": 1, "label": label, "median_ns": values[3], "blocks_ns": dict(enumerate(values)), "thread_series": "p_cores_one_lp"})
+        table = perf.claim_table(perf.ratios(pd.DataFrame(rows)))
+        self.assertEqual(len(table), 1)
+        self.assertEqual(table.iloc[0]["verdict"], claims.VERDICT_FASTER)
+
+    def test_a_noisy_cell_is_no_claim(self):
+        # M10 fix round 1 (TimingContract 9: only cells that passed the CV gate are reportable): the intervals alone would claim,
+        # but one cell of the pair is noisy in one flag profile.
+        good = _interval(0.90, 0.88, 0.92)
+        claim = claims.evaluate("A", "B", "S", good, _interval(0.91, 0.89, 0.93), noisy=["B MatchedAVX2"])
+        self.assertEqual(claim.verdict, claims.VERDICT_NONE)
+        self.assertIn("noisy", claim.reason)
+        self.assertIn("B MatchedAVX2", claim.reason)
+        self.assertIn(claims.VERDICT_FASTER, claim.reason)   # what the intervals alone give is kept in the reason
+        # A pair that is no claim anyway keeps its own reason.
+        self.assertIn("includes 1", claims.evaluate("A", "B", "S", _interval(0.99, 0.97, 1.01), good, noisy=["A Shipped"]).reason)
+        # Through the report's path: the cell's noisy mark reaches the claim table.
+        rows = []
+        for flag, factor in (("Shipped", 0.9), ("MatchedAVX2", 0.92)):
+            for label, scale in (("a", factor), ("b", 1.0)):
+                values = [1000.0 * scale * (1 + 0.001 * i) for i in range(6)]
+                rows.append({"table": f"t{flag}", "table_error": "", "scene": "S", "profile": "N", "flag_profile": flag, "T": 1, "label": label,
+                             "median_ns": values[3], "blocks_ns": dict(enumerate(values)), "thread_series": "p_cores_one_lp",
+                             "noisy": flag == "Shipped" and label == "b"})
+        ratio_rows = perf.ratios(pd.DataFrame(rows))
+        self.assertEqual(sorted(zip(ratio_rows["flag_profile"], ratio_rows["b_noisy"])), [("MatchedAVX2", False), ("Shipped", True)])
+        [row] = perf.claim_table(ratio_rows).to_dict("records")
+        self.assertEqual((row["verdict"], row["noisy"]), (claims.VERDICT_NONE, "b Shipped"))
+
+    def test_claim_table_matches_the_thread_series(self):
+        # M10 fix round 1: the MatchedAVX2 counterpart has the same thread series (two T = 2 series: one P-core each vs an SMT pair).
+        shipped = _interval(0.90, 0.88, 0.92)
+        rows = [{"flag_profile": "Shipped", "scene": "S", "profile": "N", "T": 2, "thread_series": "p_cores_smt", "a": "a", "b": "b", "rho": 0.9,
+                 "interval": shipped, "a_noisy": False, "b_noisy": False},
+                {"flag_profile": "MatchedAVX2", "scene": "S", "profile": "N", "T": 2, "thread_series": "p_cores_one_lp", "a": "a", "b": "b", "rho": 1.1,
+                 "interval": _interval(1.10, 1.08, 1.12), "a_noisy": False, "b_noisy": False},
+                {"flag_profile": "MatchedAVX2", "scene": "S", "profile": "N", "T": 2, "thread_series": "p_cores_smt", "a": "a", "b": "b", "rho": 0.91,
+                 "interval": _interval(0.91, 0.89, 0.93), "a_noisy": False, "b_noisy": False}]
+        [row] = perf.claim_table(pd.DataFrame(rows)).to_dict("records")
+        self.assertEqual((row["verdict"], row["rho_avx2"], row["thread_series"]), (claims.VERDICT_FASTER, 0.91, "p_cores_smt"))
+        # Missing on both sides (an M8 manifest without threads.series) still pairs.
+        for r in rows:
+            r["thread_series"] = None
+        del rows[1]
+        self.assertEqual(perf.claim_table(pd.DataFrame(rows)).iloc[0]["verdict"], claims.VERDICT_FASTER)
+
+
+class BootstrapTests(unittest.TestCase):
+    def test_percentile_ci_is_reproducible_and_brackets_the_median(self):
+        values = [10.0, 11.0, 9.5, 10.2, 10.8, 9.9, 10.4]
+        first = bootstrap.percentile_ci(values, seed=7)
+        self.assertEqual(first, bootstrap.percentile_ci(values, seed=7))
+        self.assertLessEqual(first.low, first.estimate)
+        self.assertGreaterEqual(first.high, first.estimate)
+        self.assertEqual(first.resamples, 10000)
+        self.assertIsNone(bootstrap.percentile_ci([1.0]))
+
+    def test_block_ratio_uses_common_blocks_only(self):
+        ratio = bootstrap.block_bootstrap_ratio({0: 90.0, 1: 91.0, 2: 92.0, 9: 1.0}, {0: 100.0, 1: 101.0, 2: 102.0}, seed=1)
+        self.assertEqual(ratio.n, 3)
+        self.assertAlmostEqual(ratio.estimate, 91.0 / 101.0)
+        self.assertIsNone(bootstrap.block_bootstrap_ratio({0: 1.0}, {0: 2.0}))
+
+
+class CvGateAndSentinelTests(unittest.TestCase):
+    """03 M10: "CV 재실행 논리와 sentinel drift 플래그를 합성 결과로 검증한다"."""
+
+    def test_cv_gate_reruns_then_marks_noisy(self):
+        values = {"steady": [100.0, 100.5, 99.8, 100.2, 100.1],          # CV ~0.3 %: never gated
+                  "settles": [100.0, 100.0, 100.0, 100.0, 106.0],        # CV ~2.6 %: one more block brings it under 2 %
+                  "noisy": [100.0, 110.0, 95.0, 108.0, 92.0]}            # CV ~7.6 %: stays above after two blocks
+        extra = {"settles": [[100.0, 100.0, 100.0, 100.0], [100.0]], "noisy": [[112.0], [90.0]]}
+        calls = []
+
+        def run_block(block, keys):
+            calls.append((block, sorted(keys)))
+            for key in keys:
+                values[key].extend(extra[key][block])
+
+        record = runner.run_cv_gate(lambda: {k: list(v) for k, v in values.items()}, run_block, 2.0, 2)
+        self.assertEqual(calls, [(0, ["noisy", "settles"]), (1, ["noisy"])])
+        self.assertEqual(record["noisy"], ["noisy"])
+        self.assertGreater(record["initial_cv_pct"]["settles"], 2.0)
+        self.assertLess(record["final_cv_pct"]["settles"], 2.0)
+        self.assertEqual([b["cells"] for b in record["blocks"]], [["settles", "noisy"], ["noisy"]])
+        self.assertEqual(runner.cells_over_threshold({"one": [5.0]}, 2.0), [])   # one value: no CV, never gated
+
+    def test_sentinel_drift_flags_the_session(self):
+        steady = runner.sentinel_drift([1000.0, 1008.0, 995.0])
+        self.assertFalse(steady["flagged"])
+        self.assertAlmostEqual(steady["drift_pct"], 0.8)
+        drifted = runner.sentinel_drift([1000.0, 1012.0, 1031.0])
+        self.assertTrue(drifted["flagged"])
+        self.assertAlmostEqual(drifted["drift_pct"], 3.1)
+        self.assertIn("drift 3.10 %", drifted["reason"])
+        incomplete = runner.sentinel_drift([1000.0, None, 1001.0])
+        self.assertTrue(incomplete["flagged"])
+        self.assertFalse(incomplete["complete"])
+        # M10 fix round 0: 1020 / 1000 - 1 is 0.020000000000000018 in floating point; the rule is "above 2 %".
+        exact = runner.sentinel_drift([1000.0, 1010.0, 1020.0])
+        self.assertFalse(exact["flagged"], exact)
+        self.assertTrue(runner.sentinel_drift([1000.0, 1020.5])["flagged"])
+
+    def test_the_runner_applies_the_gate_and_the_sentinel(self):
+        """run_matrix end to end on synthetic results (the bench process and its verdict replaced): the sentinel runs at the
+        start, the middle and the end, the noisy cell gets two extra blocks and the session validates against its schema."""
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            document = {"schema": "physicstest.matrix/1", "name": "synthetic", "description": "synthetic CV gate", "purpose": "perf", "repeats": 5, "block_seed": 3,
+                        "cooldown_s": 0.0, "timeout_s": 10.0, "contaminated_retries": 0, "bench_args": [],
+                        "targets": [{"label": "steady", "backend": "Null"}, {"label": "noisy", "backend": "NullDll"}], "profiles": ["Normalized"],
+                        "scenes": [{"scenario": "M3.BoxPile", "params": {"N": "1000"}}], "threads": [1],
+                        "sentinel": {"label": "steady", "scenario": "M3.BoxPile", "params": {"N": "1000"}, "drift_pct": 2.0}}
+            path = root / "synthetic.json"
+            common.write_json_atomic(path, document)
+            matrix = matrix_module.Matrix(path=path, document=document, sha256=common.sha256_file(path))
+            counters = {"noisy": 0, "sentinel": 0}
+            noisy_values = [100.0, 115.0, 92.0, 108.0, 95.0, 111.0, 90.0]
+            sentinel_values = [1000.0, 1010.0, 1030.0]   # drift 3 %: the session is flagged
+
+            def fake_execute(exe, args, out_dir, timeout_s, *rest, **kw):
+                out_dir.mkdir(parents=True, exist_ok=True)
+                return {"command": [str(exe)] + list(args), "timed_out": False, "teardown_killed": False, "process_exit_code": 0, "spawn_error": "",
+                        "exit_json_after_s": 0.1, "wall_s": 0.01}
+
+            def fake_judge(out_dir, process, window):
+                name = out_dir.name
+                if name.startswith("s_"):
+                    value = sentinel_values[counters["sentinel"]]
+                    counters["sentinel"] += 1
+                elif any("-Backend=NullDll" == a for a in process["command"]):
+                    value = noisy_values[counters["noisy"]]
+                    counters["noisy"] += 1
+                else:
+                    value = 1000.0 + counters["sentinel"]
+                return {"exit_json": True, "schema_errors": [], "exit_json_valid": True, "exit_code": 0, "exit_status": "ok", "exit_category": "", "reason": "",
+                        "outcome": "ok", "manifest_valid": True, "timing_valid_for_headline": True, "window_mean_ns": value, "window_count": 599}
+
+            gate = envcheck.run_envcheck(allow_balanced=True, allow_busy=True, allow_concurrent=True, skip_idle=True)
+            with mock.patch.object(runner, "execute", fake_execute), mock.patch.object(runner, "judge", fake_judge):
+                session_dir, code = runner.run_matrix(matrix, pathlib.Path(sys.executable), None, root / "sessions", gate, log=lambda *_: None,
+                                                      stamp_policy="allow", stamp_dir=root / "stamps")
+            session = common.read_json(session_dir / "session.json")
+            self.assertEqual(common.schema_errors(session, "session.schema.json"), [])
+            self.assertEqual(code, 0)   # a noisy cell is ok (marked, not failed); the sentinel flags the session, not the exit code
+            cells = {c["label"]: c for c in session["cells"]}
+            self.assertEqual(cells["noisy"]["cv_gate"]["extra_blocks"], 2)
+            self.assertTrue(cells["noisy"]["noisy"])
+            self.assertEqual(len(cells["noisy"]["values_ns"]), 7)
+            self.assertEqual(cells["steady"]["cv_gate"]["extra_blocks"], 0)
+            self.assertFalse(cells["steady"]["noisy"])
+            self.assertEqual([p["point"] for p in session["sentinel"]["points"]], ["start", "middle", "end"])
+            self.assertTrue(session["sentinel"]["flagged"])
+            self.assertAlmostEqual(session["sentinel"]["drift_pct"], 3.0)
+            self.assertTrue(any("sentinel drift" in r for r in session["unofficial_reasons"]))
+            self.assertIn("--allow-unstamped", session["bypasses"])
+            self.assertEqual(sum(1 for r in session["runs"] if r.get("kind") == "sentinel"), 3)
+            self.assertEqual([b.get("cv_gate", False) for b in session["blocks"]], [False] * 5 + [True, True])
+
+    def test_session_unofficial_reasons(self):
+        matrix = load_matrix("smoke")
+        document = {"environment": {"power_plan_high_performance": True, "power_scheme": {}}, "bypasses": [], "stamps": {"policy": "require"},
+                    "sentinel": {"declared": {"cell_id": "x"}, "flagged": False}}
+        self.assertEqual(runner.session_unofficial_reasons(document, matrix, 5), [])
+        document["sentinel"]["flagged"] = True
+        document["sentinel"]["reason"] = "sentinel drift 3.00 % > 2 %"
+        self.assertEqual(runner.session_unofficial_reasons(document, matrix, 5), ["sentinel drift 3.00 % > 2 %"])
+
+
+class StampCheckTests(unittest.TestCase):
+    """The runner's recomputation of a stamp (stamps.py) on synthetic files; the real bench's stamps are in test_integration."""
+
+    def _setup(self, root: pathlib.Path):
+        exe = root / "bin" / "PhysicsTestBench.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ exe v1")
+        (root / "bin" / "PtBackend_Null.dll").write_bytes(b"MZ dll v1")
+        common.write_json_atomic(root / "bin" / stamps.CATALOG_FILE, {"schema": "physicstest.backends/1", "preset": "t", "backends": [
+            {"name": "Jolt", "kind": "static", "file": None}, {"name": "NullDll", "kind": "dll", "file": "PtBackend_Null.dll"}]})
+        config = root / "Config"
+        (config / "Profiles" / "Backend").mkdir(parents=True)
+        (config / "Golden").mkdir(parents=True)
+        files = {"base_ini": config / "BasePhysicsTest.ini", "profile_ini": config / "Profiles" / "Normalized.ini",
+                 "variant_ini": config / "Profiles" / "Backend" / "Jolt.Default.ini", "tolerances": config / "Golden" / "tolerances.json"}
+        for role, path in files.items():
+            path.write_text(f"[{role}]\nA=1\n", encoding="utf-8")
+        return exe, config, files
+
+    def _stamp(self, root, exe, config, files, backend="Jolt", variant="", module_sha="", overrides=(), pending=0, valid=True, roles=None):
+        key = {"bench_exe_sha256": common.sha256_file(exe), "backend_module_sha256": module_sha, "variant_sha256": "c" * 64, "physics_sha256": "d" * 64,
+               "tolerances_sha256": common.sha256_file(files["tolerances"]), "gate_suite_version": 9, "config_overrides": list(overrides)}
+        sha = stamps.key_sha256(key)
+        document = {"schema": "physicstest.stamp/1", "stamp_key_sha256": sha, "valid": valid and pending == 0, "result": "pass" if valid else "fail",
+                    "invalid_reason": "" if valid and pending == 0 else "x", "pending_sign_offs": pending, "summary": {"gates": 12, "failed": 0 if valid else 1, "skipped": 0},
+                    "key_canonical": stamps.canonical_key(key), "key": key, "target": {"backend": backend, "variant_requested": variant, "variant": "Default" if "variant_ini" in (roles or files) else "", "profile": "Normalized"},
+                    "build": {"exe": exe.name, "exe_path": str(exe), "preset": "t", "flag_profile": "Shipped", "configuration": "Release", "git_sha": "g", "git_dirty": False},
+                    "backend_module": {"kind": "dll" if module_sha else "static", "file": "PtBackend_Null.dll" if module_sha else None, "path": None},
+                    "config_dir": str(config), "inputs": [{"role": r, "path": str(p), "sha256": common.sha256_file(p)} for r, p in files.items() if r in (roles or files)],
+                    "gates": [{"id": "G1", "result": "pass", "reason": "", "failures": []}], "conformance_dir": "", "command_line": "", "utc": "2026-10-22T00:00:00Z"}
+        self.assertEqual(common.schema_errors(document, "stamp.schema.json"), [])
+        common.write_json_atomic(root / "stamps" / f"{sha}.json", document)
+        return document
+
+    def _cell(self, backend="Jolt", variant="", target_args=()):
+        return matrix_module.Cell(label="x", backend=backend, variant=variant, profile="Normalized", scenario="S", params=(), threads=1, frames=0,
+                                  target_args=tuple(target_args))
+
+    def _check(self, root, exe, config, cell):
+        result = stamps.check_cells([cell], [f"-ConfigDir={config}"], exe, root / "stamps")
+        return result["cells"][cell.key]
+
+    def test_valid_then_each_invalidation(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            exe, config, files = self._setup(root)
+            self._stamp(root, exe, config, files)
+            self.assertEqual(self._check(root, exe, config, self._cell())["state"], "valid")
+            # A key of the variant ini changes: stale, the file named.
+            files["variant_ini"].write_text("[variant_ini]\nA=2\n", encoding="utf-8")
+            result = self._check(root, exe, config, self._cell())
+            self.assertEqual(result["state"], "stale")
+            self.assertIn("Jolt.Default.ini", result["reason"])
+            files["variant_ini"].write_text("[variant_ini]\nA=1\n", encoding="utf-8")
+            self.assertEqual(self._check(root, exe, config, self._cell())["state"], "valid")
+            # tolerances.json changes: stale.
+            files["tolerances"].write_text("[tolerances]\nA=2\n", encoding="utf-8")
+            self.assertIn("tolerances", self._check(root, exe, config, self._cell())["reason"])
+            files["tolerances"].write_text("[tolerances]\nA=1\n", encoding="utf-8")
+            # A rebuilt exe: stale.
+            exe.write_bytes(b"MZ exe v2")
+            self.assertIn("bench exe changed", self._check(root, exe, config, self._cell())["reason"])
+
+    def test_dll_backend_and_overrides(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            exe, config, files = self._setup(root)
+            dll = root / "bin" / "PtBackend_Null.dll"
+            self._stamp(root, exe, config, files, backend="NullDll", module_sha=common.sha256_file(dll), roles=("base_ini", "profile_ini", "tolerances"))
+            cell = self._cell(backend="NullDll")
+            self.assertEqual(self._check(root, exe, config, cell)["state"], "valid")
+            dll.write_bytes(b"MZ dll v2")   # rebuilt
+            result = self._check(root, exe, config, cell)
+            self.assertEqual(result["state"], "stale")
+            self.assertIn("PtBackend_Null.dll changed", result["reason"])
+            # -ini: switches are part of the key: a target with an engine key needs its own stamp.
+            override = self._cell(target_args=["-ini:PhysicsTest:[PhysicsTest.Backend.Jolt]:X=1"])
+            self.assertEqual(self._check(root, exe, config, override)["state"], "missing")
+            self._stamp(root, exe, config, files, overrides=stamps.config_overrides(override.target_args))
+            self.assertEqual(self._check(root, exe, config, override)["state"], "valid")
+
+    def test_invalid_stamps(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            exe, config, files = self._setup(root)
+            self._stamp(root, exe, config, files, pending=1)
+            result = self._check(root, exe, config, self._cell())
+            self.assertEqual(result["state"], "invalid")
+            self.assertIn("not valid", result["reason"])
+
+    def test_the_state_comes_with_the_reason(self):
+        # M10 fix round 1: verify_stamp returns (state, reason); the state is no longer read back from the reason's words. An
+        # edited stamp (its key no longer hashes to its name) cannot vouch for anything: invalid, not stale.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            exe, config, files = self._setup(root)
+            document = self._stamp(root, exe, config, files)
+            path = root / "stamps" / f"{document['stamp_key_sha256']}.json"
+            cache = stamps.StampCache(root / "stamps")
+            [(stamp_path, loaded, errors)] = cache.stamps
+            catalog = stamps.load_catalog(exe)
+            self.assertEqual(stamps.verify_stamp(stamp_path, loaded, errors, exe, common.sha256_file(exe), catalog, "Jolt", cache), ("valid", ""))
+            state, reason = stamps.verify_stamp(stamp_path, loaded, errors, exe, "0" * 64, catalog, "Jolt", cache)
+            self.assertEqual(state, "stale")
+            self.assertIn("rebuilt", reason)
+            document["key"]["physics_sha256"] = "e" * 64   # edited in place, name and stamp_key_sha256 kept
+            common.write_json_atomic(path, document)
+            result = self._check(root, exe, config, self._cell())
+            self.assertEqual(result["state"], "invalid")
+            self.assertIn("edited or renamed", result["reason"])
+
+    def test_config_overrides_match_the_bench(self):
+        self.assertEqual(stamps.config_overrides(["-HostCheck=record", "-ini:A:[S]:K=1", '-ExecCmds="p.X 1, p.Y 2"', "/INI:B:[S]:K=2"]),
+                         sorted(["-ini:A:[S]:K=1", "-ExecCmds=p.X 1, p.Y 2", "-INI:B:[S]:K=2"]))
+        self.assertEqual(stamps.canonical_key({"b": 1, "a": [], "T": "x"}), '{"T":"x","a":[],"b":1}')
+
+
+class ComparabilityTests(unittest.TestCase):
+    MANIFEST = {"scene": {"scene_sha256": "a" * 64, "desc_sha256": "b" * 64}, "profile": {"physics_sha256": "c" * 64, "mass_rule": "UEBodyUtils"},
+                "build": {"flag_profile": "Shipped"}, "run": {"tick_mode": "FixedStep", "dt_s": 0.01666666753590107, "sync_policy": "s", "mode": "Bench",
+                "instrumentation": []}, "threads": {"T": 1, "series": "p_cores_one_lp"}, "harness": {"git_sha": "g", "dirty": False}}
+
+    def test_key_changes_with_every_field(self):
+        base = comparability.key_from_manifest(self.MANIFEST)
+        self.assertRegex(base, "^[0-9a-f]{64}$")
+        self.assertEqual(comparability.dt_bits(0.01666666753590107), "3f91111120000000")
+        for group, field, value in (("scene", "desc_sha256", "e" * 64), ("threads", "series", "p_cores_smt"), ("threads", "T", 2), ("build", "flag_profile", "MatchedAVX2"),
+                                    ("harness", "dirty", True), ("run", "dt_s", 1.0 / 30.0)):
+            changed = json.loads(json.dumps(self.MANIFEST))
+            changed[group][field] = value
+            self.assertNotEqual(comparability.key_from_manifest(changed), base, (group, field))
+        self.assertIsNone(comparability.key_from_manifest({"scene": {"desc_sha256": None}}))
+
+    def test_a_key_that_does_not_match_its_fields_is_rejected(self):
+        reasons = validate.reject_reasons(_row(comparability_key="1" * 64, comparability_key_recomputed="2" * 64))
+        self.assertTrue(any("does not match the manifest's fields" in r for r in reasons), reasons)
+        unstamped = _row(stamp_valid=False, stamp_reason="no stamp for this key")
+        self.assertTrue(any("no valid conformance stamp" in r for r in validate.reject_reasons(unstamped)))
+        self.assertEqual(validate.reject_reasons(unstamped, allow_unstamped=True), [])
+
+    def test_the_binary_composition_control_splits_series_by_preset(self):
+        rows = [_row(run_key="a", comparability_key="k" * 64, preset="test"), _row(run_key="b", comparability_key="k" * 64, preset="test-jolt"),
+                _row(run_key="c", comparability_key="k" * 64, preset="test", label="bullet.Default")]
+        classified = validate.classify(pd.DataFrame(rows))
+        self.assertEqual(sorted(classified["series"]), ["bullet.Default", "jolt.Default@test", "jolt.Default@test-jolt"])
+        [(name, group, error)] = validate.tables(classified)
+        self.assertEqual(error, "")
+        self.assertIn("key=kkkkkkkk", name)
+
+
+class ViewerManifestTests(unittest.TestCase):
+    def test_a_viewer_manifest_is_rejected_by_its_schema(self):
+        # M10 (M8 review): the viewer's capture manifest (physicstest.viewer/1, top-level mode viz) saved as manifest.json.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            run = pathlib.Path(directory) / "viewer"
+            run.mkdir()
+            common.write_json_atomic(run / "manifest.json", {"schema": "physicstest.viewer/1", "mode": "viz", "backend": "Jolt"})
+            common.write_json_atomic(run / "exit.json", {"schema": "physicstest.exit/1", "exit_code": 0, "meaning": "ok", "status": "ok", "category": "", "reason": "",
+                                                        "run_id": "x", "utc": "2026-10-22T00:00:00Z", "pid": 1, "terminate_process": False, "outputs": []})
+            classified = validate.classify(load.load([run]).runs)
+            reasons = classified.iloc[0]["reject_reasons"]
+            self.assertFalse(classified.iloc[0]["accepted"])
+            self.assertTrue(any("not a run manifest (schema physicstest.viewer/1, mode viz)" in r for r in reasons), reasons)
+        # The bench's own Viz manifest, any case.
+        self.assertTrue(any("viz-mode" in r for r in validate.reject_reasons(_row(mode="viz"))))
+
+
+class SpeedupTests(unittest.TestCase):
+    def test_speedup_and_efficiency(self):
+        # M8 review: S(T) / E(T) had no unit test. t(1) = 10, t(2) = 6, t(4) = 4: S 1.667 / 2.5, E 0.833 / 0.625.
+        rows = [{"table_error": "", "label": "jolt.Default", "profile": "N", "flag_profile": "Shipped", "scene": "S", "T": t, "median_ns": v, "cpu_eff": e}
+                for t, v, e in ((1, 10.0, 1.0), (2, 6.0, 0.97), (4, 4.0, 0.9))]
+        table = perf.speedup(pd.DataFrame(rows)).set_index("T")
+        self.assertAlmostEqual(table.loc[2, "S"], 10.0 / 6.0)
+        self.assertAlmostEqual(table.loc[2, "E"], 10.0 / 12.0)
+        self.assertAlmostEqual(table.loc[4, "S"], 2.5)
+        self.assertAlmostEqual(table.loc[4, "E"], 0.625)
+        self.assertAlmostEqual(table.loc[4, "cpu_eff"], 0.9)
+
+
+class CliPathTests(unittest.TestCase):
+    def test_analysis_commands_refuse_a_missing_path(self):
+        # M10 (M8 review): load / validate / perf / report / determinism exit 2 on a path that does not exist (no empty report).
+        missing = str(pathlib.Path(tempfile.gettempdir()) / "ptbench_no_such_session_dir_m10")
+        for argv in (["load", missing], ["validate", missing], ["perf", missing], ["report", missing], ["determinism", missing], ["behavior", missing]):
+            with self.subTest(argv=argv), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(__main__.main(argv), 2, argv)
+                self.assertIn("no such path", stdout.getvalue())
+        self.assertFalse(pathlib.Path(missing).exists())   # report created nothing
+
+    def test_behavior_on_a_directory_without_runs(self):
+        # M10 fix round 0: the M9 behavior command ended in a KeyError traceback on an empty directory.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            self.assertEqual(__main__.main(["behavior", directory]), 2)
+            self.assertIn("no run found", stdout.getvalue())
+
+class CompositionControlTests(unittest.TestCase):
+    def test_test_engine_against_test(self):
+        # 02 14.3: the single-SDK exe's series against the test exe's in one table (label@preset), diff and an independent CI.
+        rows = []
+        for label, preset, scale in (("jolt.Default@test", "test", 1.0), ("jolt.Default@test-jolt", "test-jolt", 1.005), ("physx.UE4Compat@test", "test", 0.6),
+                                     ("physx.UE4Compat@test-physx", "test-physx", 0.63)):
+            values = [1000.0 * scale * (1 + 0.0005 * i) for i in range(5)]
+            rows.append({"table": "scene=S | profile=N | flag_profile=Shipped | T=1 | key=k", "table_error": "", "scene": "S", "profile": "N", "T": 1, "label": label,
+                         "preset": preset, "n_runs": 5, "median_ns": values[2], "values_ns": values})
+        table = perf.composition_table(pd.DataFrame(rows)).set_index("label")
+        self.assertAlmostEqual(table.loc["jolt.Default", "diff_pct"], 0.5, places=6)
+        self.assertTrue(table.loc["jolt.Default", "within_1pct"])
+        self.assertAlmostEqual(table.loc["physx.UE4Compat", "diff_pct"], 5.0, places=6)
+        self.assertFalse(table.loc["physx.UE4Compat", "within_1pct"])
+        self.assertLess(table.loc["physx.UE4Compat", "ci_low_pct"], table.loc["physx.UE4Compat", "ci_high_pct"])
+
+    def test_control_series_stay_out_of_the_engine_comparison(self):
+        # A table with jolt from test and test-jolt (label@preset) and physx from test only: the ratios compare jolt.Default (the
+        # test exe's series, base label) with physx.UE4Compat; jolt.Default@test-jolt is the composition control only. Blocks are
+        # per session: the two sessions' repeat 0 never pair.
+        rows = []
+        for label, preset, session, scale in (("jolt.Default@test", "test", "s1", 1.0), ("jolt.Default@test-jolt", "test-jolt", "s2", 1.0),
+                                              ("physx.UE4Compat", "test", "s1", 0.6)):
+            values = [1000.0 * scale * (1 + 0.001 * i) for i in range(5)]
+            rows.append({"table": "t", "table_error": "", "scene": "S", "profile": "N", "flag_profile": "Shipped", "T": 1, "label": label, "preset": preset,
+                         "median_ns": values[2], "values_ns": values, "n_runs": 5, "thread_series": "p_cores_one_lp",
+                         "blocks_ns": {f"{session}#{i:04d}": v for i, v in enumerate(values)}})
+        table = perf.ratios(pd.DataFrame(rows))
+        self.assertEqual(list(zip(table["a"], table["b"])), [("jolt.Default", "physx.UE4Compat")])
+        self.assertEqual(int(table.iloc[0]["blocks"]), 5)
+        self.assertIsNone(perf.comparison_label("bullet.Default@test-bullet"))
+        self.assertEqual(perf.comparison_label("bullet.Default@test"), "bullet.Default")
+        self.assertIsNone(bootstrap.block_bootstrap_ratio({"s1#0000": 1.0, "s1#0001": 2.0}, {"s2#0000": 1.0, "s2#0001": 2.0}))
+
+    def test_control_is_decided_by_the_build_content(self):
+        # M10 fix round 1: harness.sdks (build_sdks) decides, so user presets (CMakeUserPresets.json.example: test-local,
+        # test-jolt-local) work: the single-SDK exe's series is the control, the exe with the most SDKs is its reference.
+        rows = []
+        for label, preset, sdks, session, scale in (("jolt.Default@test-local", "test-local", "Jolt,Bullet,PhysX", "s1", 1.0),
+                                                    ("jolt.Default@test-jolt-local", "test-jolt-local", "Jolt", "s2", 1.01),
+                                                    ("physx.UE4Compat", "test-local", "Jolt,Bullet,PhysX", "s1", 0.6)):
+            values = [1000.0 * scale * (1 + 0.001 * i) for i in range(5)]
+            rows.append({"table": "t", "table_error": "", "scene": "S", "profile": "N", "flag_profile": "Shipped", "T": 1, "label": label, "preset": preset,
+                         "build_sdks": sdks, "median_ns": values[2], "values_ns": values, "n_runs": 5, "thread_series": "p_cores_one_lp",
+                         "blocks_ns": {f"{session}#{i:04d}": v for i, v in enumerate(values)}})
+        ratio_rows = perf.ratios(pd.DataFrame(rows))
+        self.assertEqual(list(zip(ratio_rows["a"], ratio_rows["b"])), [("jolt.Default", "physx.UE4Compat")])
+        [row] = perf.composition_table(pd.DataFrame(rows)).to_dict("records")
+        self.assertEqual((row["label"], row["preset"], row["reference_preset"]), ("jolt.Default", "test-jolt-local", "test-local"))
+        self.assertAlmostEqual(row["diff_pct"], 1.0, places=6)
+        # The content wins over the name: a single-SDK build under a preset called "test" is the control, a full build called
+        # "test-jolt" is not.
+        self.assertTrue(perf.is_control({"label": "x@test", "preset": "test", "build_sdks": "Jolt"}))
+        self.assertFalse(perf.is_control({"label": "x@test-jolt", "preset": "test-jolt", "build_sdks": "Jolt,PhysX"}))
+        self.assertTrue(perf.is_control({"label": "x@test-physx-local", "preset": "test-physx-local", "build_sdks": None}))   # older manifest: the name
+
+    def test_target_selection(self):
+        matrix = load_matrix("smoke")
+        selected = matrix_module.select_targets(matrix, ["physx.UE4Compat"])
+        self.assertEqual({c.label for c in selected.cells()}, {"physx.UE4Compat"})
+        self.assertNotIn("sentinel", selected.document)        # the jolt sentinel is outside the selection
+        self.assertIn("sentinel", matrix.document)              # the loaded matrix is untouched
+        self.assertIs(matrix_module.select_targets(matrix, None), matrix)
+        with self.assertRaises(matrix_module.MatrixError):
+            matrix_module.select_targets(matrix, ["no.such"])
+
+
+
+class FixRound0Tests(unittest.TestCase):
+    """M10 fix round 0: the noisy mark per session, the stamp policy per matrix purpose, the stamp reason per exe and --prune."""
+
+    def test_noisy_mark_belongs_to_its_own_session(self):
+        # Two sessions of one matrix share every cell key (test and test-avx2 both run smoke): the CV gate marked the cell noisy in
+        # the Shipped session only, so the MatchedAVX2 table must not show it noisy.
+        rows = [_row(run_key=f"a{i}", session_dir="S1", cell_key="abc", win_headline_mean=1000.0 + i) for i in range(3)]
+        rows += [_row(run_key=f"b{i}", session_dir="S2", cell_key="abc", flag_profile="MatchedAVX2", win_headline_mean=1000.0 + i) for i in range(3)]
+        sessions = {"S1": {"cells": [{"key": "abc", "noisy": True}]}, "S2": {"cells": [{"key": "abc", "noisy": False}]}}
+        cells = perf.cell_stats(validate.classify(pd.DataFrame(rows)), pd.DataFrame(columns=["run_key", "frame", "frame_ns"]), sessions=sessions)
+        self.assertEqual(dict(zip(cells["flag_profile"], cells["noisy"])), {"Shipped": True, "MatchedAVX2": False})
+        lines = [line for line in report.section_cv(cells) if line.startswith("| jolt.Default")]
+        self.assertEqual(sum("**noisy**" in line for line in lines), 1, lines)
+        # Without a session directory (plain run directories) nothing is noisy.
+        cells = perf.cell_stats(validate.classify(pd.DataFrame([dict(r, session_dir=None) for r in rows])), pd.DataFrame(columns=["run_key", "frame", "frame_ns"]),
+                                sessions=sessions)
+        self.assertFalse(cells["noisy"].any())
+
+    def test_stamp_policy_follows_the_matrix_purpose(self):
+        self.assertEqual(runner.stamp_policy_of(load_matrix("smoke")), "require")
+        self.assertEqual(runner.stamp_policy_of(load_matrix("determinism")), "record")
+        self.assertEqual(runner.stamp_policy_of(load_matrix("behavior")), "record")
+        matrix = load_matrix("determinism")
+        declared = matrix_module.Matrix(path=matrix.path, document=dict(matrix.document, stamps="require"), sha256=matrix.sha256)
+        self.assertEqual(runner.stamp_policy_of(declared), "require")
+        self.assertEqual(common.schema_errors(declared.document, "matrix.schema.json"), [])
+        self.assertNotEqual(common.schema_errors(dict(matrix.document, stamps="maybe"), "matrix.schema.json"), [])
+
+    def _determinism_session(self, root: pathlib.Path, stamp_policy):
+        document = {"schema": "physicstest.matrix/1", "name": "syndet", "description": "synthetic determinism", "purpose": "determinism", "repeats": 2,
+                    "block_seed": 5, "cooldown_s": 0.0, "timeout_s": 10.0, "contaminated_retries": 0, "bench_args": [],
+                    "targets": [{"label": "jolt.Default", "backend": "Jolt", "variant": "Default"}], "profiles": ["Normalized"],
+                    "scenes": [{"scenario": "M3.BoxPile", "params": {"N": "1000"}}], "threads": [1], "cv_gate": False}
+        path = root / "syndet.json"
+        common.write_json_atomic(path, document)
+        matrix = matrix_module.Matrix(path=path, document=document, sha256=common.sha256_file(path))
+
+        def fake_execute(exe, args, out_dir, timeout_s, *rest, **kw):
+            out_dir.mkdir(parents=True, exist_ok=True)
+            return {"command": [str(exe)] + list(args), "timed_out": False, "teardown_killed": False, "process_exit_code": 0, "spawn_error": "",
+                    "exit_json_after_s": 0.1, "wall_s": 0.01}
+
+        def fake_judge(out_dir, process, window):
+            return {"exit_json": True, "schema_errors": [], "exit_json_valid": True, "exit_code": 0, "exit_status": "ok", "exit_category": "", "reason": "",
+                    "outcome": "ok", "manifest_valid": True, "timing_valid_for_headline": False, "window_mean_ns": None, "window_count": 599}
+
+        gate = envcheck.run_envcheck(allow_balanced=True, allow_busy=True, allow_concurrent=True, skip_idle=True)
+        lines = []
+        with mock.patch.object(runner, "execute", fake_execute), mock.patch.object(runner, "judge", fake_judge):
+            session_dir, code = runner.run_matrix(matrix, pathlib.Path(sys.executable), None, root / "sessions", gate, log=lambda *parts: lines.append(" ".join(map(str, parts))),
+                                                  stamp_policy=stamp_policy, stamp_dir=root / "stamps", session_name=f"s-{stamp_policy}")
+        return common.read_json(session_dir / "session.json"), code, "\n".join(lines)
+
+    def test_determinism_session_records_stamps_instead_of_refusing(self):
+        # M10 fix round 0: R9 is about reportable timing; a determinism (or behaviour) session without stamps runs and records the
+        # stamp state, while --require-stamps (or a perf matrix) still refuses before any process.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            session, code, text = self._determinism_session(root, None)
+            self.assertEqual(common.schema_errors(session, "session.schema.json"), [])
+            self.assertEqual((code, session["status"], session["stamps"]["policy"]), (0, "complete", "record"))
+            self.assertEqual(len(session["stamps"]["unstamped_cells"]), 1)
+            self.assertEqual(session["cells"][0]["stamp"]["state"], "missing")
+            self.assertNotIn("--allow-unstamped", session["bypasses"])
+            self.assertTrue(any("recorded, not required" in r for r in session["unofficial_reasons"]), session["unofficial_reasons"])
+            self.assertIn("CV gate off (the matrix sets cv_gate false)", text)
+            session, code, text = self._determinism_session(root, "require")
+            self.assertEqual((code, session["status"], session["runs"]), (3, "refused", []))
+            self.assertIn("no valid conformance stamp", text)
+            self.assertIn('--matrix "', text)   # a matrix outside Config/Matrices is named by its path
+
+    def test_stamp_reason_comes_from_this_exe(self):
+        helper = StampCheckTests()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            exe, config, files = helper._setup(root)
+            helper._stamp(root, exe, config, files)
+            # Another preset's exe (other path, other bytes) with no stamp of its own: missing for this exe, never "rebuilt".
+            other = root / "bin2" / "PhysicsTestBench.exe"
+            other.parent.mkdir()
+            other.write_bytes(b"MZ another preset")
+            (root / "bin2" / stamps.CATALOG_FILE).write_bytes((root / "bin" / stamps.CATALOG_FILE).read_bytes())
+            result = stamps.check_cells([helper._cell()], [f"-ConfigDir={config}"], other, root / "stamps")["cells"][helper._cell().key]
+            self.assertEqual(result["state"], "missing")
+            self.assertIn("no stamp for this exe", result["reason"])
+            self.assertIn("1 stamp(s)", result["reason"])
+            # The stamped exe rebuilt in place: stale, "rebuilt".
+            exe.write_bytes(b"MZ exe v2")
+            result = helper._check(root, exe, config, helper._cell())
+            self.assertEqual(result["state"], "stale")
+            self.assertIn("bench exe changed", result["reason"])
+
+    def test_prune_removes_stamps_of_rebuilt_binaries_only(self):
+        helper = StampCheckTests()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = pathlib.Path(directory)
+            exe, config, files = helper._setup(root)
+            kept = helper._stamp(root, exe, config, files)
+            files["variant_ini"].write_text("[variant_ini]\nA=2\n", encoding="utf-8")   # stale for a configuration file: kept
+            self.assertEqual(stamps.prune(root / "stamps", log=lambda *_: None), 0)
+            self.assertTrue((root / "stamps" / f"{kept['stamp_key_sha256']}.json").is_file())
+            exe.write_bytes(b"MZ exe v2")                                                  # rebuilt: can never be valid again
+            self.assertEqual(stamps.prune(root / "stamps", dry_run=True, log=lambda *_: None), 1)
+            self.assertTrue((root / "stamps" / f"{kept['stamp_key_sha256']}.json").is_file())
+            self.assertEqual(stamps.prune(root / "stamps", log=lambda *_: None), 1)
+            self.assertFalse((root / "stamps" / f"{kept['stamp_key_sha256']}.json").exists())
 
 
 if __name__ == "__main__":

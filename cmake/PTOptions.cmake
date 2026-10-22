@@ -12,6 +12,8 @@ option(PT_WITH_PHYSX  "Build the PhysX 5.11 SDK and the targets that use it"   O
 option(PT_WITH_CHAOS  "Chaos bridge through UBT (user-implemented, M2.5 / M13). No-op until then" OFF)
 option(PT_WITH_VIEWER "Build viewer-side libraries (Dear ImGui / ImPlot). Viewer targets arrive in M4" ON)
 option(PT_DO_CHECK    "Compile check()/verify()/ensure() bodies in harness code (UE DO_CHECK)" ON)
+option(PT_WITH_PROFILER "prof preset (M10): Tracy v0.14.1 zones in the harness and Jolt's external profile routed to Tracy. Phase breakdown only, never a headline" OFF)
+option(PT_REPRO_LINK  "M10 (02 4.1, optional): /Brepro for compiler and linker, so an unchanged relink keeps the exe / DLL SHA-256 (fewer stamp invalidations)" OFF)
 option(PT_PHYSX_USE_BOOTSTRAP "Build PhysX through PhysXBootstrap.cmake (VS generators, or fallback for 03 M0 criterion 4)" OFF)
 
 set(PT_PRESET "custom" CACHE STRING "Configure preset name (recorded in PTBuildInfo.h and BuildFlags.json)")
@@ -80,7 +82,7 @@ _pt_check_pin(PHYSX  "${PT_PHYSX_GIT_TAG}"  "${PT_PHYSX_PIN_SHA}"  ${PT_WITH_PHY
 _pt_check_pin(BULLET "${PT_BULLET_GIT_TAG}" "${PT_BULLET_PIN_SHA}" ${PT_WITH_BULLET})
 
 message(STATUS "PhysicsTest: preset=${PT_PRESET} profile=${PT_FLAG_PROFILE} jolt=${PT_WITH_JOLT} bullet=${PT_WITH_BULLET} "
-	"physx=${PT_WITH_PHYSX} chaos=${PT_WITH_CHAOS} viewer=${PT_WITH_VIEWER} do_check=${PT_DO_CHECK}")
+	"physx=${PT_WITH_PHYSX} chaos=${PT_WITH_CHAOS} viewer=${PT_WITH_VIEWER} do_check=${PT_DO_CHECK} profiler=${PT_WITH_PROFILER} brepro=${PT_REPRO_LINK}")
 if(PT_SDK_MIRROR)
 	message(STATUS "PhysicsTest: SDK mirror ${PT_SDK_MIRROR} (read-only; clones go to ${CMAKE_BINARY_DIR}/_deps)")
 endif()

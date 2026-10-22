@@ -36,6 +36,13 @@ set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase" CACHE STRING "MSVC deb
 add_link_options("$<$<CONFIG:Release>:/DEBUG:FULL>" "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
 # No LTO for any engine (UE: bAllowLTCG = false).
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+# M10 (02 4.1, optional): reproducible compile and link. /Brepro replaces the timestamps the compiler and the linker embed
+# (COFF headers, the PE header, the debug directory) with content hashes, so relinking unchanged code keeps the exe's and a
+# DLL backend's SHA-256 and their conformance stamps (02 12.4). Off by default; the stamp key does not depend on it.
+if(PT_REPRO_LINK)
+	add_compile_options(/Brepro)
+	add_link_options(/Brepro)
+endif()
 # compile_commands.json is the input of BuildFlags.json (G0 source 1, 02 4.6).
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Write compile_commands.json (input of BuildFlags.json)" FORCE)
 

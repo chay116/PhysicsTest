@@ -9,6 +9,10 @@ pt_link_scenarios(PhysicsTestBench)
 # The linker map feeds PhysicsTest.Probe.AdapterComdats: the timing exe must not run an AVX2 adapter copy of a COMDAT the
 # harness shares (docs/Abi.md 5.13).
 target_link_options(PhysicsTestBench PRIVATE "/MAP:$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.map")
+# M10: the backend catalog next to the exe (static vs DLL backends; Tools/ptbench/stamps.py hashes a DLL backend's file
+# before it starts a run, 02 12.4).
+get_property(_pt_backend_catalog GLOBAL PROPERTY PT_BACKEND_CATALOG_JSON)
+file(GENERATE OUTPUT "$<TARGET_FILE_DIR:PhysicsTestBench>/PhysicsTestBench.backends.json" CONTENT "${_pt_backend_catalog}")
 
 # Smoke: -List succeeds and names the M3 scenes (the registry is not empty, WHOLE_ARCHIVE worked; the scenario unit tests
 # check the rest).
@@ -61,8 +65,14 @@ pt_add_script_test(PhysicsTest.Bench.ConformanceG12Injected SCRIPT "${CMAKE_SOUR
 set(_pt_exit_script "${CMAKE_SOURCE_DIR}/Source/Tests/Probes/CheckFatalExit.cmake")
 set(_pt_bench_dir "${CMAKE_BINARY_DIR}/_bench")
 set(_pt_ctest_run_args "-HostCheck=record|-PreRoll=0")
+# The SDK backend of the option / preflight / schema / stamp tests: the first one this build has (M10: the single-SDK presets
+# test-physx and test-bullet have no Jolt). Null takes no engine options, so a build without any SDK cannot run them.
 if(PT_WITH_JOLT)
 	set(_pt_bench_option_backend Jolt)
+elseif(PT_WITH_PHYSX)
+	set(_pt_bench_option_backend PhysX)
+elseif(PT_WITH_BULLET)
+	set(_pt_bench_option_backend Bullet)
 else()
 	set(_pt_bench_option_backend Null)
 endif()
@@ -386,6 +396,51 @@ pt_add_script_test(PhysicsTest.Bench.InjectSilentExit SCRIPT "${_pt_exit_script}
 add_test(NAME PhysicsTest.Bench.AnalyticReferences COMMAND PhysicsTestBench -AnalyticReferences)
 set_tests_properties(PhysicsTest.Bench.AnalyticReferences PROPERTIES LABELS "bench"
 	PASS_REGULAR_EXPRESSION ".id.: .S00[.]free_fall_dt_engine.*.z.: 501[.]83328137")
+# M10 (03 M10 criterion 1): the ABI call overhead on the TSC - Null, 0 bodies, 4 calls per frame, the median over batches below
+# 100 ns per frame (exit 0; a Debug build records it, "gate": "recorded").
+pt_add_script_test(PhysicsTest.Bench.AbiOverhead SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=.median_ns_per_frame.: [0-9.]+,.*.gate.: .(pass|recorded)"
+		"-DPT_ARGS=-AbiOverhead|-Backend=Null"
+	LABELS "bench")
+# M10 (03 M10 criterion 2, 02 14.3 G10b): a protocol run (T = 1, pre-roll 0.5 s, M3.BoxPile 1k, 300 frames) of every SDK backend
+# proves its single thread: the census window's cpu_eff in [0.98, 1.02] and the other threads of the process below 0.5 % of its
+# cycles. Measured on this process's own threads (TimingContract 7.1). M10 fix round 1: these tests need a verdict, and a
+# window that parallel CTest benches on CPU 0 starve may have none (G10b Skip "contended" - in the prof build the Tracy
+# client's thread runs in proportion to wall time); RUN_SERIAL gives them the core (a few seconds each, ~20 s in Debug).
+foreach(_pt_g10b_backend IN ITEMS Jolt Bullet PhysX)
+	string(TOUPPER "${_pt_g10b_backend}" _pt_g10b_upper)
+	if(PT_WITH_${_pt_g10b_upper})
+		pt_add_bench_exit_test(G10b${_pt_g10b_backend} 0 "G10b [^:]*: Pass" ok
+			ARGS -Backend=${_pt_g10b_backend} -Scenario=M3.BoxPile -Frames=300 -PreRoll=0.5 -HostCheck=record
+			MANIFEST_REGEX ".census_window.: [{].*.foreign_cycles_fraction.: [0-9].*.id.: .G10b.,[^}]*.result.: .Pass.")
+		set_tests_properties(PhysicsTest.Bench.G10b${_pt_g10b_backend} PROPERTIES RUN_SERIAL ON)
+	endif()
+endforeach()
+# M10 fix round 0: the G10b negative control (like G9's -InjectPreflightFault and G12's -InjectEngineErrorBits). A helper thread
+# spins 20 ms of its own CPU time inside the census window of the same protocol run (-InjectForeignWork=20, test only) and ends
+# before census #2, so it is in neither census: G10b must still fail (the process total shows its cycles as unattributed), and
+# the run loses headline validity with the G10b reason and stays unofficial. A Debug build steps far slower (dbg: a 20 s window
+# for 300 frames, where 20 ms is 0.1 %): 30 frames and 200 ms there - the helper then usually still spins at census #2 and is
+# judged as a new thread (foreign), the other path of the same proof.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+	set(_pt_g10b_neg_frames 30)
+	set(_pt_g10b_neg_ms 200)
+else()
+	set(_pt_g10b_neg_frames 300)
+	set(_pt_g10b_neg_ms 20)
+endif()
+pt_add_bench_exit_test(G10bNegativeControl 0 "G10b [^:]*: Fail" ok
+	ARGS -Backend=${_pt_bench_option_backend} -Scenario=M3.BoxPile -Frames=${_pt_g10b_neg_frames} -PreRoll=0.5 -HostCheck=record
+		-InjectForeignWork=${_pt_g10b_neg_ms}
+	MANIFEST_REGEX ".timing_valid_for_headline.: false,.*G10b failed [(]T = 1 single-thread proof[)]: foreign thread cycles [0-9.]+ % [+] unattributed [0-9.]+ %.*.unofficial.: true,.*.test_injections.: [{][^}]*.foreign_work_ms.: ${_pt_g10b_neg_ms}.*.id.: .G10b.,[^}]*.result.: .Fail.")
+set_tests_properties(PhysicsTest.Bench.G10bNegativeControl PROPERTIES RUN_SERIAL ON)   # a verdict, like the G10b tests above
+# M10 (03 M10 task 4, 02 12.4): -Conformance writes a valid stamp for the whole suite (G10b included) into -StampDir, a run of the
+# same configuration finds it (manifest conformance_stamp valid), and a run with an engine-key override does not (the key holds
+# the -ini: / -ExecCmds= switches). The runner's refusals (variant ini, DLL, tolerances.json) are PhysicsTest.Py.Integration.
+pt_add_script_test(PhysicsTest.Bench.ConformanceStamp SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunStampCheck.cmake"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ConformanceStamp" "-DPT_BACKEND=${_pt_bench_option_backend}"
+	LABELS "bench")
+
 # M8 (M7 review): the headline positive control - a protocol-conformant run (tier 0, pre-roll 0.5 s, no injection) is
 # headline-valid except for what this machine and preset cannot give: in test / test-avx2 only a host contamination recorded
 # under -HostCheck=record may remain, in dev / dbg also the PT_DO_CHECK reason. RunHeadlineControl.cmake reads the manifest.
@@ -398,10 +453,7 @@ pt_add_script_test(PhysicsTest.Bench.HeadlinePositiveControl SCRIPT "${CMAKE_CUR
 # jsonschema probe come from cmake/PTPython.cmake: without jsonschema the test is reported as Skipped with an install hint
 # (M8, M7 review), never run against an interpreter that cannot import it.
 pt_python_has(jsonschema _pt_have_jsonschema _pt_jsonschema_hint)
-set(_pt_schema_backend Null)
-if(PT_WITH_JOLT)
-	set(_pt_schema_backend Jolt)
-endif()
+set(_pt_schema_backend ${_pt_bench_option_backend})
 if(_pt_have_jsonschema)
 	pt_add_script_test(PhysicsTest.Bench.ManifestSchema SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunManifestSchema.cmake"
 		ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/ManifestSchema" "-DPT_PYTHON=${PT_PYTHON}"

@@ -187,7 +187,32 @@ def to_markdown(results: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_report(session_dir: pathlib.Path, out_dir: pathlib.Path | None = None) -> tuple[pathlib.Path, int]:
+    """M10 (M8 review): the report of a determinism session (`ptbench run --matrix determinism --report`): the DET1 matrix as
+    <session>/report/<date>/determinism.md and determinism.json. Returns (the Markdown path, the CLI code: 0 every group equal,
+    1 a group differs, 2 no group, 3 incomplete)."""
+    import datetime as _dt
+
+    session_dir = pathlib.Path(session_dir)
+    out_dir = pathlib.Path(out_dir) if out_dir else session_dir / "report" / _dt.date.today().isoformat()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = analyze([str(session_dir)])
+    path = out_dir / "determinism.md"
+    body = to_markdown(results) if results else "no run found\n"
+    common.write_text_atomic(path, f"# DET1 — {session_dir.name} (UNOFFICIAL)\n\n" + body)
+    common.write_json_atomic(out_dir / "determinism.json", results)
+    if not results:
+        return path, 2
+    if any(r["verdict"] == "DIFFERENT" for r in results):
+        return path, 1
+    return path, 3 if any(r["verdict"] == "incomplete" for r in results) else 0
+
+
 def main(args) -> int:
+    missing = [p for p in args.inputs if not pathlib.Path(p).exists()]
+    if missing:
+        print(f"ptbench determinism: no such path: {', '.join(missing)}")
+        return 2
     results = analyze(args.inputs)
     if not results:
         print("ptbench determinism: no run found")

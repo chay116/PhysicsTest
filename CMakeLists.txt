@@ -23,6 +23,9 @@ include(PTPython)   # PT_PYTHON (.venv) and its probes for the Python tests (M7 
 # Third-party dependencies (each module creates PT::<Dep> wrapper targets).
 include(SmallDeps)
 include(ImGui)
+if(PT_WITH_PROFILER)
+	include(Tracy)   # prof preset only (M10)
+endif()
 if(PT_WITH_JOLT)
 	include(Jolt)
 endif()

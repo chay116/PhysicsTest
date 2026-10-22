@@ -15,9 +15,11 @@
 // -HostCheck=record: another process's load changes timings, not states.
 #include "BenchmarkRunner.h"
 
+#include "BenchChildRuns.h"
 #include "BenchCore.h"
 #include "BenchRecorders.h"
 #include "Containers/StringConv.h"
+#include "Gates/ThreadGate.h"
 #include "Logging/LogMacros.h"
 #include "Misc/Parse.h"
 
@@ -27,6 +29,9 @@
 
 #include <Windows.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -203,6 +208,30 @@ namespace PhysicsTest
 			return Child;
 		}
 
+		// Only the switches that start with one of Prefixes (the parent's configuration for a child of another mode).
+		std::vector<std::string> KeepOnlySwitches(const std::string& CommandLine, const std::vector<const char*>& Prefixes)
+		{
+			std::vector<std::string> Kept;
+			const char* Cursor = CommandLine.c_str();
+			std::string Token;
+			while (FParse::Token(Cursor, Token))
+			{
+				if (Token.size() < 2 || (Token[0] != '-' && Token[0] != '/'))
+				{
+					continue;
+				}
+				for (const char* Prefix : Prefixes)
+				{
+					if (StartsWithNoCase(Token.substr(1), Prefix))
+					{
+						Kept.push_back(Token);
+						break;
+					}
+				}
+			}
+			return Kept;
+		}
+
 		FJson ChildJson(const FChildRun& Child)
 		{
 			return FJson{ { "label", Child.Label }, { "out_dir", StringConv::PathToUtf8(Child.OutDir) }, { "started", Child.Process.bStarted },
@@ -210,6 +239,179 @@ namespace PhysicsTest
 				{ "status", Child.Status }, { "h_native", Child.HNative }, { "h_state", Child.HState }, { "desc_sha256", Child.DescSha256 },
 				{ "T", Child.Threads }, { "frames_run", Child.FramesRun }, { "wall_s", Child.Process.WallSeconds }, { "spawn_error", Child.Process.Error } };
 		}
+	}
+
+	FGateReport RunConformanceG10b(const FBenchRunSpec& Spec, const std::filesystem::path& OutDir, const std::string& Label)
+	{
+		FGateReport Report;
+		Report.Gate = "G10b";
+		Report.Target = Label;
+		const std::vector<std::string> Switches = KeepOnlySwitches(Spec.CommandLine, { "Backend=", "BackendProfile=", "Profile=", "ConfigDir=", "ini:", "ExecCmds=" });
+		const auto RunG10bChild = [&Switches](const std::filesystem::path& Dir, const int32 Frames)
+		{
+			const std::vector<std::string> Extra = { "-Scenario=" + std::string(G10bConformanceScenario), "-Param:N=" + std::to_string(G10bConformanceBodies),
+				"-Frames=" + std::to_string(Frames), "-Threads=1", "-HostCheck=record", "-PreRoll=0.5", "-Session=conformance" };
+			return RunChild("g10b", Switches, Dir, Extra);
+		};
+		const auto FindG10b = [](const FJson& Manifest) -> const FJson*
+		{
+			const FJson* Found = nullptr;
+			if (Manifest.is_object() && Manifest.contains("gates") && Manifest["gates"].is_array())
+			{
+				for (const FJson& Gate : Manifest["gates"])
+				{
+					if (Gate.is_object() && Gate.value("id", std::string()) == "G10b")
+					{
+						Found = &Gate;
+					}
+				}
+			}
+			return Found;
+		};
+		const auto CensusWindowOf = [](const FJson& Manifest)
+		{
+			return Manifest.is_object() && Manifest.contains("threads") && Manifest["threads"].is_object() && Manifest["threads"].contains("census_window")
+				&& Manifest["threads"]["census_window"].is_object() ? Manifest["threads"]["census_window"] : FJson::object();
+		};
+		// M10 fix rounds 0 and 1: up to G10bConformanceAttempts runs, the last one decides. A window with too little own CPU time
+		// (a backend this fast - Null: ~16 ms for 300 frames - or one that lost its core) runs again with its frames scaled to about
+		// G10bConformanceTargetSeconds of own CPU time (at most G10bConformanceMaxFrames); a contended window (no verdict: another
+		// process starved the core, ThreadGate.h) runs again with the same frames after a pause.
+		int32 Frames = G10bConformanceFrames;
+		int32 Runs = 0;
+		FChildRun Child;
+		for (int32 Attempt = 0; Attempt < G10bConformanceAttempts; ++Attempt)
+		{
+			const std::filesystem::path Dir = Attempt == 0 ? OutDir : OutDir.parent_path() / (OutDir.filename().string() + "_" + std::to_string(Attempt + 1));
+			Child = RunG10bChild(Dir, Frames);
+			++Runs;
+			Report.Note("a fresh T = 1 run: " + std::string(G10bConformanceScenario) + " N=" + std::to_string(G10bConformanceBodies) + ", "
+				+ std::to_string(Frames) + " frames -> " + StringConv::PathToUtf8(Dir));
+			const FJson* Found = FindG10b(Child.Manifest);
+			if (Child.ExitJsonCode != 0 || Found == nullptr || Found->value("result", std::string()) != "Skip" || Attempt + 1 == G10bConformanceAttempts)
+			{
+				break;
+			}
+			const FJson Window = CensusWindowOf(Child.Manifest);
+			const std::string Why = Window.value("g10b_skip", std::string());
+			const double OwnSeconds = Window.value("own_s", 0.0);
+			char Text[200];
+			if (Why == Gates::ToString(Gates::EG10bSkip::ShortWindow) && OwnSeconds > 0.0 && Frames < G10bConformanceMaxFrames)
+			{
+				const double Scale = std::ceil(G10bConformanceTargetSeconds / OwnSeconds);
+				Frames = static_cast<int32>(std::min<double>(static_cast<double>(Frames) * Scale, static_cast<double>(G10bConformanceMaxFrames)));
+				std::snprintf(Text, sizeof(Text), "own CPU time %.1f ms (< %.0f ms, G10b's minimum): run again with %d frames", OwnSeconds * 1.0e3,
+					Gates::G10bMinOwnSeconds * 1.0e3, Frames);
+				Report.Note(Text);
+			}
+			else if (Why == Gates::ToString(Gates::EG10bSkip::Contended))
+			{
+				const uint32 PauseMs = G10bConformanceContendedPauseMs * static_cast<uint32>(Attempt + 1);
+				std::snprintf(Text, sizeof(Text), "contended window (other processes took %.1f %% of the core): no verdict, run again after %u ms",
+					100.0 * Window.value("other_on_mask_fraction", 0.0), PauseMs);
+				Report.Note(Text);
+				Sleep(PauseMs);
+			}
+			else
+			{
+				break;   // no census, T > 1, or the frame cap reached: another run would not decide
+			}
+		}
+		const FJson* Found = FindG10b(Child.Manifest);
+		if (Child.ExitJsonCode != 0 || Found == nullptr)
+		{
+			Report.Check(false, "the G10b run ended with exit.json " + std::to_string(Child.ExitJsonCode) + " (" + Child.Status + ", process "
+				+ std::to_string(Child.Process.ExitCode) + ")" + (Found == nullptr ? " and no G10b in its manifest" : ""));
+			return Report;
+		}
+		const std::string Result = Found->value("result", std::string());
+		for (const FJson& Note : Found->value("notes", FJson::array()))
+		{
+			if (Note.is_string())
+			{
+				Report.Note(Note.get<std::string>());
+			}
+		}
+		for (const FJson& Failure : Found->value("failures", FJson::array()))
+		{
+			if (Failure.is_string())
+			{
+				Report.Check(false, Failure.get<std::string>());
+			}
+		}
+		Report.NumChecks = std::max(Report.NumChecks, Found->value("checks", 0));
+		if (Result == "Fail" && Report.Failures.empty())
+		{
+			Report.Check(false, "the run's G10b failed");
+		}
+		else if (Result == "Skip")
+		{
+			// M10 fix round 1: a stamp certifies the single thread only with a verdict. G10b reports Skip for a window it cannot
+			// judge; here that is a Fail, never a pass of the suite (the stamp would otherwise be valid without the proof).
+			Report.Check(false, "the G10b run gave no verdict (Skip: " + CensusWindowOf(Child.Manifest).value("g10b_skip", std::string("?")) + ") in "
+				+ std::to_string(Runs) + " run(s): a stamp needs a G10b Pass (run -Conformance again on a quieter machine)");
+		}
+		return Report;
+	}
+
+	FGateReport RunConformanceAbiGate(const FBenchRunSpec& Spec, const std::filesystem::path& OutDir, const std::string& GateId, const std::string& Label)
+	{
+		FGateReport Report;
+		Report.Gate = GateId;
+		Report.Target = Label;
+		const std::vector<std::string> Switches = KeepOnlySwitches(Spec.CommandLine, { "Backend=", "BackendProfile=", "Profile=", "ConfigDir=", "ini:", "ExecCmds=" });
+		const FChildRun Child = RunChild("abi_" + GateId, Switches, OutDir, { "-Conformance", "-Gates=" + GateId });
+		Report.Note("a fresh process (one ABI gate per process, the PT_MODULE_NO_REINIT rule): -Conformance -Gates=" + GateId + " -> "
+			+ StringConv::PathToUtf8(OutDir));
+		const FJson Conformance = ReadJsonFile(OutDir / "conformance.json");
+		const FJson* Found = nullptr;
+		if (Conformance.is_object() && Conformance.contains("gates") && Conformance["gates"].is_array())
+		{
+			for (const FJson& Gate : Conformance["gates"])
+			{
+				if (Gate.is_object() && Gate.value("id", std::string()) == GateId)
+				{
+					Found = &Gate;
+				}
+			}
+		}
+		if (Found == nullptr)
+		{
+			Report.Check(false, "the -Gates=" + GateId + " process ended with exit.json " + std::to_string(Child.ExitJsonCode) + " (" + Child.Status + ", process "
+				+ std::to_string(Child.Process.ExitCode) + ") and no " + GateId + " in its conformance.json");
+			return Report;
+		}
+		for (const FJson& Note : Found->value("notes", FJson::array()))
+		{
+			if (Note.is_string())
+			{
+				Report.Note(Note.get<std::string>());
+			}
+		}
+		for (const FJson& Failure : Found->value("failures", FJson::array()))
+		{
+			if (Failure.is_string())
+			{
+				Report.Check(false, Failure.get<std::string>());
+			}
+		}
+		Report.NumChecks = std::max(Report.NumChecks, Found->value("checks", 0));
+		const std::string Result = Found->value("result", std::string());
+		if (Result == "Fail" && Report.Failures.empty())
+		{
+			Report.Check(false, GateId + " failed in its process");
+		}
+		else if (Result == "Skip")
+		{
+			// M10 fix round 1: an ABI gate has no Skip (docs/Abi.md 8); one from its process is no verdict, so it is no pass of the
+			// suite either (M6's rule for an unregistered Skip, which RunPhysicsGates applies to the physics gates).
+			Report.Check(false, GateId + " reported Skip in its process: an ABI gate has no Skip");
+		}
+		else if (Result != "Fail" && Child.ExitJsonCode != 0)
+		{
+			Report.Check(false, "the -Gates=" + GateId + " process ended with exit.json " + std::to_string(Child.ExitJsonCode) + " (" + Child.Status + ")");
+		}
+		return Report;
 	}
 
 	EBenchExit FBenchmarkRunner::RunBusyHelper(const FBenchRunSpec& Spec)

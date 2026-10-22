@@ -90,7 +90,14 @@ namespace PhysicsTest
 		// 8: M9 commit (J1's collision-switch and sleeping-joint cases of fix round 2 with J1.collision_push_cm /
 		//    disable_collision_drift_cm; G4 restitution velocity model 2 - the contact state at the step start - registered for
 		//    Bullet; the lead's sign-off of every pending post-run registration, 2026-10-22; tolerances.json version 7).
-		inline constexpr int32 GateSuiteVersion = 8;
+		// 9: M10 (G10b, the single-thread proof of a fresh T = 1 bench run, joins -Conformance; the conformance stamp binds the
+		//    suite's result to its key, 02 12.4).
+		// 10: M10 fix round 0 (a DLL backend's suite runs the ABI gates A0-A7, A10, one process each; G10b counts the cycles of a
+		//    thread in neither census - unattributed - as foreign).
+		// 11: M10 fix round 1 (G10b's minimum window is the process's own CPU time; a failure in a contended window is a Skip
+		//    unless it also holds against the mask's busy cycles; -Conformance turns a Skip of its G10b run - and of an ABI-gate
+		//    process - into Fail, so a valid stamp always carries a G10b Pass).
+		inline constexpr int32 GateSuiteVersion = 11;
 
 		// One override of a registered value: the most specific match wins (engine + variant + profile > engine + variant >
 		// engine + profile > engine > default). Engine is the registry backend name (Null, NullDll, Jolt, Bullet, PhysX).
