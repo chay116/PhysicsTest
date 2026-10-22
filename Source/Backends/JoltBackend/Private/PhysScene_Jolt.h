@@ -41,7 +41,33 @@
 // a body that is awake then; the buffer is cleared every step, so a force never survives a PUT_TO_SLEEP into a later wake
 // (Jolt resets mForce only for active bodies, PhysicsSystem.cpp:2541 [V]).
 //
-// Debug snapshot (contact listener in viz runs / PT_INSTR_CONTACTS only, PROVISIONAL(M9)): particles with Jolt's world bounds, and the contacts of the last step from
+// Joints (M9, docs/Abi.md 9.4): PT_JOINT_BALL = PointConstraint, PT_JOINT_HINGE = HingeConstraint (hinge axis = frame X,
+// normal axis = frame Y, limits -pi..pi = none, no motor, no friction torque), both in EConstraintSpace::LocalToBodyCOM:
+// Jolt keeps constraint positions relative to the body COM (Constraint.h:59-65 [V]), so the adapter subtracts the shape's
+// COM (Shape::GetCenterOfMass, which an OffsetCenterOfMassShape moves) from the actor-space frame; the axes are the frame's
+// rotation in actor space (Jolt's body rotation is the actor rotation). Jolt Body1 = the ABI Body1 (child), Jolt Body2 = the
+// ABI Body2 (parent) or Body::sFixedToWorld, whose COM space is world space (Frame2 as given). Hard joints solved by Jolt's
+// own constraint solver (the scene's velocity / position steps, warm started; no projection, DL31). The batch is created,
+// then added with one PhysicsSystem::AddConstraints (all or nothing: creation cannot fail after the Kit's checks).
+// PT_JOINTF_DISABLE_COLLISION: the pair goes into FJoltUEGroupFilter's disabled pairs (JoltLayers.h). ReleaseActors removes
+// the constraints of a released body before the body (Jolt constraints hold Body pointers). Joint snapshot: the frames are
+// the bodies' actor poses x the ABI frames; the impulses are Jolt's accumulated velocity-step Lagrange multipliers of the
+// last step (warm start + velocity iterations; the position steps apply no impulse), on Body1 = minus Jolt's lambda
+// (PointConstraintPart / HingeRotationConstraintPart apply -lambda to body 1 [V]).
+//
+// Sleep thresholds (M9, 02 10 UEParity "UE material thresholds, approximation flagged"): Jolt has one global sleep test
+// (PhysicsSettings::mPointVelocitySleepThreshold, mTimeBeforeSleep; Body::UpdateSleepStateInternal [V]): a body may sleep
+// when its COM and two bounding-box points stay inside spheres of radius threshold x time for that time. With
+// SleepThresholdMapping=UE (default) the adapter maps UE's per-material thresholds onto it (MapSleepThresholds): the steady
+// drift that fills such a sphere is 2 x threshold, so threshold = min(SleepLinearVelocityThreshold x SleepThresholdMultiplier)
+// / 2 over the dynamic bodies that may sleep (all dynamic bodies when none may), and the time = (max SleepCounterThreshold
+// + 1) frames of NominalDeltaTime (Chaos sleeps an island after more than SleepCounterThreshold calm frames, IslandManager
+// .cpp ProcessIslandSleep [V]), less 1 % of a frame so that Jolt's float sum of the step times reaches it on that frame. Not
+// mapped (recorded in jolt.sleep_mapping): per-body / per-island thresholds, the angular threshold (Jolt's bounding-box
+// points turn rotation into point movement), Chaos' smoothed velocity. SleepThresholdMapping=Native keeps Jolt's own 0.03
+// m/s for 0.5 s.
+//
+// Debug snapshot (contact listener in viz runs / PT_INSTR_CONTACTS only, ABI v1.1): particles with Jolt's world bounds, and the contacts of the last step from
 // FJoltContactListener in the Chaos convention: Normal = -mWorldSpaceNormal, Phi = -(p1 - p2) . n per point (M4; M3 gave
 // every point the manifold's mPenetrationDepth), then Body0 = the more mobile body (CanonicalizeContact). Impulses are NaN
 // (Q8: no local patch), "active" is PT_CONTACT_ACTIVE_APPROX for Phi <= 0. The contacts of sleeping islands are kept from
@@ -85,6 +111,7 @@ namespace PhysicsTest::JoltBackend
 		double Baumgarte = 0.2;                  // mBaumgarte
 		bool bUseLargeIslandSplitter = true;     // mUseLargeIslandSplitter
 		bool bDeterministicSimulation = true;    // mDeterministicSimulation
+		bool bMapUESleepThresholds = true;       // SleepThresholdMapping=UE (default) / Native (see the file comment)
 		uint64 TempAllocatorBytes = 0;           // 0 = sized from the capacity hints
 	};
 
@@ -122,6 +149,18 @@ namespace PhysicsTest::JoltBackend
 		bool bKeptContactsListed = false;
 		bool bPutToSleepByCommand = false;       // PT_CMD_PUT_TO_SLEEP deactivated it: keep its last-step contacts
 		bool bPoseSetByCommand = false;          // SET_GLOBAL_POSE / SET_BODY_STATE: its kept points are stale
+		// The UE sleep thresholds of this body (its first element's material x SleepThresholdMultiplier; MapSleepThresholds).
+		double SleepLinearThresholdCm = 0.0;     // cm/s
+		uint32 SleepCounterThreshold = 0;        // frames
+		uint32 NumJoints = 0;                    // live joints attached to this body (ReleaseActors)
+	};
+
+	// One CreateConstraints joint (M9). The index in FPhysScene_Jolt::Joints is the ABI JointIndex (creation order).
+	struct FJoltJoint
+	{
+		JPH::Ref<JPH::TwoBodyConstraint> Constraint;   // null once released
+		PtConstraintCreateInfo Info = {};              // as created (frames in cm, actor space)
+		bool bReleased = false;
 	};
 
 	class FPhysScene_Jolt final : public ::PhysicsTest::Abi::IPhysicsBackendScene
@@ -133,6 +172,7 @@ namespace PhysicsTest::JoltBackend
 		PtResult CreateMaterials(::PhysicsTest::Abi::TStridedView<PtPhysicalMaterial> Materials) override;
 		PtResult CreateActors(const ::PhysicsTest::Abi::FActorBatchView& Batch) override;
 		PtResult ReleaseActors(const uint32_t* BodyIndices, uint32_t Num) override;
+		PtResult CreateConstraints(::PhysicsTest::Abi::TStridedView<PtConstraintCreateInfo> Infos) override;
 		PtResult PrepareForSimulation(::PhysicsTest::Abi::FTextWriter& OutActions) override;
 		PtResult SetUpForFrame(const ::PhysicsTest::Abi::FFrameParams& Params) override;
 		PtResult StartFrame() override;
@@ -155,6 +195,18 @@ namespace PhysicsTest::JoltBackend
 		JPH::RefConst<JPH::Shape> MakeElementShape(const PtShapeElem& Element);
 		void EnsureTempAllocator();
 		void ApplyPhysicsSettings();
+		// The UE sleep threshold mapping (see the file comment): recomputed from the live dynamic bodies after every CreateActors
+		// / ReleaseActors and on SetOption; writes the two PhysicsSettings values (ApplyPhysicsSettings).
+		void MapSleepThresholds();
+		// sleep.criteria readback (M9 fix round 0, a rule key like Bullet's): the two PhysicsSettings values that do not hold the
+		// variant's rule, recomputed from the live dynamic bodies (0, 1 or 2).
+		[[nodiscard]] uint32 CountSleepRuleMismatches() const;
+		// The constraint of one validated create info (Jolt Body1 = Info.Body1, Body2 = Info.Body2 or the world).
+		JPH::Ref<JPH::TwoBodyConstraint> MakeConstraint(const PtConstraintCreateInfo& Info);
+		// The joint's snapshot (frames from the bodies' current actor poses, the last step's impulses).
+		PtJointSnapshot MakeJointSnapshot(const FJoltJoint& Joint, uint32 JointIndex) const;
+		PtTransform GetActorPose(const FJoltBody& Record) const;   // Jolt's body pose in cm (the body origin)
+		void RemoveAllConstraints();
 		// StartFrame, right before Update: the deferred velocity changes and forces of the awake bodies.
 		void ApplyPendingDynamics();
 		// Every live body's BoxShape convex radius as the shapes hold it (shape.box_margin readback), through decorated and
@@ -205,6 +257,8 @@ namespace PhysicsTest::JoltBackend
 		JPH::Array<uint32> ActiveScratch;
 		JPH::Array<PtParticleSnapshot> SnapshotParticles;
 		JPH::Array<PtContactPoint> SnapshotContacts;
+		JPH::Array<PtJointSnapshot> SnapshotJoints;
+		JPH::Array<FJoltJoint> Joints;                  // every created joint, released ones included (index = JointIndex)
 		JPH::Array<FJoltRawContact> SleepingContacts;   // see UpdateSleepingContacts (reserved to the listener capacity)
 		JPH::Array<FJoltRawContact> SleepingScratch;
 		JPH::Array<uint32> KeptContactBodies;           // see FJoltBody::bKeptContactsListed (reserved to MaxBodies with the listener)
@@ -219,6 +273,13 @@ namespace PhysicsTest::JoltBackend
 		uint32 ReadStamp = 0;
 		uint32 NumStartAsleepSkipped = 0;
 		uint32 NumIterationOverrides = 0;
+		uint32 NumLiveJoints = 0;
+		uint32 NumReleasedJoints = 0;
+		// The sleep mapping's inputs (MapSleepThresholds): bodies that set it, and the aggregated UE values.
+		uint32 NumSleepMappedBodies = 0;
+		double MappedSleepLinearCm = 0.0;               // min SleepLinearVelocityThreshold x multiplier, cm/s
+		uint32 MappedSleepCounter = 0;                  // max SleepCounterThreshold, frames
+		bool bSleepMappedFromSleepingBodies = false;    // false: from every dynamic body (none may sleep)
 		uint32 FrameErrorBits = 0;
 		uint32 PendingErrorBits = 0;                    // seen between frames, reported by the next frame
 		uint32 TotalErrorBits = 0;

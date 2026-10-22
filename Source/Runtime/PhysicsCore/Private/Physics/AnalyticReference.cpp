@@ -2,6 +2,8 @@
 // constant (no LTO in any preset, 02_Architecture 4.1), and the volatile store forces the float rounding even if it were.
 #include "Physics/AnalyticReference.h"
 
+#include <cmath>
+
 namespace PhysicsTest::Analytic
 {
 	double EngineDeltaTime(const float Dt)
@@ -58,5 +60,36 @@ namespace PhysicsTest::Analytic
 	{
 		const double N = static_cast<double>(K);
 		return G * Dt * Dt * N * (N + 1.0) * 0.5;
+	}
+
+	double CompleteEllipticK(const double Modulus)
+	{
+		double A = 1.0;
+		double B = std::sqrt(1.0 - Modulus * Modulus);
+		for (int32 Iteration = 0; Iteration < 64 && std::abs(A - B) > 1e-16 * A; ++Iteration)
+		{
+			const double Mean = 0.5 * (A + B);
+			B = std::sqrt(A * B);
+			A = Mean;
+		}
+		return 3.14159265358979323846 / (2.0 * A);
+	}
+
+	double PendulumPeriod(const double Length, const double BobRadius, const double G, const double AmplitudeRad)
+	{
+		const double Pi = 3.14159265358979323846;
+		const double SmallAngle = 2.0 * Pi * std::sqrt((Length * Length + 0.4 * BobRadius * BobRadius) / (G * Length));
+		return SmallAngle * 2.0 * CompleteEllipticK(std::sin(0.5 * AmplitudeRad)) / Pi;
+	}
+
+	double InclineSlideDistance(const double Mu, const double AngleRad, const double G, const double Dt, const int32 Steps)
+	{
+		const double Acceleration = G * (std::sin(AngleRad) - Mu * std::cos(AngleRad));
+		if (!(Acceleration > 0.0))
+		{
+			return 0.0;
+		}
+		const double N = static_cast<double>(Steps);
+		return Acceleration * Dt * Dt * N * (N + 1.0) * 0.5;
 	}
 }

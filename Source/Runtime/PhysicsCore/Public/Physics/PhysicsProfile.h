@@ -29,7 +29,16 @@
 //   [PhysicsTest.Backend.<Engine>] / [...<Engine>.Init]  engine keys -> SceneOptions / InitOptions (validated by the
 //                                                 backend, M2+)
 //   [PhysicsTest.Profile] / [PhysicsTest.Variant] metadata of the profile / variant file itself
-//   [/Script/PhysicsTest.ForcedOverrides]          M9 (a load error until then)
+//   [/Script/PhysicsTest.ForcedOverrides]          M9 (02 10): applied AFTER authoring, with a log. Keys are
+//                                                 PhysicalMaterial.<field> / BodyInstance.<field> with the fields of
+//                                                 [PhysicalMaterialDefaults] / [BodyInstanceDefaults] except the ones the
+//                                                 harness mass computation reads (Density, RaiseMassToPower, MassScale: a
+//                                                 load error, they would need the mass recomputed). PhysicalMaterial.
+//                                                 StaticFriction also takes the token Friction (SF := F, 02 10 Normalized).
+//                                                 Set by Base, a profile or -ini:; a backend variant may not (a load error).
+//                                                 FPhysScene applies them at FlushDeferredActors to every flushed body and
+//                                                 its material unless the scene opts out (gate scenes: the gates need the
+//                                                 scene's own combine modes, docs/Scenes.md 2.9, 2.10).
 // Canonical value keys are "<Prefix>.<Key>": PhysicsSettings., PhysicsTestSettings., BodyInstanceDefaults.,
 // PhysicalMaterialDefaults., ConsoleVariables.<cvar>, Backend.<Engine>. and Backend.<Engine>.Init.
 // Scalar keys accept plain Key=Value only; the array operators (+ . - !) are for the metadata arrays.
@@ -42,6 +51,7 @@
 #include "PhysicsEngine/PhysicsSettings.h"
 
 #include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -126,6 +136,22 @@ namespace PhysicsTest
 		[[nodiscard]] std::string Sha256() const;   // variant_sha256
 	};
 
+	// One [/Script/PhysicsTest.ForcedOverrides] entry (M9).
+	struct FForcedOverride
+	{
+		enum class ETarget : uint8
+		{
+			PhysicalMaterial,
+			BodyInstance,
+		};
+		ETarget Target = ETarget::PhysicalMaterial;
+		std::string Field;        // the property name (FPhysicalMaterial / FBodyInstance field, canonical spelling)
+		std::string Value;        // canonical text; "Friction" for PhysicalMaterial.StaticFriction = the material's Friction
+		std::string OriginName;   // "Config/Profiles/Normalized.ini:52"
+
+		[[nodiscard]] std::string GetKey() const;   // "PhysicalMaterial.FrictionCombineMode"
+	};
+
 	struct FProfileResolveInputs
 	{
 		const FConfigFile* Base = nullptr;            // required
@@ -149,6 +175,9 @@ namespace PhysicsTest
 		std::vector<std::pair<std::string, std::string>> InitOptions;
 		std::vector<std::pair<std::string, std::string>> SceneOptions;
 		std::vector<std::pair<std::string, std::string>> ConsoleVariables;
+		// [/Script/PhysicsTest.ForcedOverrides] (M9) in file order; also in Values as "ForcedOverrides.<Target>.<Field>"
+		// (Origin ForcedOverride, part of physics_sha256).
+		std::vector<FForcedOverride> ForcedOverrides;
 		std::vector<std::string> Warnings;
 
 		[[nodiscard]] const FResolvedConfigValue* Find(std::string_view CanonicalKey) const;
@@ -166,6 +195,11 @@ namespace PhysicsTest
 		// Copies the resolved [BodyInstanceDefaults] / [PhysicalMaterialDefaults] fields onto a template (before authoring).
 		static void ApplyBodyInstanceDefaults(const FResolvedPhysicsConfig& Config, FBodyInstance& InOutTemplate);
 		static void ApplyMaterialDefaults(const FResolvedPhysicsConfig& Config, FPhysicalMaterial& InOutTemplate);
+		// M9: applies the forced overrides of one target to an authored material / body (after authoring), plain values in
+		// file order, then the relational StaticFriction = Friction. OutChanges (optional) gets one "<Key>: <old> -> <new>"
+		// per value that changed. Returns the number of changed values.
+		static int32 ApplyForcedOverrides(std::span<const FForcedOverride> Overrides, FPhysicalMaterial& InOutMaterial, std::vector<std::string>* OutChanges);
+		static int32 ApplyForcedOverrides(std::span<const FForcedOverride> Overrides, FBodyInstance& InOutBody, std::vector<std::string>* OutChanges);
 		// Sets every Config.ConsoleVariables entry that names a console variable registered in this process (the harness
 		// physics table plus e.g. viewer variables) - ini values with ECVF_SetByConsoleVariablesIni, -ExecCmds with
 		// ECVF_SetByConsole, as UE executes them as console commands. OutEngineVariables gets the other entries (they

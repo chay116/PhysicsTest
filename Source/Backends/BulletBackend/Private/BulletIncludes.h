@@ -16,6 +16,7 @@ PT_THIRD_PARTY_INCLUDES_START
 #include <BulletCollision/CollisionDispatch/btSimulationIslandManager.h>
 #include <BulletCollision/CollisionShapes/btCapsuleShape.h>
 #include <BulletCollision/NarrowPhaseCollision/btPersistentManifold.h>
+#include <LinearMath/btIDebugDraw.h>
 #include <LinearMath/btPoolAllocator.h>
 #include <LinearMath/btTransformUtil.h>
 PT_THIRD_PARTY_INCLUDES_END

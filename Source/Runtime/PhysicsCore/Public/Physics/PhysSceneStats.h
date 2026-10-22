@@ -33,7 +33,10 @@ namespace PhysicsTest
 		int32 NumIslands = -1;               // -1 = not available
 		int32 NumManifoldPoints = -1;
 		int32 NumActiveManifoldPoints = -1;
-		int32 NumConstraints = 0;
+		int32 NumConstraints = 0;            // spawned (FPhysScene::SpawnConstraint)
+		// M9: spawned joints the backend cannot simulate (its PT_CAP_JOINT_* lacks their type): kept on the host only, never
+		// sent (a scenario declares the capability it needs, so a bench run refuses such a pairing before it starts).
+		int32 NumUnsupportedConstraints = 0;
 		// Dynamic bodies with bStartAwake = false whose put-to-sleep step was skipped because the profile disables
 		// sleeping (02 6: recorded in the manifest).
 		int32 NumStartAsleepSkipped = 0;

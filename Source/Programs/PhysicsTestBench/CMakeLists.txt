@@ -187,6 +187,22 @@ pt_add_script_test(PhysicsTest.Bench.Recorders SCRIPT "${_pt_exit_script}"
 		"-DPT_EXPECT_FILE3=${_pt_bench_dir}/Recorders/manifest.json" "-DPT_EXPECT_FILE3_REGEX=.states.: [{][^}]*.frames.: 2,"
 	LABELS "bench")
 
+# M9: a scene that needs a capability the backend lacks (the joint scenes on Null, which never gets joints) is refused before
+# the backend is initialised: exit 2, status / category unsupported, exit.json only (the runner reports the cell as unsupported).
+pt_add_bench_exit_test(ExitSceneNeedsJoints 2 "does not support scenario M6a.Pendulum: it needs PT_CAP_JOINT_HINGE" unsupported
+	ARGS -Backend=Null -Scenario=M6a.Pendulum ${_pt_ctest_run_args} EXIT_REGEX ".category.: .unsupported.")
+pt_add_bench_exit_test(ExitSceneNeedsBallJoints 2 "it needs PT_CAP_JOINT_BALL" unsupported
+	ARGS -Backend=NullDll -Scenario=M6a.Pendulum -Param:Joint=Ball ${_pt_ctest_run_args})
+# M9: a behaviour run that records states also writes scene_desc.json (the scene as marshalled: bodies, shapes, joints) and every
+# run with a preflight writes preflight_diff.json (resolved vs effective); the manifest names the forced overrides it applied.
+pt_add_script_test(PhysicsTest.Bench.BehaviorOutputs SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=preflight diff .resolved vs effective"
+		"-DPT_ARGS=-Backend=Null|-Scenario=M7.UEDefaults|-Frames=10|-RunMode=Behavior|-StatesEvery=1|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/BehaviorOutputs"
+		"-DPT_EXPECT_FILE=${_pt_bench_dir}/BehaviorOutputs/scene_desc.json" "-DPT_EXPECT_FILE_REGEX=.schema.: .physicstest.scene_desc/1.*.name.: .Cube100.*.mass.: 177[.]8"
+		"-DPT_EXPECT_FILE2=${_pt_bench_dir}/BehaviorOutputs/preflight_diff.json" "-DPT_EXPECT_FILE2_REGEX=.schema.: .physicstest.preflight_diff/1.*.key.: .world.gravity."
+		"-DPT_EXPECT_FILE3=${_pt_bench_dir}/BehaviorOutputs/manifest.json" "-DPT_EXPECT_FILE3_REGEX=.forced_overrides.: [{].*.applied.: true.*.required_capabilities.: [[][]]"
+	LABELS "bench")
+
 # G9 / G10a / G0 refusals (03 M7: "G9 불일치가 하나라도 있으면 preflight가 exit 2로 거부한다 (주입 테스트)", "계측 tier 0인 bench
 # 모드 run에 listener나 드로어가 붙어 있으면 preflight가 exit 2로 거부한다 (주입 테스트)"). -InjectPreflightFault corrupts the value a
 # gate reads; -InjectSceneInstrumentFlags=0x8 gives the backend PT_INSTR_CONTACTS behind the run's back, so Jolt / PhysX really
@@ -255,14 +271,72 @@ pt_add_script_test(PhysicsTest.Bench.G8NegativeControl SCRIPT "${_pt_exit_script
 		"-DPT_EXPECT_FILE=${_pt_bench_dir}/G8NegativeControl/gate_g8.json" "-DPT_EXPECT_FILE_REGEX=.result.: .fail.,.*h_state differs.*.injected_gate_fault_frame.: 4"
 		"-DPT_EXPECT_FILE2=${_pt_bench_dir}/G8NegativeControl/exit.json" "-DPT_EXPECT_FILE2_REGEX=.exit_code.: 2,.*.status.: .gate_failed."
 	LABELS "bench")
+# M9 (03 M9 G11 addition, -G11Knob=variants): the variant gate on one body (M1.SingleBoxDrop b, which tips over on the ground):
+# every frame's hashes of Bullet.StaticAabbOff equal Bullet.Default's. M9 prep finding F-1 (docs/Progress.md M9): on
+# M3.BoxPile 1k the two diverge from frame 51 (UEParity) / 54 (Normalized) - with DBVT_BP_PREVENTFALSEUPDATE 0 a forced AABB
+# update moves the static ground's proxy from the fixed to the dynamic tree every step (btDbvtBroadphase.cpp:319-329 [V]),
+# which changes the pair order of a pile. M9 verdict (Bullet implementer, integrator): the criterion holds on one-body, joint
+# and tower scenes in both profiles and on the pile with bEnableEnhancedDeterminism under Normalized (Bullet then sorts pairs
+# and island manifolds by body id, btOverlappingPairCache.cpp:374, btSimulationIslandManager.cpp:376-378 [V]); the second run
+# pins the pile past the default profile's divergence frame. The default-profile pile difference is tagged algorithmic.
+if(PT_WITH_BULLET)
+	pt_add_script_test(PhysicsTest.Bench.G11BulletStaticAabbOff SCRIPT "${_pt_exit_script}"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=G11 Bullet: Pass"
+			"-DPT_ARGS=-Gate=G11|-G11Knob=variants:Default,StaticAabbOff|-Backend=Bullet|-Profile=UEParity|-Scenario=M1.SingleBoxDrop|-Param:Case=b|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11BulletStaticAabbOff"
+			"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11BulletStaticAabbOff/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .pass.,.*variant_Default.*variant_StaticAabbOff"
+		LABELS "bench")
+	pt_add_script_test(PhysicsTest.Bench.G11BulletStaticAabbOffPile SCRIPT "${_pt_exit_script}"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=G11 Bullet: Pass"
+			"-DPT_ARGS=-Gate=G11|-G11Knob=variants:Default,StaticAabbOff|-Backend=Bullet|-Profile=Normalized|-Scenario=M3.BoxPile|-Frames=120|-ini:Engine:[/Script/Engine.PhysicsSettings]:bEnableEnhancedDeterminism=True|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11BulletStaticAabbOffPile"
+			"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11BulletStaticAabbOffPile/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .pass.,.*variant_Default.*variant_StaticAabbOff"
+		LABELS "bench")
+	# 03 M9: the Bullet viz drawer attached (viz child: -RunMode=Viz -Instrument=native_debug_draw -CaptureEvery=1, so
+	# debugDrawWorld runs every frame) and not attached end on equal hashes, every frame (UEParity, sleep on: M7.UEDefaults puts
+	# its six bodies to sleep by frame 98 under the UE thresholds).
+	pt_add_script_test(PhysicsTest.Bench.G11BulletVizDrawer SCRIPT "${_pt_exit_script}"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=G11 Bullet: Pass"
+			"-DPT_ARGS=-Gate=G11|-G11Knob=viz|-Backend=Bullet|-Profile=UEParity|-Scenario=M7.UEDefaults|-Frames=150|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11BulletVizDrawer"
+			"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11BulletVizDrawer/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .pass.,.*viz on: 150 captured frames, [1-9][0-9]* native draw commands"
+		LABELS "bench")
+	# M9 (03 M9 "the bench exe verifies the native draw without a viewer, recording the command stream only"): native_draw.csv.
+	pt_add_bench_exit_test(NativeDrawBullet 0 "status ok" ok
+		ARGS -Backend=Bullet -Scenario=M1.SingleBoxDrop -Param:Case=a -Frames=30 -RunMode=Viz -Instrument=native_debug_draw ${_pt_ctest_run_args}
+		MANIFEST_REGEX ".native_draw.: [{][^}]*.frames.: 30,[^}]*.commands.: [1-9][0-9]*,[^}]*.truncated_frames.: 0,")
+endif()
+if(PT_WITH_PHYSX)
+	pt_add_bench_exit_test(NativeDrawPhysX 0 "status ok" ok
+		ARGS -Backend=PhysX -Scenario=M1.SingleBoxDrop -Param:Case=a -Frames=30 -RunMode=Viz -Instrument=native_debug_draw ${_pt_ctest_run_args}
+		MANIFEST_REGEX ".native_draw.: [{][^}]*.frames.: 30,[^}]*.commands.: [1-9][0-9]*,[^}]*.truncated_frames.: 0,")
+	pt_add_script_test(PhysicsTest.Bench.G11PhysXViz SCRIPT "${_pt_exit_script}"
+		ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=0 "-DPT_EXPECT_REGEX=G11 PhysX: Pass"
+			"-DPT_ARGS=-Gate=G11|-G11Knob=viz|-Backend=PhysX|-Profile=UEParity|-Scenario=M6b.Chain|-Frames=60|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11PhysXViz"
+			"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11PhysXViz/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .pass.,.*viz on: 60 captured frames, [1-9][0-9]* native draw commands"
+		LABELS "bench")
+endif()
+# M9 fix round 0: the viz knob on a backend that draws nothing (Null: no PT_CAP_NATIVE_DEBUG_DRAW) must fail - the gate asserts
+# that the viz child drew in every frame instead of comparing two identical bench runs.
+pt_add_script_test(PhysicsTest.Bench.G11VizNoDrawing SCRIPT "${_pt_exit_script}"
+	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=G11 FAIL viz knob without a drawing: the on child recorded 0 native draw commands"
+		"-DPT_ARGS=-Gate=G11|-G11Knob=viz|-Backend=Null|-Scenario=M1.SingleBoxDrop|-Param:Case=a|-Frames=10|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11VizNoDrawing"
+		"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11VizNoDrawing/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .fail."
+	LABELS "bench")
 pt_add_script_test(PhysicsTest.Bench.G11NegativeControl SCRIPT "${_pt_exit_script}"
 	ARGS "-DPT_EXE=$<TARGET_FILE:PhysicsTestBench>" -DPT_EXPECT_RC=2 "-DPT_EXPECT_REGEX=G11 FAIL hashes.csv differs at data row 6: off '5,"
 		"-DPT_ARGS=-Gate=G11|-Backend=Null|-Scenario=M3.BoxPile|-Frames=10|-InjectGateFault=4|${_pt_ctest_run_args}|-Out=${_pt_bench_dir}/G11NegativeControl"
 		"-DPT_EXPECT_FILE=${_pt_bench_dir}/G11NegativeControl/gate_g11.json" "-DPT_EXPECT_FILE_REGEX=.result.: .fail.,.*.injected_gate_fault_frame.: 4"
 	LABELS "bench")
-# M7: the preflight passes on every registered scene x backend / variant x profile (S08 / Normalized refused by design).
+# M7: the preflight passes on every registered scene x backend / variant x profile (S08 / Normalized refused by design). M9: the
+# new variants Jolt.SharpBoxes and Bullet.StaticAabbOff join the sweep; every SDK backend runs the joint scenes, only Null's
+# "unsupported" refusals of them are tolerated and listed (RunPreflightSweep.cmake).
+set(_pt_sweep_backends "${_pt_bench_backends}")
+if(PT_WITH_JOLT)
+	string(APPEND _pt_sweep_backends ",Jolt/SharpBoxes")
+endif()
+if(PT_WITH_BULLET)
+	string(APPEND _pt_sweep_backends ",Bullet/StaticAabbOff")
+endif()
 pt_add_script_test(PhysicsTest.Bench.PreflightSweep SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/RunPreflightSweep.cmake"
-	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/PreflightSweep" "-DPT_BACKEND=${_pt_bench_backends}"
+	ARGS "-DPT_BENCH_EXE=$<TARGET_FILE:PhysicsTestBench>" "-DPT_OUT_DIR=${_pt_bench_dir}/PreflightSweep" "-DPT_BACKEND=${_pt_sweep_backends}"
 	LABELS "bench")
 # M7 thread mapping (02 9.6): Jolt and PhysX T = 1..6 and Bullet T = 1 (T = 2 refused); the masks and engine workers recorded.
 set(_pt_thread_engines "")

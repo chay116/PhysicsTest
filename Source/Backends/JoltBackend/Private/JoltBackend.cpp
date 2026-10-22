@@ -191,9 +191,10 @@ namespace PhysicsTest::JoltBackend
 		Out.SourceCommit = PT_JOLT_SOURCE_COMMIT;
 		Out.BuildConfig = GetBuildConfig();
 		Out.BuildFlagsJson = GJoltBuildReport;
-		// 02 7.5: contact points (viz) and bounds through the debug snapshot; no native islands, no native frame model.
+		// 02 7.5: contact points (viz) and bounds through the debug snapshot; no native islands, no native frame model. M9: ball
+		// and hinge joints (PointConstraint / HingeConstraint) and their snapshot (docs/Abi.md 9.4).
 		Out.Capabilities = PT_CAP_COLLISION | PT_CAP_KINEMATIC | PT_CAP_SLEEPING | PT_CAP_CCD | PT_CAP_GYROSCOPIC | PT_CAP_MULTITHREADED | PT_CAP_ACTIVE_LIST
-			| PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH | PT_CAP_CONTACT_POINTS | PT_CAP_BOUNDS;
+			| PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH | PT_CAP_CONTACT_POINTS | PT_CAP_BOUNDS | PT_CAP_JOINT_BALL | PT_CAP_JOINT_HINGE | PT_CAP_JOINT_SNAPSHOT;
 		Out.ModuleFlags = 0;   // Jolt keeps no process-wide scene settings (the combine callbacks are per PhysicsSystem)
 		Out.NumPhaseTimers = 0;
 		Out.PhaseTimerNames = nullptr;

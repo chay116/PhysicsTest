@@ -37,6 +37,11 @@ namespace PhysicsTest::JoltBackend
 		// is below float resolution at body scale. A difference within this many float ulps of the body's size is the same
 		// COM; DL42's 1e-6 cm stays the floor (PtShapeWrapping.h decides the native-primitive case in double).
 		constexpr float GComToleranceUlps = 16.0f;
+		// UE sleep mapping (M9): mTimeBeforeSleep = (SleepCounterThreshold + 1 - this) frames, so that Jolt's float sum of
+		// SleepCounterThreshold + 1 step times reaches it on that step whatever the rounding (MotionProperties::
+		// AccumulateSleepTime compares mSleepTestTimer >= mTimeBeforeSleep [V]); the sphere radius (threshold x time) shrinks
+		// by the same fraction, 0.01 / (SleepCounterThreshold + 1) (0.2 % for UE's 4).
+		constexpr double GSleepTimeMarginFrames = 0.01;
 
 		JPH::Vec3 ToJoltLength(const PtVec3& Cm)
 		{
@@ -218,6 +223,31 @@ namespace PhysicsTest::JoltBackend
 		{
 			return V.Abs().ReduceMax();
 		}
+
+		// Double-precision rigid transforms of the joint snapshot (ABI frames are double; only the body poses come from Jolt's
+		// float state). A * B rotates by B first, then by A.
+		PtQuat MultiplyQuat(const PtQuat& A, const PtQuat& B)
+		{
+			return PtQuat{ A.W * B.X + A.X * B.W + A.Y * B.Z - A.Z * B.Y, A.W * B.Y - A.X * B.Z + A.Y * B.W + A.Z * B.X,
+				A.W * B.Z + A.X * B.Y - A.Y * B.X + A.Z * B.W, A.W * B.W - A.X * B.X - A.Y * B.Y - A.Z * B.Z };
+		}
+
+		PtVec3 RotateVector(const PtQuat& Q, const PtVec3& V)
+		{
+			// v' = v + w t + u x t with t = 2 (u x v), u = the vector part.
+			const PtVec3 T{ 2.0 * (Q.Y * V.Z - Q.Z * V.Y), 2.0 * (Q.Z * V.X - Q.X * V.Z), 2.0 * (Q.X * V.Y - Q.Y * V.X) };
+			return PtVec3{ V.X + Q.W * T.X + (Q.Y * T.Z - Q.Z * T.Y), V.Y + Q.W * T.Y + (Q.Z * T.X - Q.X * T.Z), V.Z + Q.W * T.Z + (Q.X * T.Y - Q.Y * T.X) };
+		}
+
+		// Parent x Local: the local frame placed by the parent pose (UE FTransform Local * Parent), rotation renormalised.
+		PtTransform ComposeTransform(const PtTransform& Parent, const PtTransform& Local)
+		{
+			PtQuat Rotation = MultiplyQuat(Parent.Rotation, Local.Rotation);
+			const double Length = sqrt(Rotation.X * Rotation.X + Rotation.Y * Rotation.Y + Rotation.Z * Rotation.Z + Rotation.W * Rotation.W);
+			Rotation = PtQuat{ Rotation.X / Length, Rotation.Y / Length, Rotation.Z / Length, Rotation.W / Length };
+			const PtVec3 Offset = RotateVector(Parent.Rotation, Local.Translation);
+			return PtTransform{ Rotation, PtVec3{ Parent.Translation.X + Offset.X, Parent.Translation.Y + Offset.Y, Parent.Translation.Z + Offset.Z } };
+		}
 	}
 
 	PtResult ApplySceneOption(FJoltSceneOptions& Options, const Abi::FStringRef Key, const Abi::FStringRef Value, char (&Error)[256])
@@ -281,8 +311,20 @@ namespace PhysicsTest::JoltBackend
 			Options.TempAllocatorBytes = Unsigned;
 			return PT_OK;
 		}
+		if (EqualsNoCase("SleepThresholdMapping", Key))
+		{
+			// M9: UE = map the UE material sleep thresholds onto Jolt's global sleep test (approximation, jolt.sleep_mapping);
+			// Native = Jolt's own PhysicsSettings values (0.03 m/s for 0.5 s).
+			if (EqualsNoCase("UE", Value) || EqualsNoCase("Native", Value))
+			{
+				Options.bMapUESleepThresholds = EqualsNoCase("UE", Value);
+				return PT_OK;
+			}
+			snprintf(Error, sizeof(Error), "Jolt: SleepThresholdMapping must be UE or Native");
+			return PT_E_INVALID_ARG;
+		}
 		snprintf(Error, sizeof(Error), "Jolt: unknown scene option '%.*s' (NumVelocitySteps, NumPositionSteps, ConvexRadius, PenetrationSlop, "
-			"SpeculativeContactDistance, Baumgarte, UseLargeIslandSplitter, DeterministicSimulation, TempAllocatorBytes)",
+			"SpeculativeContactDistance, Baumgarte, UseLargeIslandSplitter, DeterministicSimulation, SleepThresholdMapping, TempAllocatorBytes)",
 			static_cast<int>(Key.Length), Key.Data);
 		return PT_E_INVALID_ARG;
 	}
@@ -331,7 +373,9 @@ namespace PhysicsTest::JoltBackend
 
 	FPhysScene_Jolt::~FPhysScene_Jolt()
 	{
-		// Remove and destroy every live body before the system goes (Jolt's samples do the same).
+		// The constraints first (they hold Body pointers), then every live body, before the system goes (Jolt's samples do the
+		// same).
+		RemoveAllConstraints();
 		JPH::BodyInterface& BodyInterface = System->GetBodyInterfaceNoLock();
 		JPH::BodyIDVector Live;
 		Live.reserve(Bodies.size());
@@ -368,7 +412,82 @@ namespace PhysicsTest::JoltBackend
 		Settings.mMinVelocityForRestitution = static_cast<float>(GScale.Length(ThresholdCm));
 		// Sleep is switched per body (mAllowSleeping, DL48); the global switch stays on.
 		Settings.mAllowSleeping = true;
+		// Sleep thresholds (M9): the UE material mapping of MapSleepThresholds, or Jolt's own values (Native, or no dynamic body
+		// yet). See the file comment of PhysScene_Jolt.h for the derivation.
+		const JPH::PhysicsSettings JoltDefaults;
+		Settings.mPointVelocitySleepThreshold = JoltDefaults.mPointVelocitySleepThreshold;
+		Settings.mTimeBeforeSleep = JoltDefaults.mTimeBeforeSleep;
+		if (Options.bMapUESleepThresholds && NumSleepMappedBodies > 0 && Desc.NominalDeltaTime > 0.0)
+		{
+			Settings.mPointVelocitySleepThreshold = static_cast<float>(GScale.Length(0.5 * MappedSleepLinearCm));
+			Settings.mTimeBeforeSleep = static_cast<float>((static_cast<double>(MappedSleepCounter) + 1.0 - GSleepTimeMarginFrames) * Desc.NominalDeltaTime);
+		}
 		System->SetPhysicsSettings(Settings);
+	}
+
+	void FPhysScene_Jolt::MapSleepThresholds()
+	{
+		// The dynamic bodies that may sleep set the mapping; when none may (Normalized, or every body has bAllowSleep off) every
+		// dynamic body does, so the readback does not depend on the sleep axis (the value is unused then).
+		for (int32 Pass = 0; Pass < 2; ++Pass)
+		{
+			const bool bSleepingOnly = Pass == 0;   // (a plain loop: no std::initializer_list COMDAT in this AVX2 TU, docs/Abi.md 5.13)
+			NumSleepMappedBodies = 0;
+			MappedSleepLinearCm = 0.0;
+			MappedSleepCounter = 0;
+			for (const FJoltBody& Record : Bodies)
+			{
+				if (Record.bReleased || Record.Motion != PT_MOTION_DYNAMIC || (bSleepingOnly && !GetBody(Record)->GetAllowSleeping()))
+				{
+					continue;
+				}
+				MappedSleepLinearCm = NumSleepMappedBodies == 0 || Record.SleepLinearThresholdCm < MappedSleepLinearCm ? Record.SleepLinearThresholdCm : MappedSleepLinearCm;
+				MappedSleepCounter = Record.SleepCounterThreshold > MappedSleepCounter ? Record.SleepCounterThreshold : MappedSleepCounter;
+				++NumSleepMappedBodies;
+			}
+			bSleepMappedFromSleepingBodies = bSleepingOnly;
+			if (NumSleepMappedBodies > 0)
+			{
+				break;
+			}
+		}
+		ApplyPhysicsSettings();
+	}
+
+	uint32 FPhysScene_Jolt::CountSleepRuleMismatches() const
+	{
+		// The variant's rule recomputed from the live dynamic bodies - MapSleepThresholds' two passes, without its cached values -
+		// against what the engine holds: a body created or released without a new mapping, or a value written elsewhere, shows.
+		const JPH::PhysicsSettings& Settings = System->GetPhysicsSettings();
+		const JPH::PhysicsSettings JoltDefaults;
+		float ExpectedThreshold = JoltDefaults.mPointVelocitySleepThreshold;
+		float ExpectedTime = JoltDefaults.mTimeBeforeSleep;
+		if (Options.bMapUESleepThresholds && Desc.NominalDeltaTime > 0.0)
+		{
+			for (int32 Pass = 0; Pass < 2; ++Pass)
+			{
+				uint32 Num = 0;
+				double MinLinearCm = 0.0;
+				uint32 MaxCounter = 0;
+				for (const FJoltBody& Record : Bodies)
+				{
+					if (Record.bReleased || Record.Motion != PT_MOTION_DYNAMIC || (Pass == 0 && !GetBody(Record)->GetAllowSleeping()))
+					{
+						continue;
+					}
+					MinLinearCm = Num == 0 || Record.SleepLinearThresholdCm < MinLinearCm ? Record.SleepLinearThresholdCm : MinLinearCm;
+					MaxCounter = Record.SleepCounterThreshold > MaxCounter ? Record.SleepCounterThreshold : MaxCounter;
+					++Num;
+				}
+				if (Num > 0)
+				{
+					ExpectedThreshold = static_cast<float>(GScale.Length(0.5 * MinLinearCm));
+					ExpectedTime = static_cast<float>((static_cast<double>(MaxCounter) + 1.0 - GSleepTimeMarginFrames) * Desc.NominalDeltaTime);
+					break;
+				}
+			}
+		}
+		return (Settings.mPointVelocitySleepThreshold != ExpectedThreshold ? 1u : 0u) + (Settings.mTimeBeforeSleep != ExpectedTime ? 1u : 0u);
 	}
 
 	void FPhysScene_Jolt::EnsureTempAllocator()
@@ -551,7 +670,9 @@ namespace PhysicsTest::JoltBackend
 			Settings.mMotionType = Info.Motion == PT_MOTION_STATIC ? JPH::EMotionType::Static
 				: (Info.Motion == PT_MOTION_KINEMATIC ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic);
 			Settings.mObjectLayer = Info.Motion == PT_MOTION_STATIC ? Layers::NonMoving : Layers::Moving;
-			Settings.mCollisionGroup = JPH::CollisionGroup(GroupFilter, Info.BlockMask, Info.ObjectType);
+			// GroupID = BlockMask, SubGroupID = ObjectType | body index << 5 (the joints' disabled pairs, JoltLayers.h). MaxBodies
+			// is at most Jolt's 23-bit body index range, below GSubGroupMaxBodyIndex.
+			Settings.mCollisionGroup = JPH::CollisionGroup(GroupFilter, Info.BlockMask, MakeSubGroupID(Info.ObjectType, Info.BodyIndex));
 			Settings.mAllowSleeping = bSleepingAllowed && (Info.Flags & PT_BODY_ALLOW_SLEEP) != 0;
 			Settings.mMotionQuality = (Info.Flags & PT_BODY_USE_CCD) != 0 ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
 			Settings.mApplyGyroscopicForce = (Info.Flags & PT_BODY_GYROSCOPIC) != 0;
@@ -612,6 +733,11 @@ namespace PhysicsTest::JoltBackend
 			Record.InertiaDiagonal = Info.InertiaDiagonal;
 			Record.CenterOfMassLocal = Info.CenterOfMassLocal;
 			Record.KinematicTarget = Info.ActorTransform;
+			// UE's sleep inputs of this body: Chaos reads the particle's first material (GetFirstPhysicsMaterial) x the particle's
+			// SleepThresholdMultiplier (IslandManager.cpp GetIslandParticleSleepThresholds [V]); mapped in MapSleepThresholds.
+			const PtPhysicalMaterial& SleepMaterial = Materials[Record.MaterialIndex];
+			Record.SleepLinearThresholdCm = SleepMaterial.SleepLinearVelocityThreshold * Info.SleepThresholdMultiplier;
+			Record.SleepCounterThreshold = SleepMaterial.SleepCounterThreshold;
 			JPH::Body& Body = *System->GetBodyLockInterfaceNoLock().TryGetBody(Record.Id);
 			if (Info.Motion == PT_MOTION_DYNAMIC)
 			{
@@ -648,6 +774,7 @@ namespace PhysicsTest::JoltBackend
 		ActiveScratch.reserve(Bodies.size());
 		PrevActive.reserve(Bodies.size());
 		DirtyBodies.reserve(Bodies.size());
+		MapSleepThresholds();   // M9: the global sleep test follows the bodies' UE thresholds
 		return PT_OK;
 	}
 
@@ -656,20 +783,234 @@ namespace PhysicsTest::JoltBackend
 		// The kit has rejected out-of-range, released and repeated indices (Jolt asserts on a repeated BodyID).
 		JPH::BodyIDVector Ids;
 		Ids.reserve(Num);
+		bool bAnyJoint = false;
 		for (uint32 Index = 0; Index < Num; ++Index)
 		{
-			Ids.push_back(Bodies[BodyIndices[Index]].Id);
+			FJoltBody& Body = Bodies[BodyIndices[Index]];
+			Ids.push_back(Body.Id);
+			bAnyJoint = bAnyJoint || Body.NumJoints > 0;
+			Body.bReleased = true;   // marked first: the joint pass below finds the joints of the released bodies by it
+		}
+		// M9 (docs/Abi.md 9.4 item 6): a released body releases its joints - removed from the system before the body is destroyed
+		// (a Jolt constraint holds Body pointers). The JointIndex stays taken; the snapshot no longer reports the joint.
+		if (bAnyJoint)
+		{
+			JPH::Array<JPH::Constraint*> Removed;
+			for (FJoltJoint& Joint : Joints)
+			{
+				const bool bBody2Released = Joint.Info.Body2 != PT_INDEX_NONE && Bodies[Joint.Info.Body2].bReleased;
+				if (Joint.bReleased || (!Bodies[Joint.Info.Body1].bReleased && !bBody2Released))
+				{
+					continue;
+				}
+				Removed.push_back(Joint.Constraint.GetPtr());
+			}
+			System->RemoveConstraints(Removed.data(), static_cast<int>(Removed.size()));
+			for (FJoltJoint& Joint : Joints)
+			{
+				const bool bBody2Released = Joint.Info.Body2 != PT_INDEX_NONE && Bodies[Joint.Info.Body2].bReleased;
+				if (Joint.bReleased || (!Bodies[Joint.Info.Body1].bReleased && !bBody2Released))
+				{
+					continue;
+				}
+				if ((Joint.Info.Flags & PT_JOINTF_DISABLE_COLLISION) != 0 && Joint.Info.Body2 != PT_INDEX_NONE)
+				{
+					GroupFilter->RemoveDisabledPair(Joint.Info.Body1, Joint.Info.Body2);
+				}
+				--Bodies[Joint.Info.Body1].NumJoints;
+				if (Joint.Info.Body2 != PT_INDEX_NONE)
+				{
+					--Bodies[Joint.Info.Body2].NumJoints;
+				}
+				Joint.Constraint = nullptr;
+				Joint.bReleased = true;
+				--NumLiveJoints;
+				++NumReleasedJoints;
+			}
 		}
 		JPH::BodyInterface& BodyInterface = System->GetBodyInterfaceNoLock();
 		BodyInterface.RemoveBodies(Ids.data(), static_cast<int>(Ids.size()));
 		BodyInterface.DestroyBodies(Ids.data(), static_cast<int>(Ids.size()));
 		for (uint32 Index = 0; Index < Num; ++Index)
 		{
-			FJoltBody& Body = Bodies[BodyIndices[Index]];
-			Body.bReleased = true;
-			Body.Id = JPH::BodyID();
+			Bodies[BodyIndices[Index]].Id = JPH::BodyID();
+		}
+		MapSleepThresholds();
+		return PT_OK;
+	}
+
+	// ---- joints (M9, docs/Abi.md 9.4) -----------------------------------------------------------------------------------
+	JPH::Ref<JPH::TwoBodyConstraint> FPhysScene_Jolt::MakeConstraint(const PtConstraintCreateInfo& Info)
+	{
+		JPH::Body& Body1 = *GetBody(Bodies[Info.Body1]);
+		const bool bWorld = Info.Body2 == PT_INDEX_NONE;
+		JPH::Body& Body2 = bWorld ? JPH::Body::sFixedToWorld : *GetBody(Bodies[Info.Body2]);
+		// LocalToBodyCOM (Constraint.h:59-65 [V]): positions relative to the body COM in the body's rotation frame, which is the
+		// actor frame; the shape's COM is the actor-space point the COM sits at (OffsetCenterOfMassShape included). The world's
+		// COM space is world space (sFixedToWorld: identity at the origin), so Frame2 of a world joint is used as given.
+		const JPH::Vec3 Point1 = ToJoltLength(Info.Frame1.Translation) - Body1.GetShape()->GetCenterOfMass();
+		const JPH::Vec3 Point2 = bWorld ? ToJoltLength(Info.Frame2.Translation) : ToJoltLength(Info.Frame2.Translation) - Body2.GetShape()->GetCenterOfMass();
+		if (Info.Type == PT_JOINT_BALL)
+		{
+			// ConfigureAsBallAndSocket: the three linear axes locked, every rotation free.
+			JPH::PointConstraintSettings Settings;
+			Settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+			Settings.mPoint1 = JPH::RVec3(Point1);
+			Settings.mPoint2 = JPH::RVec3(Point2);
+			return Settings.Create(Body1, Body2);
+		}
+		// ConfigureAsHinge: linear locked, twist about the frame X axis free, both swings locked. Jolt's hinge axis = frame X, its
+		// normal axis (the zero angle of limits and motor, unused here) = frame Y; limits -pi..pi mean none (HingeConstraint::
+		// SetLimits), no motor, no friction torque.
+		const JPH::Quat Rotation1 = ToJoltQuat(Info.Frame1.Rotation);
+		const JPH::Quat Rotation2 = ToJoltQuat(Info.Frame2.Rotation);
+		JPH::HingeConstraintSettings Settings;
+		Settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+		Settings.mPoint1 = JPH::RVec3(Point1);
+		Settings.mHingeAxis1 = Rotation1.RotateAxisX().Normalized();
+		Settings.mNormalAxis1 = Rotation1.RotateAxisY().Normalized();
+		Settings.mPoint2 = JPH::RVec3(Point2);
+		Settings.mHingeAxis2 = Rotation2.RotateAxisX().Normalized();
+		Settings.mNormalAxis2 = Rotation2.RotateAxisY().Normalized();
+		Settings.mLimitsMin = -JPH::JPH_PI;
+		Settings.mLimitsMax = JPH::JPH_PI;
+		Settings.mMaxFrictionTorque = 0.0f;
+		return Settings.Create(Body1, Body2);
+	}
+
+	PtResult FPhysScene_Jolt::CreateConstraints(const Abi::TStridedView<PtConstraintCreateInfo> Infos)
+	{
+		// The Kit validated every joint (types BALL / HINGE, live bodies, Body1 != Body2, flags, Reserved 0, unit frames). All or
+		// nothing: every constraint is built first and added with one AddConstraints; nothing can fail after the first add.
+		const uint32 Num = Infos.Num();
+		if (Num == 0)
+		{
+			return PT_OK;
+		}
+		JPH::Array<JPH::Ref<JPH::TwoBodyConstraint>> Created;
+		JPH::Array<JPH::Constraint*> AddList;
+		Created.reserve(Num);
+		AddList.reserve(Num);
+		for (uint32 Index = 0; Index < Num; ++Index)
+		{
+			JPH::Ref<JPH::TwoBodyConstraint> Constraint = MakeConstraint(Infos[Index]);
+			if (Constraint == nullptr)
+			{
+				return GetKit().SetLastError(PT_E_ENGINE, "Jolt: constraint %u of the batch could not be created", Index);   // Created releases the others
+			}
+			AddList.push_back(Constraint.GetPtr());
+			Created.push_back(Constraint);
+		}
+		System->AddConstraints(AddList.data(), static_cast<int>(AddList.size()));
+		Joints.reserve(Joints.size() + Num);
+		for (uint32 Index = 0; Index < Num; ++Index)
+		{
+			const PtConstraintCreateInfo& Info = Infos[Index];
+			FJoltJoint Joint;
+			Joint.Constraint = Created[Index];
+			Joint.Info = Info;
+			Joints.push_back(Joint);
+			++Bodies[Info.Body1].NumJoints;
+			if (Info.Body2 != PT_INDEX_NONE)
+			{
+				++Bodies[Info.Body2].NumJoints;
+				// UE bDisableCollision: every shape of Body1 ignores every shape of Body2 (no effect for a world joint).
+				if ((Info.Flags & PT_JOINTF_DISABLE_COLLISION) != 0)
+				{
+					GroupFilter->AddDisabledPair(Info.Body1, Info.Body2);
+				}
+			}
+			++NumLiveJoints;
 		}
 		return PT_OK;
+	}
+
+	void FPhysScene_Jolt::RemoveAllConstraints()
+	{
+		JPH::Array<JPH::Constraint*> Live;
+		for (FJoltJoint& Joint : Joints)
+		{
+			if (!Joint.bReleased && Joint.Constraint != nullptr)
+			{
+				Live.push_back(Joint.Constraint.GetPtr());
+			}
+		}
+		if (!Live.empty())
+		{
+			System->RemoveConstraints(Live.data(), static_cast<int>(Live.size()));
+		}
+		Joints.clear();
+	}
+
+	PtTransform FPhysScene_Jolt::GetActorPose(const FJoltBody& Record) const
+	{
+		const JPH::Body& Body = *GetBody(Record);
+		return PtTransform{ FromJoltQuat(Body.GetRotation()), FromJoltLength(JPH::Vec3(Body.GetPosition())) };
+	}
+
+	PtJointSnapshot FPhysScene_Jolt::MakeJointSnapshot(const FJoltJoint& Joint, const uint32 JointIndex) const
+	{
+		PtJointSnapshot Out = {};
+		Out.JointIndex = JointIndex;
+		const PtConstraintCreateInfo& Info = Joint.Info;
+		const bool bWorld = Info.Body2 == PT_INDEX_NONE;
+		// The frames at the snapshot pose (the end of the last step): actor pose x ABI frame (the world frame as given).
+		Out.Frame1World = ComposeTransform(GetActorPose(Bodies[Info.Body1]), Info.Frame1);
+		Out.Frame2World = bWorld ? Info.Frame2 : ComposeTransform(GetActorPose(Bodies[Info.Body2]), Info.Frame2);
+		const JPH::TwoBodyConstraint& Constraint = *Joint.Constraint;
+		const JPH::Body& Body1 = *Constraint.GetBody1();
+		const JPH::Body& Body2 = *Constraint.GetBody2();
+		// abi-v1.1 (docs/Abi.md 9.4 item 9): no awake dynamic body - both asleep, or none dynamic (a joint between two
+		// non-dynamic bodies never runs) - means the joint did not run: 0 impulses and PT_JOINTSNAP_SLEEPING (as Bullet and PhysX).
+		const bool bNoneAwake = (!Body1.IsDynamic() || !Body1.IsActive()) && (!Body2.IsDynamic() || !Body2.IsActive());
+		if (bNoneAwake)
+		{
+			Out.Flags |= PT_JOINTSNAP_SLEEPING;
+			return Out;
+		}
+		// The last step's accumulated velocity-step multipliers (warm start + iterations); Jolt applies -lambda to body 1
+		// (PointConstraintPart / HingeRotationConstraintPart::ApplyVelocityStep [V]).
+		JPH::Vec3 Linear = JPH::Vec3::sZero();
+		JPH::Vec3 Angular = JPH::Vec3::sZero();
+		if (Info.Type == PT_JOINT_BALL)
+		{
+			Linear = -static_cast<const JPH::PointConstraint&>(Constraint).GetTotalLambdaPosition();
+		}
+		else
+		{
+			const JPH::HingeConstraint& Hinge = static_cast<const JPH::HingeConstraint&>(Constraint);
+			Linear = -Hinge.GetTotalLambdaPosition();
+			// The swing lock's angular impulse in world space, rebuilt as HingeRotationConstraintPart::CalculateConstraintProperties
+			// builds its basis (a1 = body 1's hinge axis, b2 / c2 perpendicular to body 2's; [V]) but from the end-of-step
+			// rotations: Jolt's basis is the one of the last solve, so for a parent that turns about the hinge the direction is
+			// off by about its rotation in one step (a world hinge: exact up to the swing error).
+			const JPH::Mat44 Rotation1 = JPH::Mat44::sRotation(Body1.GetRotation());
+			const JPH::Mat44 Rotation2 = JPH::Mat44::sRotation(Body2.GetRotation());
+			const JPH::Vec3 A1 = Rotation1.Multiply3x3(Hinge.GetLocalSpaceHingeAxis1());
+			JPH::Vec3 A2 = Rotation2.Multiply3x3(Hinge.GetLocalSpaceHingeAxis2());
+			const float Dot = A1.Dot(A2);
+			if (Dot <= 1.0e-3f)
+			{
+				JPH::Vec3 Perpendicular = A2 - Dot * A1;
+				if (Perpendicular.LengthSq() < 1.0e-6f)
+				{
+					Perpendicular = A1.GetNormalizedPerpendicular();
+				}
+				A2 = (0.99f * Perpendicular.Normalized() + 0.01f * A1).Normalized();
+			}
+			const JPH::Vec3 B2 = A2.GetNormalizedPerpendicular();
+			const JPH::Vec3 C2 = A2.Cross(B2);
+			const JPH::Vector<2> Lambda = Hinge.GetTotalLambdaRotation();
+			Angular = -(B2.Cross(A1) * Lambda[0] + C2.Cross(A1) * Lambda[1]);
+		}
+		// kg*m/s -> kg*cm/s, kg*m^2/s -> kg*cm^2/s. AngularImpulse is the rotational constraint's own impulse (the couple of the
+		// swing lock; 0 for a ball), not the moment of LinearImpulse about Body1's COM (Chaos NetAngularImpulse sums only the
+		// angular rows, PBDJointSolverGaussSeidel.cpp [V]).
+		Out.LinearImpulse = PtVec3{ GScale.ToCm(static_cast<double>(Linear.GetX())), GScale.ToCm(static_cast<double>(Linear.GetY())),
+			GScale.ToCm(static_cast<double>(Linear.GetZ())) };
+		Out.AngularImpulse = PtVec3{ GScale.ToKgCm2(static_cast<double>(Angular.GetX())), GScale.ToKgCm2(static_cast<double>(Angular.GetY())),
+			GScale.ToKgCm2(static_cast<double>(Angular.GetZ())) };
+		return Out;
 	}
 
 	PtResult FPhysScene_Jolt::PrepareForSimulation(Abi::FTextWriter& OutActions)
@@ -1341,7 +1682,19 @@ namespace PhysicsTest::JoltBackend
 		// Stage the snapshot now, so that ReadDebugSnapshot copies exactly what these counts describe.
 		SnapshotParticles.clear();
 		SnapshotContacts.clear();
+		SnapshotJoints.clear();
 		bool bTruncated = false;
+		if ((Req.Flags & PT_SNAP_JOINTS) != 0)
+		{
+			// M9 (PT_CAP_JOINT_SNAPSHOT): every live joint in JointIndex order; released ones are skipped (their index stays taken).
+			for (uint32 Index = 0; Index < static_cast<uint32>(Joints.size()); ++Index)
+			{
+				if (!Joints[Index].bReleased)
+				{
+					SnapshotJoints.push_back(MakeJointSnapshot(Joints[Index], Index));
+				}
+			}
+		}
 		if ((Req.Flags & PT_SNAP_PARTICLES) != 0)
 		{
 			for (uint32 Index = 0; Index < Bodies.size(); ++Index)
@@ -1426,7 +1779,7 @@ namespace PhysicsTest::JoltBackend
 		}
 		Out.NumParticles = static_cast<uint32>(SnapshotParticles.size());
 		Out.NumContactPoints = static_cast<uint32>(SnapshotContacts.size());
-		Out.NumJoints = 0;
+		Out.NumJoints = static_cast<uint32>(SnapshotJoints.size());
 		Out.NumNativeCommands = 0;
 		Out.NumStringBytes = 0;
 		Out.bTruncated = bTruncated ? 1u : 0u;
@@ -1435,15 +1788,21 @@ namespace PhysicsTest::JoltBackend
 
 	PtResult FPhysScene_Jolt::ReadDebugSnapshot(const PtDebugSnapshotBuffers& Buffers)
 	{
-		if (Buffers.ParticleCapacity < SnapshotParticles.size() || Buffers.ContactCapacity < SnapshotContacts.size())
+		if (Buffers.ParticleCapacity < SnapshotParticles.size() || Buffers.ContactCapacity < SnapshotContacts.size() || Buffers.JointCapacity < SnapshotJoints.size())
 		{
-			return GetKit().SetLastError(PT_E_CAPACITY, "Jolt: ReadDebugSnapshot needs %u particles / %u contacts (capacity %u / %u)",
-				static_cast<unsigned>(SnapshotParticles.size()), static_cast<unsigned>(SnapshotContacts.size()), Buffers.ParticleCapacity, Buffers.ContactCapacity);
+			return GetKit().SetLastError(PT_E_CAPACITY, "Jolt: ReadDebugSnapshot needs %u particles / %u contacts / %u joints (capacity %u / %u / %u)",
+				static_cast<unsigned>(SnapshotParticles.size()), static_cast<unsigned>(SnapshotContacts.size()), static_cast<unsigned>(SnapshotJoints.size()),
+				Buffers.ParticleCapacity, Buffers.ContactCapacity, Buffers.JointCapacity);
 		}
 		if ((!SnapshotParticles.empty() && (Buffers.Particles == nullptr || Buffers.ParticleStride < sizeof(PtParticleSnapshot)))
-			|| (!SnapshotContacts.empty() && (Buffers.ContactPoints == nullptr || Buffers.ContactStride < sizeof(PtContactPoint))))
+			|| (!SnapshotContacts.empty() && (Buffers.ContactPoints == nullptr || Buffers.ContactStride < sizeof(PtContactPoint)))
+			|| (!SnapshotJoints.empty() && (Buffers.Joints == nullptr || Buffers.JointStride < sizeof(PtJointSnapshot))))
 		{
 			return GetKit().SetLastError(PT_E_INVALID_ARG, "Jolt: ReadDebugSnapshot buffers are NULL or their strides are too small");
+		}
+		for (size_t Index = 0; Index < SnapshotJoints.size(); ++Index)
+		{
+			memcpy(reinterpret_cast<uint8*>(Buffers.Joints) + Index * Buffers.JointStride, &SnapshotJoints[Index], sizeof(PtJointSnapshot));
 		}
 		for (size_t Index = 0; Index < SnapshotParticles.size(); ++Index)
 		{
@@ -1606,9 +1965,40 @@ namespace PhysicsTest::JoltBackend
 			NumMaySleep, NumDynamic);
 		// M7: a scene without dynamic bodies (P0.EmptyStep) has no body flag to read: n/a, like the other per-body aggregates.
 		Out.AppendEffective("sleep.enabled", Text, "bool", NumDynamic == 0 ? NaN : (bSleepingAllowed && NumMaySleep > 0 ? 1.0 : 0.0), "bool", "READBACK");
-		snprintf(Text, sizeof(Text), "every point of the body slower than %.9g m/s for %.9g s (global; UE per-material thresholds not mapped, M9)",
-			static_cast<double>(Settings.mPointVelocitySleepThreshold), static_cast<double>(Settings.mTimeBeforeSleep));
-		Out.AppendEffective("sleep.criteria", Text, "m/s", GScale.ToCm(static_cast<double>(Settings.mPointVelocitySleepThreshold)), "cm/s", "READBACK");
+		// M9 fix round 0: sleep.criteria is a rule key like Bullet's (scene independent: G9 expects const:0) - canonical = the
+		// PhysicsSettings values that do not hold the variant's rule (CountSleepRuleMismatches); the native text keeps the values.
+		// The mapped threshold itself is jolt.sleep_threshold (cm/s). n/a without a dynamic body (UE: nothing to map, like the
+		// other per-body aggregates; P0.EmptyStep).
+		snprintf(Text, sizeof(Text), "COM and 2 bounding-box points within spheres of radius %.9g m/s x %.9g s for %.9g s (PhysicsSettings, global; %s)",
+			static_cast<double>(Settings.mPointVelocitySleepThreshold), static_cast<double>(Settings.mTimeBeforeSleep), static_cast<double>(Settings.mTimeBeforeSleep),
+			Options.bMapUESleepThresholds ? (NumSleepMappedBodies > 0 ? "UE material mapping, jolt.sleep_mapping" : "UE mapping, no dynamic body: Jolt's own values")
+										  : "Jolt's own values, SleepThresholdMapping=Native");
+		const bool bSleepCriteriaApplies = !Options.bMapUESleepThresholds || NumSleepMappedBodies > 0;
+		Out.AppendEffective("sleep.criteria", Text, "", bSleepCriteriaApplies ? static_cast<double>(CountSleepRuleMismatches()) : NaN, "settings", "READBACK");
+		snprintf(Text, sizeof(Text), "%.9g m/s (PhysicsSettings::mPointVelocitySleepThreshold)", static_cast<double>(Settings.mPointVelocitySleepThreshold));
+		Out.AppendEffective("jolt.sleep_threshold", Text, "m/s", bSleepCriteriaApplies ? GScale.ToCm(static_cast<double>(Settings.mPointVelocitySleepThreshold)) : NaN,
+			"cm/s", "READBACK");
+		{
+			// The mapping and what it cannot express (02 10 UEParity: "approximation flagged"); canonical 1 = UE mapping applied.
+			char Mapping[640];
+			const bool bMapped = Options.bMapUESleepThresholds && NumSleepMappedBodies > 0 && Desc.NominalDeltaTime > 0.0;
+			if (bMapped)
+			{
+				snprintf(Mapping, sizeof(Mapping),
+					"UE (approximation): mPointVelocitySleepThreshold = min(SleepLinearVelocityThreshold x SleepThresholdMultiplier) / 2 = %.9g / 2 cm/s over %u %s "
+					"(a steady drift of 2 x the threshold fills Jolt's test sphere), mTimeBeforeSleep = (max SleepCounterThreshold %u + 1 - %.9g) x %.9g s; "
+					"not mapped: per-body and per-island thresholds (Jolt's test is global), the angular threshold (rotation counts as movement of the "
+					"bounding-box points), Chaos' smoothed velocities",
+					MappedSleepLinearCm, NumSleepMappedBodies, bSleepMappedFromSleepingBodies ? "dynamic bodies that may sleep" : "dynamic bodies (none may sleep)",
+					MappedSleepCounter, GSleepTimeMarginFrames, Desc.NominalDeltaTime);
+			}
+			else
+			{
+				snprintf(Mapping, sizeof(Mapping), "%s: Jolt's own mPointVelocitySleepThreshold / mTimeBeforeSleep",
+					Options.bMapUESleepThresholds ? "UE, no dynamic body to map" : "Native (SleepThresholdMapping=Native)");
+			}
+			Out.AppendEffective("jolt.sleep_mapping", Mapping, "", bMapped ? 1.0 : 0.0, "bool", "SET_ONLY");
+		}
 		snprintf(Text, sizeof(Text), "%u of %u dynamic bodies use EMotionQuality::LinearCast (speculative contacts always on)", NumLinearCast, NumDynamic);
 		Out.AppendEffective("ccd.enabled", Text, "bodies", NumLinearCast > 0 ? 1.0 : 0.0, "bool", "READBACK");
 		// The pool's own count: GetMaxConcurrency() = worker threads + the calling thread (JobSystemThreadPool.h:48 [V]).
@@ -1643,6 +2033,16 @@ namespace PhysicsTest::JoltBackend
 		Out.AppendEffective("contact.point_pose", "0 (start of step: the narrow phase collides the poses the step began with)", "", 0.0, "", "COMPILE_TIME");
 		Out.AppendEffective("listeners.installed", ContactListener ? "1 (contact listener: viz / PT_INSTR_CONTACTS)" : "0", "listeners", ContactListener ? 1.0 : 0.0,
 			"listeners", "READBACK");
+		// M9 joints (docs/Abi.md 9.4 item 4: the optional keys joint.projection / joint.solver).
+		Out.AppendEffective("joint.projection", "0: Jolt has no joint projection (hard PointConstraint / HingeConstraint, no adapter-side correction; DL31)", "bool", 0.0,
+			"bool", "COMPILE_TIME");
+		Out.AppendEffective("joint.solver",
+			"Jolt PointConstraint (ball) / HingeConstraint (hinge: axis = frame X, no limits / motor / friction), LocalToBodyCOM; solved with the contacts by "
+			"the scene's velocity steps (warm started) and position steps (non-linear Gauss-Seidel scaled by PhysicsSettings::mBaumgarte)",
+			"", NaN, "", "COMPILE_TIME");
+		snprintf(Text, sizeof(Text), "%u live joints (%u released); %u disable-collision body pairs in the group filter", NumLiveJoints, NumReleasedJoints,
+			GroupFilter->GetNumDisabledPairs());
+		Out.AppendEffective("jolt.joints", Text, "joints", static_cast<double>(NumLiveJoints), "joints", "SET_ONLY");
 
 		// Jolt-specific (the first two are the backend's required keys).
 		Out.AppendEffective("jolt.config_string", JPH::GetConfigurationString(), "", NaN, "", "COMPILE_TIME");

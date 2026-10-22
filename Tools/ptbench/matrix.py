@@ -6,13 +6,16 @@ cell once, in an order shuffled with the block's own seed (common.block_seed(mat
 session is reproducible from the matrix file alone. The bench records the repeat index, the position in the block and the
 block seed in manifest.order (-Repeat, -Order, -BlockSeed).
 
-Extra bench switches come from three places: the matrix's bench_args, a target's bench_args and the runner's --bench-arg.
-The bench reads a switch with FParse::Value, which takes the FIRST occurrence on the command line (UE Parse.cpp:265 through
-FCString::Strifind; our Source/Runtime/Core/Private/Misc/Parse.cpp FindKey), and -Param: takes the last; so a switch given
-twice would be ignored silently on one side, and a switch the runner sets per cell would lose to (or override) the cell's
-own value. check_switches therefore refuses (MatrixError) a switch key that appears more than once over the three sources,
-and every switch the runner itself sets (RESERVED_SWITCHES, -Param:<k>) or that turns the process into another mode
-(MODE_SWITCHES). With every key unique, the order of the command line does not matter.
+Extra bench switches come from four places: the matrix's bench_args, a target's bench_args, a scene's bench_args (M9: e.g.
+-StatesEvery=1 for the behaviour scenes and a sparse -StatesEvery=100 for a 1000-body pile in the same matrix) and the
+runner's --bench-arg. The bench reads a switch with FParse::Value, which takes the FIRST occurrence on the command line (UE
+Parse.cpp:265 through FCString::Strifind; our Source/Runtime/Core/Private/Misc/Parse.cpp FindKey), and -Param: takes the
+last; so a switch given twice would be ignored silently on one side, and a switch the runner sets per cell would lose to (or
+override) the cell's own value. check_switches therefore refuses (MatrixError) a switch key that appears more than once over
+the sources of one cell (matrix + --bench-arg + that target + that scene), and every switch the runner itself sets
+(RESERVED_SWITCHES, -Param:<k>) or that turns the process into another mode (MODE_SWITCHES). With every key unique, the order
+of the command line does not matter. A scene's bench_args do not enter the cell id: two scene entries that differ only in
+their switches are duplicate cells (load_matrix refuses them).
 """
 from __future__ import annotations
 
@@ -54,34 +57,47 @@ def switch_keys(arg: str) -> list[str]:
     return [lower.split("=", 1)[0]]
 
 
+def _scene_source(scene: dict[str, Any]) -> str:
+    return f"scenes[{scene.get('scenario')}{common.format_params({str(k): str(v) for k, v in (scene.get('params') or {}).items()})}].bench_args"
+
+
 def check_switches(document: dict[str, Any], extra_args: list[str] | None = None) -> None:
-    """Raises MatrixError when a switch of the matrix's bench_args, a target's bench_args or --bench-arg (extra_args) is one
-    the runner sets itself or a mode switch, or when one key appears twice for a cell (FParse::Value reads the first
-    occurrence only, so the other would be ignored silently)."""
+    """Raises MatrixError when a switch of the matrix's bench_args, a target's or a scene's bench_args or --bench-arg
+    (extra_args) is one the runner sets itself or a mode switch, or when one key appears twice for a cell (FParse::Value
+    reads the first occurrence only, so the other would be ignored silently)."""
     problems: list[str] = []
     shared = [("matrix bench_args", arg) for arg in document.get("bench_args", [])] + [("--bench-arg", arg) for arg in (extra_args or [])]
     targets = document.get("targets", [])
-    for source, arg in shared + [(f"targets[{t.get('label')}].bench_args", arg) for t in targets for arg in t.get("bench_args", [])]:
+    scenes = document.get("scenes", [])
+    every = (shared + [(f"targets[{t.get('label')}].bench_args", arg) for t in targets for arg in t.get("bench_args", [])]
+             + [(_scene_source(s), arg) for s in scenes for arg in s.get("bench_args", [])])
+    for source, arg in every:
         for key in switch_keys(arg):
             if key in RESERVED_SWITCHES:
-                problems.append(f"{source} '{arg}': -{key} is set by the runner for every run ({RESERVED_SWITCHES[key]})")
+                problem = f"{source} '{arg}': -{key} is set by the runner for every run ({RESERVED_SWITCHES[key]})"
             elif key.startswith("param:"):
-                problems.append(f"{source} '{arg}': scene parameters belong in scenes[].params (the runner passes -Param: per cell)")
+                problem = f"{source} '{arg}': scene parameters belong in scenes[].params (the runner passes -Param: per cell)"
             elif key in MODE_SWITCHES:
-                problems.append(f"{source} '{arg}': -{key} turns the process into another mode, not one matrix run")
+                problem = f"{source} '{arg}': -{key} turns the process into another mode, not one matrix run"
+            else:
+                continue
+            if problem not in problems:
+                problems.append(problem)
     for target in targets or [{}]:
-        seen: dict[str, tuple[str, str]] = {}
         own = [(f"targets[{target.get('label')}].bench_args", arg) for arg in target.get("bench_args", [])]
-        for source, arg in shared + own:
-            for key in switch_keys(arg):
-                if key in seen:
-                    first_source, first_arg = seen[key]
-                    message = (f"switch key '{key}' appears twice: {first_source} '{first_arg}' and {source} '{arg}' (the bench reads the first "
-                               f"occurrence only - FParse::Value, UE Parse.cpp:265 - so one of them would be ignored silently)")
-                    if message not in problems:
-                        problems.append(message)
-                else:
-                    seen[key] = (source, arg)
+        for scene in scenes or [{}]:
+            seen: dict[str, tuple[str, str]] = {}
+            scene_own = [(_scene_source(scene), arg) for arg in scene.get("bench_args", [])]
+            for source, arg in shared + own + scene_own:
+                for key in switch_keys(arg):
+                    if key in seen:
+                        first_source, first_arg = seen[key]
+                        message = (f"switch key '{key}' appears twice: {first_source} '{first_arg}' and {source} '{arg}' (the bench reads the first "
+                                   f"occurrence only - FParse::Value, UE Parse.cpp:265 - so one of them would be ignored silently)")
+                        if message not in problems:
+                            problems.append(message)
+                    else:
+                        seen[key] = (source, arg)
     if problems:
         raise MatrixError("bench switches: " + "; ".join(problems))
 
@@ -97,6 +113,7 @@ class Cell:
     threads: int
     frames: int           # 0 = the scene's default
     target_args: tuple[str, ...] = ()   # the target's own bench switches (e.g. -ini: / -ExecCmds of a variant); its label tells it apart
+    scene_args: tuple[str, ...] = ()    # the scene entry's own bench switches (M9, e.g. -StatesEvery=1); part of the cell's switches
 
     @property
     def params_dict(self) -> dict[str, str]:
@@ -117,8 +134,9 @@ class Cell:
         return common.short_hash(self.cell_id)
 
     def bench_args(self, include_target_args: bool = True) -> list[str]:
-        """The cell's switches, then (include_target_args) the target's own bench_args. No key of the target's switches
-        repeats a cell or matrix switch (check_switches), so their position does not decide anything."""
+        """The cell's switches (with the scene entry's bench_args), then (include_target_args) the target's own bench_args.
+        No key of the target's or the scene's switches repeats another switch of the cell (check_switches), so their
+        position does not decide anything."""
         args = [f"-Backend={self.backend}"]
         if self.variant:
             args.append(f"-BackendProfile={self.variant}")
@@ -127,11 +145,15 @@ class Cell:
         args.append(f"-Threads={self.threads}")
         if self.frames:
             args.append(f"-Frames={self.frames}")
+        args += list(self.scene_args)
         return args + (list(self.target_args) if include_target_args else [])
 
     def as_json(self) -> dict[str, Any]:
-        return {"cell_id": self.cell_id, "key": self.key, "label": self.label, "backend": self.backend, "variant": self.variant, "profile": self.profile,
-                "scenario": self.scenario, "params": self.params_dict, "T": self.threads, "frames": self.frames, "bench_args": list(self.target_args)}
+        out = {"cell_id": self.cell_id, "key": self.key, "label": self.label, "backend": self.backend, "variant": self.variant, "profile": self.profile,
+               "scenario": self.scenario, "params": self.params_dict, "T": self.threads, "frames": self.frames, "bench_args": list(self.target_args)}
+        if self.scene_args:
+            out["scene_bench_args"] = list(self.scene_args)
+        return out
 
 
 @dataclasses.dataclass(frozen=True)
@@ -240,7 +262,7 @@ def expand_cells(document: dict[str, Any]) -> list[Cell]:
                     params = tuple(sorted((str(k), str(v)) for k, v in scene.get("params", {}).items()))
                     cell = Cell(label=target["label"], backend=target["backend"], variant=target.get("variant", ""), profile=profile,
                                 scenario=scene["scenario"], params=params, threads=int(threads), frames=int(scene.get("frames") or 0),
-                                target_args=tuple(target.get("bench_args", [])))
+                                target_args=tuple(target.get("bench_args", [])), scene_args=tuple(scene.get("bench_args", [])))
                     if any(_matches(rule, cell) for rule in excludes):
                         continue
                     cells.append(cell)

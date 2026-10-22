@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
 
 DEFINE_LOG_CATEGORY_STATIC(LogPhysScene, Log, All);
 
@@ -211,6 +212,14 @@ namespace PhysicsTest
 		std::vector<FBodyInstance*> Bodies;               // creation order
 		std::vector<FConstraintInstance*> Constraints;
 		std::vector<FBodyInstance*> DeferredBodies;
+		std::vector<FConstraintInstance*> DeferredConstraints;    // M9: spawned, not yet sent (FlushDeferredActors)
+		std::vector<PtConstraintCreateInfo> MarshalledConstraints; // M9: every flushed constraint as marshalled (desc_sha256)
+		uint64 WarnedUnsupportedJointCaps = 0;                     // M9: one warning per missing PT_CAP_JOINT_* bit
+		// M9 forced overrides (02 10): the config's entries when the scene applies them, and what they did.
+		std::vector<FForcedOverride> ForcedOverrides;
+		std::vector<const FPhysicalMaterial*> ForcedMaterials;     // materials already processed (once per scene)
+		std::map<std::string, int32> ForcedBodyChanges;            // distinct body change -> bodies (one flush)
+		FForcedOverrideReport ForcedReport;
 
 		FPhysicsBackendModule* Module = nullptr;
 		std::unique_ptr<FPhysicsBackendScene> Backend;
@@ -264,6 +273,10 @@ namespace PhysicsTest
 		void RunBackendFrame(const FVector& FrameGravity, const FSetUpForFrameParams& Params, uint32 ExpectedSteps, uint32 ExpectedPushedSteps);
 		void FlushQueueOnly();
 		void AddForce(FBodyInstance* Body, const FVector& Value, bool bAllowSubstepping, bool bAccelChange, bool bIsTorque);
+		void ApplyForcedOverrides(std::span<FBodyInstance* const> NewBodies);
+		void FlushDeferredBodies();
+		void FlushDeferredConstraints();
+		[[nodiscard]] bool OwnsMaterial(const FPhysicalMaterial* Material) const;
 		void SetForcesClean(const FBodyInstance* Body, bool bClean);
 		FPendingKinematicTarget& FindOrAddKinematicTarget(FBodyInstance* Body);
 	};
@@ -623,6 +636,18 @@ namespace PhysicsTest
 		Impl->SceneDesc = Desc;
 		Impl->SceneDesc.DebugName = nullptr;
 		Impl->SceneDesc.Options = nullptr;
+		// M9: the forced overrides this scene applies after authoring (02 10).
+		if (Params.Config != nullptr && Params.bApplyForcedOverrides)
+		{
+			Impl->ForcedOverrides = Params.Config->ForcedOverrides;
+		}
+		Impl->ForcedReport.bEnabled = !Impl->ForcedOverrides.empty();
+		Impl->ForcedReport.NumOverrides = static_cast<int32>(Impl->ForcedOverrides.size());
+		if (Params.Config != nullptr && !Params.bApplyForcedOverrides && !Params.Config->ForcedOverrides.empty())
+		{
+			UE_LOG(LogPhysScene, Log, "scene '%s': the config's %zu forced override(s) are not applied (this scene keeps its authored values, e.g. a gate scene)",
+				Impl->DebugName.c_str(), Params.Config->ForcedOverrides.size());
+		}
 		Impl->Forces.reserve(64);
 		Impl->KinematicTargets.reserve(64);
 	}
@@ -670,12 +695,26 @@ namespace PhysicsTest
 	FConstraintInstance* FPhysScene::SpawnConstraint(const FConstraintInstance& Template, FBodyInstance* Body1, FBodyInstance* Body2)
 	{
 		checkf(Impl->IsIdle(), "FPhysScene::SpawnConstraint outside the Idle phase");
-		checkf((Body1 == nullptr || Body1->SpawnedBy == this) && (Body2 == nullptr || Body2->SpawnedBy == this),
-			"FPhysScene::SpawnConstraint: both bodies must be spawned by this scene");
+		// Fatal, not checkf (the test preset compiles checkf out): a joint the ABI cannot express must never reach a backend.
+		const char* Name = Template.JointName.empty() ? "<unnamed>" : Template.JointName.c_str();
+		if (Body1 == nullptr || Body1->SpawnedBy != this || (Body2 != nullptr && Body2->SpawnedBy != this))
+		{
+			UE_LOG(LogPhysScene, Fatal, "scene '%s': joint '%s': Body1 (the child) must be a body of this scene and Body2 a body of this scene or nullptr (the world)",
+				Impl->DebugName.c_str(), Name);
+		}
+		// The preset, the frames and Body1 != Body2 are checked now (the body indices are known at the flush).
+		PtConstraintCreateInfo Probe = {};
+		std::string Error;
+		if (!MarshalConstraint(Template, 0u, Body2 == nullptr ? PT_INDEX_NONE : (Body2 == Body1 ? 0u : 1u), Probe, Error))
+		{
+			UE_LOG(LogPhysScene, Fatal, "scene '%s': %s", Impl->DebugName.c_str(), Error.c_str());
+		}
 		FConstraintInstance& Constraint = Impl->ConstraintStorage.emplace_back(Template);
 		Constraint.Body1 = Body1;
 		Constraint.Body2 = Body2;
+		Constraint.ConstraintHandle = FPhysicsConstraintHandle();
 		Impl->Constraints.push_back(&Constraint);
+		Impl->DeferredConstraints.push_back(&Constraint);
 		Impl->Stats.NumConstraints = static_cast<int32>(Impl->Constraints.size());
 		return &Constraint;
 	}
@@ -708,46 +747,167 @@ namespace PhysicsTest
 	void FPhysScene::FlushDeferredActors()
 	{
 		checkf(Impl->IsIdle(), "FPhysScene::FlushDeferredActors outside the Idle phase");
-		if (Impl->DeferredBodies.empty())
+		if (!Impl->DeferredBodies.empty())
 		{
-			return;
+			Impl->FlushDeferredBodies();
 		}
-		Impl->VerifyConsoleVariables("FlushDeferredActors");   // the marshalling reads p.SensitiveSleepThresholdMultiplier
+		if (!Impl->DeferredConstraints.empty())
+		{
+			Impl->FlushDeferredConstraints();   // UE order: the bodies' actors exist first (02 6)
+		}
+	}
+
+	bool FPhysScene::FImpl::OwnsMaterial(const FPhysicalMaterial* Material) const
+	{
+		if (Material == &DefaultMaterial)
+		{
+			return true;
+		}
+		return std::any_of(Materials.begin(), Materials.end(), [Material](const FPhysicalMaterial& Owned) { return &Owned == Material; });
+	}
+
+	void FPhysScene::FImpl::ApplyForcedOverrides(const std::span<FBodyInstance* const> NewBodies)
+	{
+		// M9 (02 10): after authoring, before the marshalling - the backend receives the forced values and the host objects
+		// hold them too (debug draw, manifests). Mass fields are excluded by the resolver: the mass is already computed.
+		for (FBodyInstance* Body : NewBodies)
+		{
+			std::vector<std::string> Changes;
+			const int32 Changed = FProfileResolver::ApplyForcedOverrides(ForcedOverrides, *Body, &Changes);
+			++ForcedReport.NumBodies;
+			ForcedReport.NumBodiesChanged += Changed > 0 ? 1 : 0;
+			for (const std::string& Change : Changes)
+			{
+				++ForcedBodyChanges[Change];
+			}
+			const FPhysicalMaterial* Material = Body->GetSimplePhysicalMaterial();
+			if (Material == nullptr || std::find(ForcedMaterials.begin(), ForcedMaterials.end(), Material) != ForcedMaterials.end())
+			{
+				continue;
+			}
+			ForcedMaterials.push_back(Material);
+			++ForcedReport.NumMaterials;
+			if (!OwnsMaterial(Material))
+			{
+				// A material the scene does not own (a test's stack object): changing it would change another owner's object.
+				++ForcedReport.NumForeignMaterials;
+				UE_LOG(LogPhysScene, Error, "scene '%s': forced overrides: material '%s' of body '%s' is not owned by this scene (CreatePhysicalMaterial); not forced",
+					DebugName.c_str(), Material->Name.c_str(), Body->BodyName.c_str());
+				continue;
+			}
+			std::vector<std::string> MaterialChanges;
+			// Owned by this scene (the Materials deque or DefaultMaterial): the const pointer the body holds names a mutable object.
+			if (FProfileResolver::ApplyForcedOverrides(ForcedOverrides, *const_cast<FPhysicalMaterial*>(Material), &MaterialChanges) > 0)
+			{
+				++ForcedReport.NumMaterialsChanged;
+			}
+			for (const std::string& Change : MaterialChanges)
+			{
+				const std::string Line = "material '" + Material->Name + "': " + Change;
+				UE_LOG(LogPhysScene, Display, "scene '%s': forced override (after authoring): %s", DebugName.c_str(), Line.c_str());
+				ForcedReport.Changes.push_back(Line);
+			}
+		}
+	}
+
+	void FPhysScene::FImpl::FlushDeferredBodies()
+	{
+		VerifyConsoleVariables("FlushDeferredActors");   // the marshalling reads p.SensitiveSleepThresholdMultiplier
+		if (!ForcedOverrides.empty())
+		{
+			ForcedBodyChanges.clear();
+			ApplyForcedOverrides(DeferredBodies);
+			for (const auto& [Change, Count] : ForcedBodyChanges)
+			{
+				const std::string Line = std::to_string(Count) + (Count == 1 ? " body: " : " bodies: ") + Change;
+				UE_LOG(LogPhysScene, Display, "scene '%s': forced override (after authoring): %s", DebugName.c_str(), Line.c_str());
+				ForcedReport.Changes.push_back(Line);
+			}
+		}
 		FMarshalledActorBatch Batch;
 		std::string Error;
-		if (!Impl->Backend->MarshalBodies(Impl->DeferredBodies, Impl->Backend->GetNumBodies(), Impl->Settings, Batch, Error))
+		if (!Backend->MarshalBodies(DeferredBodies, Backend->GetNumBodies(), Settings, Batch, Error))
 		{
-			UE_LOG(LogPhysScene, Fatal, "scene '%s': cannot create the deferred bodies: %s", Impl->DebugName.c_str(), Error.c_str());
+			UE_LOG(LogPhysScene, Fatal, "scene '%s': cannot create the deferred bodies: %s", DebugName.c_str(), Error.c_str());
 		}
-		Impl->CheckBackend(Impl->Backend->CreateActors(Impl->DeferredBodies, Batch), "CreateMaterials / CreateActors");
-		HashBatchDescription(Impl->DescFlushes, Batch);
-		HashBatchOptions(Impl->OptionsFlushes, Batch);
-		++Impl->NumFlushes;
+		CheckBackend(Backend->CreateActors(DeferredBodies, Batch), "CreateMaterials / CreateActors");
+		HashBatchDescription(DescFlushes, Batch);
+		HashBatchOptions(OptionsFlushes, Batch);
+		++NumFlushes;
 		// Initial object states as the engine has them after step 5 (put to sleep), e.g. Sleeping for !bStartAwake.
 		uint32 Count = 0;
-		Impl->CheckBackend(Impl->Backend->PullBodyStates(PT_READ_ALL, Count), "ReadBodyStates");
-		for (FBodyInstance* Body : Impl->DeferredBodies)
+		CheckBackend(Backend->PullBodyStates(PT_READ_ALL, Count), "ReadBodyStates");
+		for (FBodyInstance* Body : DeferredBodies)
 		{
 			Body->bDeferred = false;
-			++Impl->Stats.NumBodies;
+			++Stats.NumBodies;
 			if (Body->IsStatic())
 			{
-				++Impl->Stats.NumStaticBodies;
+				++Stats.NumStaticBodies;
 			}
 			else if (Body->IsKinematic())
 			{
-				++Impl->Stats.NumKinematicBodies;
+				++Stats.NumKinematicBodies;
 			}
 			else
 			{
-				++Impl->Stats.NumDynamicBodies;
-				if (!Body->bStartAwake && !Impl->TestSettings.bAllowSleeping)
+				++Stats.NumDynamicBodies;
+				if (!Body->bStartAwake && !TestSettings.bAllowSleeping)
 				{
-					++Impl->Stats.NumStartAsleepSkipped;   // 02 6 step 5 skipped by every engine (recorded in the manifest)
+					++Stats.NumStartAsleepSkipped;   // 02 6 step 5 skipped by every engine (recorded in the manifest)
 				}
 			}
 		}
-		Impl->DeferredBodies.clear();
+		DeferredBodies.clear();
+	}
+
+	void FPhysScene::FImpl::FlushDeferredConstraints()
+	{
+		// M9 (02 6, docs/Abi.md 9.4): CreateConstraints after CreateActors. Every joint is marshalled (desc_sha256 is
+		// engine-independent); the ones whose type the backend lacks stay host-only.
+		std::vector<FConstraintInstance*> Supported;
+		std::vector<PtConstraintCreateInfo> SupportedInfos;
+		const FBackendInfo& BackendInfo = Module->GetInfo();
+		for (FConstraintInstance* Constraint : DeferredConstraints)
+		{
+			const auto IndexOf = [this, Constraint](const FBodyInstance* Body) -> uint32
+			{
+				if (Body == nullptr)
+				{
+					return PT_INDEX_NONE;
+				}
+				if (!Body->ActorHandle.IsValid() || Body->ActorHandle.Scene != Backend.get())
+				{
+					UE_LOG(LogPhysScene, Fatal, "scene '%s': joint '%s' names body '%s', which has no actor in this scene (not flushed, or released)", DebugName.c_str(),
+						Constraint->JointName.c_str(), Body->BodyName.c_str());
+				}
+				return Body->ActorHandle.Index;
+			};
+			PtConstraintCreateInfo Info = {};
+			std::string Error;
+			if (!MarshalConstraint(*Constraint, IndexOf(Constraint->Body1), IndexOf(Constraint->Body2), Info, Error))
+			{
+				UE_LOG(LogPhysScene, Fatal, "scene '%s': %s", DebugName.c_str(), Error.c_str());
+			}
+			MarshalledConstraints.push_back(Info);
+			const uint64 Needed = GetJointCapability(Info);
+			if (BackendInfo.Has(Needed))
+			{
+				Supported.push_back(Constraint);
+				SupportedInfos.push_back(Info);
+				continue;
+			}
+			++Stats.NumUnsupportedConstraints;
+			if ((WarnedUnsupportedJointCaps & Needed) == 0)
+			{
+				WarnedUnsupportedJointCaps |= Needed;
+				UE_LOG(LogPhysScene, Warning, "scene '%s': backend '%s' does not declare %s: its %s joints stay host-only (not simulated; a bench run refuses "
+					"such a scene before it starts)", DebugName.c_str(), BackendName.c_str(), Needed == PT_CAP_JOINT_BALL ? "PT_CAP_JOINT_BALL" : "PT_CAP_JOINT_HINGE",
+					Needed == PT_CAP_JOINT_BALL ? "ball" : "hinge");
+			}
+		}
+		CheckBackend(Backend->CreateConstraints(Supported, SupportedInfos), "CreateConstraints");
+		DeferredConstraints.clear();
 	}
 
 	void FPhysScene::ReleaseBody(FBodyInstance* Body)
@@ -1030,6 +1190,16 @@ namespace PhysicsTest
 		return Impl->Constraints;
 	}
 
+	std::span<const PtConstraintCreateInfo> FPhysScene::GetMarshalledConstraints() const
+	{
+		return Impl->MarshalledConstraints;
+	}
+
+	const FForcedOverrideReport& FPhysScene::GetForcedOverrideReport() const
+	{
+		return Impl->ForcedReport;
+	}
+
 	int32 FPhysScene::GetNumDeferredActors() const
 	{
 		return static_cast<int32>(Impl->DeferredBodies.size());
@@ -1133,42 +1303,36 @@ namespace PhysicsTest
 		Impl->CheckBackend(Result, "CaptureDebugSnapshot / ReadDebugSnapshot");
 		Out.FrameIndex = Impl->FrameCount;
 		Out.SimTime = Impl->SimTime;
+		// M9: the backend numbers only the joints it created; the drawer needs the FConstraintInstance (GetConstraints index).
+		Out.JointHostIndex.resize(Out.Joints.size());
+		for (size_t Index = 0; Index < Out.Joints.size(); ++Index)
+		{
+			const FConstraintInstance* Constraint = Impl->Backend->GetConstraint(Out.Joints[Index].JointIndex);
+			const auto Found = std::find(Impl->Constraints.begin(), Impl->Constraints.end(), Constraint);
+			Out.JointHostIndex[Index] = Found != Impl->Constraints.end() ? static_cast<int32>(Found - Impl->Constraints.begin()) : -1;
+		}
 		return true;
 	}
 
 	std::string FPhysScene::ComputeDescSha256(const std::span<const float> FrameDeltaSeconds) const
 	{
-		checkf(Impl->DeferredBodies.empty(), "FPhysScene::ComputeDescSha256 with deferred bodies: call FlushDeferredActors first");
+		checkf(Impl->DeferredBodies.empty() && Impl->DeferredConstraints.empty(),
+			"FPhysScene::ComputeDescSha256 with deferred bodies or constraints: call FlushDeferredActors first");
 		FHashWriter W = Impl->DescFlushes;   // the flushes so far, then the rest
 		W.Tag("physicstest.desc/1");
 		W.U32(Impl->NumFlushes);
-		// Constraints (data only until M9): bodies by creation order, frames, profile.
-		const auto BodyOrder = [this](const FBodyInstance* Body) -> uint32
-		{
-			const auto Found = std::find(Impl->Bodies.begin(), Impl->Bodies.end(), Body);
-			return Body == nullptr || Found == Impl->Bodies.end() ? PT_INDEX_NONE : static_cast<uint32>(Found - Impl->Bodies.begin());
-		};
+		// Constraints (M9): as marshalled (PtConstraintCreateInfo, the bytes every backend receives - host-only ones included,
+		// so the hash does not depend on the engine's joint capabilities).
 		W.Tag("constraints");
-		W.U32(static_cast<uint32>(Impl->Constraints.size()));
-		for (const FConstraintInstance* C : Impl->Constraints)
+		W.U32(static_cast<uint32>(Impl->MarshalledConstraints.size()));
+		for (const PtConstraintCreateInfo& C : Impl->MarshalledConstraints)
 		{
-			W.U32(BodyOrder(C->Body1));
-			W.U32(BodyOrder(C->Body2));
-			W.Vec(C->Pos1);
-			W.Vec(C->PriAxis1);
-			W.Vec(C->SecAxis1);
-			W.Vec(C->Pos2);
-			W.Vec(C->PriAxis2);
-			W.Vec(C->SecAxis2);
-			const FConstraintProfileProperties& P = C->ProfileInstance;
-			W.F32(P.LinearLimit.Limit);
-			W.U32(static_cast<uint32>(P.LinearLimit.XMotion) | (static_cast<uint32>(P.LinearLimit.YMotion) << 8) | (static_cast<uint32>(P.LinearLimit.ZMotion) << 16));
-			W.F32(P.ConeLimit.Swing1LimitDegrees);
-			W.F32(P.ConeLimit.Swing2LimitDegrees);
-			W.F32(P.TwistLimit.TwistLimitDegrees);
-			W.U32(static_cast<uint32>(P.ConeLimit.Swing1Motion) | (static_cast<uint32>(P.ConeLimit.Swing2Motion) << 8)
-				| (static_cast<uint32>(P.TwistLimit.TwistMotion) << 16));
-			W.U32(P.bDisableCollision ? 1u : 0u);
+			W.U32(C.Type);
+			W.U32(C.Body1);
+			W.U32(C.Body2);
+			W.U32(C.Flags);
+			W.Transform(C.Frame1);
+			W.Transform(C.Frame2);
 		}
 		// Gravity and the dt sequence: NominalDeltaTime and the harness plan of every frame (from a fresh accumulator).
 		W.Tag("gravity");

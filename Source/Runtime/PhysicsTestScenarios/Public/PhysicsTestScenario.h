@@ -102,7 +102,14 @@ namespace PhysicsTest
 		// Runs at the start of every frame (FPhysScene::OnPhysScenePreTick, wired by the bench, the viewer and the gates). The
 		// scenario object is a shared static instance: it keeps no per-scene state (frame 0 is Scene.GetFrameCount() == 0).
 		virtual void OnPreTick(FPhysScene& /*Scene*/, float /*DeltaSeconds*/) {}
-		[[nodiscard]] virtual uint64 GetRequiredCapabilities() const { return 0; }
+		// PT_CAP_* bits the scene needs to mean anything (M9: the joint scenes need PT_CAP_JOINT_BALL / _HINGE, per their
+		// resolved parameters). The bench refuses a backend without them before it initialises the backend (exit 2, status
+		// unsupported, docs/ResultsSchema.md); FPhysScene itself only keeps unsupported joints host-only (a viewer can open
+		// the scene and show it unjointed).
+		[[nodiscard]] virtual uint64 GetRequiredCapabilities(const FScenarioParams& /*Resolved*/) const { return 0; }
+		// M9 (02 10): whether the config's [/Script/PhysicsTest.ForcedOverrides] apply to this scene after authoring. Gate
+		// scenes keep their authored values: their references need their own per-material combine modes (S05, S06).
+		[[nodiscard]] virtual bool AllowsForcedOverrides() const { return GetKind() != EScenarioKind::Gate; }
 		// True for a scene that only means something with sleeping allowed (M6: S08.StartAsleep, G6 - Normalized skips the
 		// start-asleep step, 02 6). The bench refuses it under a profile with bAllowSleeping = False (exit 2).
 		[[nodiscard]] virtual bool RequiresSleeping() const { return false; }

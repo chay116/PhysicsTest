@@ -34,7 +34,7 @@ namespace PhysicsTest
 
 	struct FGateReport
 	{
-		std::string Gate;                 // "A0".."A10" (no A8 before M14), "G0".."G12"
+		std::string Gate;                 // "A0".."A10" (no A8 before M14), "G0".."G12", "J1" (M9)
 		std::string Target;               // e.g. "Null (static)", "Null (DLL)"
 		EGateResult Result = EGateResult::Pass;
 		int32 NumChecks = 0;

@@ -284,7 +284,9 @@ TEST_CASE("PhysicsTest.Gates.ToleranceFileIsComplete")
 		{ "G4", "contact_detect_cms" }, { "G4", "contact_detect_rel" }, { "G5", "stop_distance_rel" }, { "G5", "final_speed_cms" }, { "G5", "hold_displacement_cm" },
 		{ "G5", "hold_speed_cms" }, { "G5", "hold_acceleration_cms2" }, { "G5", "slide_fraction_min" }, { "G5", "slide_fraction_max" }, { "G6", "asleep_dz_cm" },
 		{ "G6", "awake_fall_min_cm" }, { "G6", "wake_velocity_rel" }, { "G6", "wake_displacement_rel" }, { "G7", "omega_abs_rads" }, { "G7", "step_angle_abs_rad" },
-		{ "G7", "step_angle_model" },
+		{ "G7", "step_angle_model" }, { "J1", "hinge_stretch_cm" }, { "J1", "ball_stretch_cm" }, { "J1", "hinge_axis_rad" }, { "J1", "swing_through_x_cm" },
+		{ "J1", "snapshot_frame_cm" }, { "J1", "snapshot_frame_rad" }, { "J1", "moving_couple_rel" }, { "J1", "com_offset_stretch_cm" }, { "J1", "impulse_rel" },
+		{ "J1", "couple_rel" }, { "J1", "collision_push_cm" }, { "J1", "disable_collision_drift_cm" },
 	};
 	for (const auto& [Gate, Check] : Checks)
 	{
@@ -304,6 +306,9 @@ TEST_CASE("PhysicsTest.Gates.ToleranceFileIsComplete")
 	CHECK(bPostRun);
 	CHECK(Tolerances.Get("G4", "restitution_velocity_model", "Jolt", "Default", "UEParity", nullptr, &bPostRun) == 0.0);
 	CHECK_FALSE(bPostRun);
+	// Bullet's contact-state model (M9 S-3), registered after the M9 runs and signed off by the lead with the M9 commit.
+	CHECK(Tolerances.Get("G4", "restitution_velocity_model", "Bullet", "StaticAabbOff", "Normalized", nullptr, &bPostRun) == 2.0);
+	CHECK(bPostRun);
 	CHECK(Tolerances.Get("G5", "stop_distance_rel", "Bullet", "Default", "Normalized") == 0.01);
 	CHECK(Tolerances.Get("G2", "com_abs_cm", "PhysX", "UE4Compat", "UEParity") == 1e-5);
 	// Skips: Null may skip what needs collision or contacts; no SDK engine and no Chaos may skip anything.
@@ -321,6 +326,14 @@ TEST_CASE("PhysicsTest.Gates.ToleranceFileIsComplete")
 		CAPTURE(Gate);
 		CHECK(Tolerances.FindAllowedSkip(Gate, "Null", "", "UEParity") == nullptr);
 	}
+	// J1 (M9 fix round 0): a backend without joints skips - Null, and the Chaos bridge until it declares PT_CAP_JOINT_* (once it
+	// declares one the gate runs and cannot skip); no SDK engine.
+	CHECK(Tolerances.FindAllowedSkip("J1", "Null", "", "UEParity") != nullptr);
+	CHECK(Tolerances.FindAllowedSkip("J1", "NullDll", "", "Normalized") != nullptr);
+	CHECK(Tolerances.FindAllowedSkip("J1", "Chaos", "", "UEParity") != nullptr);
+	CHECK(Tolerances.FindAllowedSkip("J1", "Jolt", "Default", "UEParity") == nullptr);
+	CHECK(Tolerances.FindAllowedSkip("J1", "Bullet", "Default", "Normalized") == nullptr);
+	CHECK(Tolerances.FindAllowedSkip("J1", "PhysX", "UE4Compat", "Normalized") == nullptr);
 	// A rule needs a reason: a "const:" expectation or an override without one does not load.
 	Gates::FTolerances Bad;
 	std::string Error;
@@ -339,13 +352,16 @@ TEST_CASE("PhysicsTest.Gates.ToleranceFileIsComplete")
 	CHECK_FALSE(Bad.LoadText(R"({"schema":"physicstest.tolerances/1","version":1,"gates":{"G":{"c":{"default":1,"reason":"d","overrides":[
 		{"engine":"E","value":2,"reason":"e","sign_off":"pending"}]}}}})", "bad", Error));
 	CHECK(Error.find("sign_off") != std::string::npos);
-	// Every post-run registration of the real file carries its sign-off; the list is what the lead signs.
+	// Every post-run registration of the real file carries its sign-off; the list is what the lead signs. M9 commit: the lead
+	// signed every one (2026-10-22) - a new post-run registration waits as "pending" and fails here until the lead signs it, so
+	// no commit carries an unsigned one (docs/Progress.md M9 리드 결정).
 	const std::vector<std::string> PostRun = Tolerances.ListPostRunRegistrations();
-	CHECK(PostRun.size() == 9u);   // G4 PhysX (D-3), G5 PhysX PGS x 6 (D-4), G7 Null / NullDll (D-6)
+	CHECK(PostRun.size() == 11u);   // G4 PhysX (D-3), G4 Bullet model 2 (M9 S-3), G5 PhysX PGS x 6 (D-4), G7 Null / NullDll (D-6), J1 Bullet ball (M9 J-1)
 	for (const std::string& Line : PostRun)
 	{
 		MESSAGE("post-run registration: " << Line);
 		CHECK(Line.find("(sign-off: ") != std::string::npos);
+		CHECK_MESSAGE(Line.find("(sign-off: pending)") == std::string::npos, "unsigned post-run registration: " << Line);
 	}
 	std::string SignOff;
 	CHECK(Tolerances.Get("G5", "hold_speed_cms", "PhysX", "SdkDefault", "Normalized", nullptr, &bPostRun, &SignOff) == 3.0);
@@ -374,6 +390,7 @@ TEST_CASE("PhysicsTest.Gates.G5") { RunGateOnAllTargets("G5"); }
 TEST_CASE("PhysicsTest.Gates.G6") { RunGateOnAllTargets("G6"); }
 TEST_CASE("PhysicsTest.Gates.G7") { RunGateOnAllTargets("G7"); }
 TEST_CASE("PhysicsTest.Gates.G9") { RunGateOnAllTargets("G9"); }
+TEST_CASE("PhysicsTest.Gates.J1") { RunGateOnAllTargets("J1"); }
 TEST_CASE("PhysicsTest.Gates.G12") { RunGateOnAllTargets("G12"); }
 
 // The selection rules of RunPhysicsGates, on Null (cheap): a Skip that tolerances.json does not register is a Fail, and G12
@@ -430,7 +447,7 @@ TEST_CASE("PhysicsTest.Gates.SelectionRules")
 	CHECK(Reports[0].Gate == "G12");
 	CHECK(Reports[0].Result == EGateResult::Pass);
 	const bool bRanSuite = std::any_of(Reports[0].Notes.begin(), Reports[0].Notes.end(),
-		[](const std::string& Note) { return Note.find("the 9 gates before G12 ran too") != std::string::npos; });
+		[](const std::string& Note) { return Note.find("the 10 gates before G12 ran too") != std::string::npos; });
 	CHECK(bRanSuite);
 	MESSAGE(Reports[0].Summary());
 	FPhysicsBackendRegistry::Get().TermIdleModules();

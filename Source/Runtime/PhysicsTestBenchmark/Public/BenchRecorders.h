@@ -87,8 +87,9 @@ namespace PhysicsTest
 		// contacts.ptcn (PTCN v1, little-endian, 02 12.3): a 32-byte header {char magic[4] "PTCN", u32 version 1, u32
 		// record_size 128, u32 frame_count, u32 flags, u32 abi_provisional_revision, u32 point_pose, u32 reserved}, then per
 		// recorded frame {u32 frame, u32 count} and count PtContactPoint records as the backend wrote them (128 bytes each,
-		// docs/Abi.md 7.1 conventions). abi_provisional_revision is PT_ABI_PROVISIONAL_REVISION (PtContactPoint is a
-		// PROVISIONAL(M9) struct: a reader rejects a file of another revision even at the same record size); point_pose is the
+		// docs/Abi.md 7.1 conventions). abi_provisional_revision is PT_ABI_PROVISIONAL_REVISION (PtContactPoint was a
+		// PROVISIONAL(M9) struct, final in v1.1 at revision 3: a reader rejects a file of another revision even at the same
+		// record size); point_pose is the
 		// backend's effective key contact.point_pose (0 start-of-step, 1 predicted; UnknownPointPose when not declared). Both
 		// fill reserved words of the M7 header (M8, M7 review): the layout and version 1 are unchanged.
 		class FContactRecorder
@@ -110,6 +111,39 @@ namespace PhysicsTest
 			uint32 FrameCount = 0;
 			uint64 PointCount = 0;
 			bool bFailed = false;
+		};
+
+		// native_draw.csv (M9, 03 M9 "the command stream only, no rendering"): one row per captured frame of a
+		// -Instrument=native_debug_draw run on a PT_CAP_NATIVE_DEBUG_DRAW backend - the PT_SNAP_NATIVE_DRAW commands counted per
+		// PT_DD_* type, the string bytes, the backend's truncation flag and h_draw, an FNV-1a 64 hash over the 160-byte
+		// PtDebugDrawCmd records as the backend wrote them and the string pool. Two runs of one build compare the stream frame
+		// by frame through h_draw without storing it. Rows are pre-sized before frame 0 and recorded between frames.
+		struct FNativeDrawRow
+		{
+			static constexpr uint32 NumTypes = PT_DD_STRING + 1;
+			uint32 Frame = 0;
+			uint32 Commands = 0;
+			uint32 ByType[NumTypes] = {};
+			uint32 OtherType = 0;      // a command type outside PT_DD_* (a backend bug: counted, never dropped)
+			uint32 StringBytes = 0;
+			bool bTruncated = false;
+			uint64 DrawHash = 0;
+		};
+
+		class FNativeDrawRecorder
+		{
+		public:
+			void Reserve(size_t NumRows) { Rows.reserve(NumRows); }
+			void Record(uint32 Frame, std::span<const PtDebugDrawCmd> Commands, const std::string& StringPool, bool bTruncated);
+			bool WriteCsv(const std::filesystem::path& Path) const;
+			[[nodiscard]] const std::vector<FNativeDrawRow>& GetRows() const { return Rows; }
+			[[nodiscard]] uint64 GetCommandCount() const { return CommandCount; }
+			[[nodiscard]] uint32 GetTruncatedFrames() const { return TruncatedFrames; }
+
+		private:
+			std::vector<FNativeDrawRow> Rows;
+			uint64 CommandCount = 0;
+			uint32 TruncatedFrames = 0;
 		};
 	}
 }

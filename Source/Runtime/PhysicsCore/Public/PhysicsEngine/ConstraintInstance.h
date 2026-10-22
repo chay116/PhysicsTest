@@ -1,5 +1,6 @@
 // ConstraintInstance.h - FConstraintInstance and FConstraintProfileProperties, Phase-1 subset (UE: Engine/Classes/
-// PhysicsEngine/ConstraintInstance.h, ConstraintTypes.h). [MVP M1: data only; joints are exercised in M9]
+// PhysicsEngine/ConstraintInstance.h, ConstraintTypes.h). [MVP M1: data; M9: FPhysScene creates them in the backend
+// (FlushDeferredActors -> CreateConstraints, docs/Abi.md 9.4)]
 // UE's nesting is kept (ConstraintInstance.h:105-115 [V]): ProfileInstance.LinearLimit / ConeLimit / TwistLimit and
 // bDisableCollision. Defaults: ConstraintTypes.cpp:43-70 [V]. Drives, soft limits, projection and breakage are not
 // part of Phase 1 (ball and hinge only, DL31). Body1 is the child (ConstraintBone1), Body2 the parent
@@ -84,6 +85,12 @@ namespace PhysicsTest
 
 		// UE: FConstraintInstance::GetRefFrame - rotation with columns (Pri, Sec, Pri ^ Sec) and translation Pos.
 		[[nodiscard]] FTransform GetRefFrame(EConstraintFrame Frame) const;
+		// M9: the frame in world space at the host's last pulled pose of its body (FBodyInstance::State.BodyTM x GetRefFrame;
+		// Frame2 itself for the world). The host view of PtJointSnapshot::Frame1World / Frame2World (docs/Abi.md 9.4).
+		[[nodiscard]] FTransform GetWorldFrame(EConstraintFrame Frame) const;
+		// M9: the backend simulates this joint (FPhysScene created it there; a released body or a backend without the joint's
+		// capability leaves it host-only).
+		[[nodiscard]] bool IsSimulated() const { return ConstraintHandle.IsValid(); }
 
 		[[nodiscard]] EAngularConstraintMotion GetAngularSwing1Motion() const { return ProfileInstance.ConeLimit.Swing1Motion; }
 		[[nodiscard]] EAngularConstraintMotion GetAngularSwing2Motion() const { return ProfileInstance.ConeLimit.Swing2Motion; }

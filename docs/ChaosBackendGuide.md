@@ -1,7 +1,7 @@
 # Chaos 백엔드 구현 가이드 (초안)
 
-> **작성일:** 2026-10-21 (M6. 수정 라운드 2 2026-10-22: §0, §10, §12 G3·G4, §15)
-> **상태:** 초안. 동결된 ABI 핵심 v1.0(`abi-v1.0`, [Abi.md](Abi.md))을 기준으로 쓴다. 조인트·디버그 스냅샷·네이티브 드로는 "M9까지 잠정"이므로 그 절은 M9에서 다시 본다. 사용자가 M13에서 이 문서를 따라 Chaos 브리지를 구현한다.
+> **작성일:** 2026-10-21 (M6. 수정 라운드 2 2026-10-22: §0, §10, §12 G3·G4, §15. M9 2026-10-22: §2, §10, §10.1 - ABI v1.1. M9 마감 2026-10-22: §10.1 M13 (b) 확인 조건)
+> **상태:** 초안. 동결된 ABI **v1.1**(태그 `abi-v1.1`은 리드가 M9 커밋에 단다, [Abi.md](Abi.md))을 기준으로 쓴다: 핵심은 M6의 v1.0 그대로이고, M9까지 잠정이던 조인트·디버그 스냅샷·네이티브 드로가 M9에서 세 SDK 엔진 구현으로 확정되었다 (§10, §10.1, [Abi.md](Abi.md) §9.2·§9.4, `PT_ABI_PROVISIONAL_REVISION` 3에서 동결). 사용자가 M13에서 이 문서를 따라 Chaos 브리지를 구현한다.
 > **관련 문서:** [Abi.md](Abi.md) · [02_Architecture.md](02_Architecture.md) §7, §9.6, §10, §15 · [03_WorkPlan.md](03_WorkPlan.md) M2.5, M6, M13 · [04_DecisionLog.md](04_DecisionLog.md) DL08, DL19, DL29, DL38~DL41 · [Scenes.md](Scenes.md) · `Config/Golden/tolerances.json`
 > **근거 표기:** **[V]** UE 5.8.3 소스(`D:\UnrealEngine`)나 하네스 코드를 직접 읽어 확인 · **[R]** 추정 (M13에서 확인할 것). UE 소스는 읽기만 했고 이 문서의 어떤 코드도 UE에서 복사하지 않았다.
 
@@ -24,7 +24,7 @@
 | 마찰 | F, SF를 그대로 `FChaosPhysicsMaterial`에. 쌍 규칙은 Chaos가 직접 계산한다 | §5 |
 | 명령 | v1.0 계약: 속도·상태 쓰기는 잠든 바디를 깨운다 (Chaos `SetV`가 이미 그렇다. nearly zero 속도만 백엔드 정의이고 `command.nearly_zero_velocity_wakes` = 0으로 선언한다). G6가 Chaos에서 확인한다 | §7, §9 |
 | 금지 | `RequestExit`, `SetStandaloneSolver(true)`, `FreeLibrary` | §2 |
-| 게이트 | A0~A7, A9, A10, G1~G7, G9, G12. `PT_MODULE_NO_REINIT`이면 A 게이트는 프로세스당 하나, 물리 게이트는 또 다른 프로세스 하나 (벤치가 섞인 `-Gates=` 목록을 거부한다). 거부된 `InitGamePhys`는 부작용이 없어야 한다 (§2 0단계). Chaos는 등록된 Skip이 없으므로 G3는 접촉을 캡처하는 DLL(`PT_CAP_CONTACT_POINTS`, 잠정 리비전 일치)로 돈다 | §2, §11 |
+| 게이트 | A0~A7, A9, A10, G1~G7, G9, G12 (M13 (a)). 조인트 계약 J1은 같은 물리 게이트 프로세스에서 돌고 조인트를 선언하기 전에는 등록된 Skip, M13 (b)에서 Pass다 (§10.1). `PT_MODULE_NO_REINIT`이면 A 게이트는 프로세스당 하나, 물리 게이트는 또 다른 프로세스 하나 (벤치가 섞인 `-Gates=` 목록을 거부한다). 거부된 `InitGamePhys`는 부작용이 없어야 한다 (§2 0단계). Chaos는 등록된 Skip이 없으므로 G3는 접촉을 캡처하는 DLL(`PT_CAP_CONTACT_POINTS`, 잠정 리비전 일치)로 돈다 | §2, §11 |
 
 ---
 
@@ -55,9 +55,9 @@
 
 **GetInfo**
 - `ModuleFlags`: `PT_MODULE_UE_RUNTIME | PT_MODULE_ONE_PER_PROCESS | PT_MODULE_NO_REINIT | PT_MODULE_SPAWNS_THREADS_AT_INIT` (+ Development DLL이면 `PT_MODULE_DEBUG_DRAW_COMPILED`). `NO_REINIT`의 결과는 §11.
-- `Capabilities`: `COLLISION | KINEMATIC | SLEEPING | CCD | GYROSCOPIC | MULTITHREADED | NATIVE_FRAME_MODEL | ACTIVE_LIST | NATIVE_HASH` (+ M9 이후 잠정 항목). `STATE_WRITE`는 선택이다 (SET_BODY_STATE를 구현하면 선언한다).
+- `Capabilities`: `COLLISION | KINEMATIC | SLEEPING | CCD | GYROSCOPIC | MULTITHREADED | NATIVE_FRAME_MODEL | ACTIVE_LIST | NATIVE_HASH` (+ v1.1 항목: 조인트를 구현하면 `JOINT_BALL | JOINT_HINGE | JOINT_SNAPSHOT`, 접촉을 캡처하면 `CONTACT_*`, Development DLL의 네이티브 드로면 `NATIVE_DEBUG_DRAW`; §10). `STATE_WRITE`는 선택이다 (SET_BODY_STATE를 구현하면 선언한다).
 - `RequiredEffectiveKeys`: `threads.single_worker`, `threads.max_num_workers`, `chaos.threading_mode`, `chaos.async_dt`, `chaos.use_async_interpolation` (02 §10, DL39). A7이 일반 집합 25개와 함께 확인한다.
-- `ProvisionalRevision = PT_ABI_PROVISIONAL_REVISION`. 다르면 호스트가 잠정 capability를 없는 것으로 본다.
+- `ProvisionalRevision = PT_ABI_PROVISIONAL_REVISION` (v1.1에서 3으로 동결). 다르면 호스트가 `PT_CAP_PROVISIONAL_MASK`의 capability(조인트·접촉·스냅샷·드로)를 없는 것으로 본다. 그래서 브리지는 v1.1 헤더로 빌드한다.
 
 **InitGamePhys 순서** (init 스레드가 GameThread가 된다, 02 §15.3)
 0. **UE 호출 전에 인자를 모두 검사한다 (M6 수정 라운드 1).** `StructSize`, `MaxThreads ≥ 1`, `NumOptions`/`Options`, 키·값의 NULL은 Kit이 `Backend->InitGamePhys` 전에 거부한다 (PtBackendKit.h `InitGamePhys`). 브리지는 그다음 **모든 옵션 키와 값**(아는 키인지, 값이 파싱되는지)을 PreInit 전에 검사하고, 하나라도 틀리면 UE를 건드리지 않고 `PT_E_INVALID_ARG`를 낸다. 그래야 거부된 Init이 부작용이 없고 모듈이 Loaded로 남아 다음 유효한 Init을 받을 수 있다. A1(작은 `StructSize`로 거부된 Init 뒤 유효한 Init)과 A4(NULL, `MaxThreads` 0, 모르는 옵션, `Options` 없는 `NumOptions` 네 번 거부 뒤 유효한 Init)가 한 프로세스에서 이 순서를 요구한다 (AbiGates.cpp A1, A4 모듈 수준 사례). PreInit을 한 뒤에 옵션을 거부하면 `NO_REINIT` 브리지는 다음 Init을 받을 수 없다.
@@ -77,7 +77,7 @@
 
 **stdout (M7, M6 검토 지적):** `-List`, `-Describe`, `-SceneHashes`는 stdout에 JSON 하나만 내야 한다 (M8 도구가 파싱한다. 하네스 로그는 이 모드에서 모두 stderr로 간다). 브리지는 stdout에 아무것도 쓰지 않는다: PreInit 명령줄에 `-stdout`을 넣지 않고, 콘솔 출력 장치(`FOutputDeviceStdOutput` 등)를 붙이지 않는다. UE 로그는 `PtLogCallback`(호스트 로그, stderr)이나 `-ABSLOG` 파일로만 보낸다. M13에서 Chaos `-Describe`의 stdout 순수성을 `Bench.Conformance`에 더한다 (C-10).
 
-**Reserved 필드 (M7):** 입력 구조체의 `Reserved*`는 호스트가 언제나 0으로 쓰고, M7 이후의 Kit은 0이 아니면 `PT_E_INVALID_ARG`로 거부한다 ([Abi.md](Abi.md) §2). 브리지는 Kit을 쓰므로 따로 할 일이 없다. 출력 구조체의 Reserved에는 0을 쓴다.
+**Reserved 필드 (M7):** 입력 구조체의 `Reserved*`는 호스트가 언제나 0으로 쓰고, M7 이후의 Kit은 0이 아니면 `PT_E_INVALID_ARG`로 거부한다 ([Abi.md](Abi.md) §2). 브리지는 Kit을 쓰므로 따로 할 일이 없다 (v1.1, M9 수정 라운드 1: 디버그 스냅샷의 `PtDebugSnapshotRequest.Reserved`·`PtDebugSnapshotBuffers.Reserved`와 `PT_SNAP_ALL` 밖의 요청 bit도 Kit이 capability 전에 거부한다. 브리지의 `CaptureDebugSnapshot`은 정의된 bit만 받는다). 출력 구조체의 Reserved에는 0을 쓴다.
 
 **MXCSR (A6):** PreInit이 MXCSR(FTZ/DAZ)을 바꿀 수 있다. Kit은 호출마다 호출 전 값을 되돌리고 경고를 한 번 남기며 `kit.mxcsr_restores`를 센다. A6는 그 경고가 하나라도 나오면 실패한다. 경고가 나오면 PreInit 이후 브리지가 UE가 정한 MXCSR로 도는지(엔진 정책) 호스트 값으로 도는지 결정해야 한다 (M2.5 SP2 기록 항목).
 
@@ -188,15 +188,43 @@
 
 ---
 
-## 10. 디버그 스냅샷과 네이티브 드로 (잠정, M9까지)
+## 10. 디버그 스냅샷과 네이티브 드로 (v1.1 확정)
 
-이 절의 구조체와 진입점(`CaptureDebugSnapshot`, `ReadDebugSnapshot`, `PtParticleSnapshot`, `PtContactPoint`, `PtDebugDrawCmd`)은 M9까지 바뀔 수 있다 (`PT_ABI_PROVISIONAL_REVISION`). 규칙은 v1.0에 이미 적었다:
+이 절의 구조체와 진입점(`CaptureDebugSnapshot`, `ReadDebugSnapshot`, `PtParticleSnapshot`, `PtContactPoint`, `PtJointSnapshot`, `PtDebugDrawCmd`)은 M9에서 확정되었다 (v1.1, [Abi.md](Abi.md) §9.2). 레이아웃은 v1.0 그대로다. 접촉 규칙은 v1.0에 이미 적었고, 드로 규칙은 v1.1이 더했다:
 - **접촉 규약:** normal은 Body1 위에서 Body0을 향한다, Phi < 0은 침투, Body0은 더 움직이는 쪽 (ContactPoint.h:49-53 [V]). **PointOn0은 Body0 표면, PointOn1은 Body1 표면**이고 (PointOn0 − PointOn1)·n = Phi다 (v1.0, M6 계약 (c)). 점은 그 스텝의 narrow phase 자세, 곧 Chaos에서는 `Integrate` 뒤의 예측 자세 P, Q 기준이다 (§12 G3).
 - **정규화 (canonicalisation, M6 수정 라운드 2):** Chaos는 쌍의 두 파티클 순서를 **이동성이 아니라 셰이프 쌍 타입으로** 정한다: `CalculateShapePairType(…, bSwap)`이 셰이프 타입에 따라 파티클을 바꾸고 제약은 바뀐 순서로 만들어진다 (ParticlePairMidPhase.cpp:1169-1174, :1672-1687 [V]). 그래서 제약의 Particle0이 static 바닥이고 Particle1이 dynamic 상자일 수 있다. 브리지는 BackendCommon의 `CanonicalizeContact`를 볼 수 없으므로 같은 일을 다시 구현한다: Body0 = 더 움직이는 바디(dynamic > kinematic > static, 같으면 낮은 인덱스)가 되게 바꿔야 하면 PointOn0·PointOn1과 Shape0·Shape1을 바꾸고, normal과 마찰 임펄스의 부호를 뒤집고(법선 임펄스는 크기라 그대로, Phi도 그대로), `PT_CONTACT_SWAPPED`를 토글한다. G3는 dynamic 바디가 Body0인지 점마다 확인한다 (`Body0 must be the more mobile body`).
 - **플래그 규칙 (v1.0):** ACTIVE / ACTIVE_APPROX / SPECULATIVE 중 많아야 하나. ACTIVE = 솔버가 마지막 스텝에 그 점에 작용한 점 - 법선 임펄스 또는 push-out (Chaos `bIsActive`: `NetPushOut`이나 `NetImpulse`가 nearly zero가 아님, ChaosDebugDraw.cpp:1453 [V]). 브리지는 `PT_CAP_CONTACT_ACTIVE_EXACT`를 선언하고 ACTIVE만 쓴다 (ACTIVE_APPROX는 정확한 결과가 없는 Jolt용이다). **`NormalImpulse`를 채우면** (`PT_CAP_CONTACT_NORMAL_IMPULSE`) push-out을 포함한 값을 낸다: (`NetImpulse` + `NetPushOut` / Dt)·n (kg·cm/s). QPBD velocity solve는 push-out한 점의 `NetImpulse`를 −`NetPushOut` / Dt까지 음수로 둘 수 있으므로(`MinImpulseNormal`, PBDCollisionSolver.h:1178-1196 [V]) `NetImpulse`만 내면 ACTIVE 점의 임펄스가 음수가 된다. 합은 그 clamp 때문에 0 이상이다. G3는 둘을 한 방향으로만 묶는다: 임펄스 > 0.05 kg·cm/s이면 ACTIVE, ACTIVE이면 임펄스 ≥ −0.05 (`G3.normal_impulse_eps`). ACTIVE인데 임펄스 0(마찰만, push-out 속도를 지운 점)은 통과한다. 임펄스를 채우지 않으면(NaN, capability 없음) 이 검사는 없다 (M6 수정 라운드 2. 전의 G3는 ACTIVE == (임펄스 > 0)을 요구해 `bIsActive`를 그대로 쓰는 브리지가 실패했을 것이다). SPECULATIVE = Phi > 0이고 ACTIVE가 아님. 잠든 섬의 접촉은 마지막 솔버 결과 그대로 + `PT_CONTACT_SLEEPING` (PBDCollisionContainerSolver.cpp:373-409 [V, Abi.md §7.1]). 명령으로 깬 바디의 잠든 쌍은 다음 스텝까지 스냅샷에서 뺀다. **G3가 Chaos에서 확인한다:** step 1 점마다 셋 중 많아야 하나, SPECULATIVE는 Phi > 0만, `ACTIVE_EXACT`면 쌍마다 ACTIVE 점이 있고 ACTIVE_APPROX가 없음. UEParity에서는 `S04`의 상자를 40 프레임 뒤 `PutInstanceToSleep`으로 재워 유지 점(모두 SLEEPING)을 확인하고, `WakeInstance` 뒤 스텝 전 스냅샷에서 그 점이 0개, 스텝 뒤 다시 나오고 SLEEPING이 없는지 본다.
 - **드로 규약:** 캡슐 `HalfHeight`는 반지름을 포함한다: `0.5 × Height + Radius` (DebugDrawImplicitObject.cpp:62 [V]). 박스 `Size`는 half extent다: `0.5 × Extents` (DebugDrawImplicitObject.cpp:73-76 [V]). `PtDebugDrawCmd::Extent`가 이 두 규약을 따른다.
-- 네이티브 드로는 `FChaosDDScene` + `Solver->SetDebugDrawScene` + `FChaosDDContext::SetIsDebugDrawEnabled(true)` + `IChaosDDRenderer` 구현(`RenderLatentCommand` 포함)이다. **Development DLL에서만** 가능하다 (`CHAOS_DEBUG_DRAW`). Test DLL은 스냅샷 요청에 `PT_E_UNSUPPORTED`를 돌려준다 (SP4). 접촉 캡처는 안전을 위해 SingleThread + SingleWorkerPhysics에서 한다.
+- 네이티브 드로는 `FChaosDDScene` + `Solver->SetDebugDrawScene` + `FChaosDDContext::SetIsDebugDrawEnabled(true)` + `IChaosDDRenderer` 구현(`RenderLatentCommand` 포함)이다. **Development DLL에서만** 가능하다 (`CHAOS_DEBUG_DRAW`). Test DLL은 스냅샷 요청에 `PT_E_UNSUPPORTED`를 돌려준다 (SP4). 그래서 Test DLL은 `PT_CAP_JOINT_SNAPSHOT`을 선언할 수 없고, 그 DLL의 J1 Pass는 조인트 스냅샷을 확인하지 않는다 (§10.1 M13 (b)). 접촉 캡처는 안전을 위해 SingleThread + SingleWorkerPhysics에서 한다.
+- **네이티브 드로 v1.1 규칙 (M9, PhysX·Bullet 구현으로 확정, [Abi.md](Abi.md) §9.2):** viz run(`PT_RUN_VIZ`)에서만 그린다. bench·behaviour run의 캡처는 명령 0개다. 그리기가 결과를 바꾸면 안 된다 (G11 `-G11Knob=viz`가 bench child와 viz child의 해시를 프레임마다 비교하고, viz child는 `-Instrument=native_debug_draw -CaptureEvery=1`로 매 프레임 캡처한다). `ColorBGRA`는 FColor 메모리 배치를 uint32 하나로 읽은 값(packed 0xAARRGGBB)이므로 브리지는 `FColor::ToPackedARGB()`를 그대로 쓴다. 정점마다 색이 다르면 첫 정점 색. 자세는 Chaos가 그린 시점의 것이다 (어느 시점인지 브리지 주석에 적는다). 문자열은 `TextOffset`/`TextLength`로 문자열 풀을 가리킨다. 잘림은 앞에서부터 `MaxNativeCommands`개 + `bTruncated`. `NativeDrawCategories`는 백엔드 정의(0 = 기본 집합): 브리지가 Chaos 드로 CVar 범주를 고르는 데 쓸 수 있고, 쓰면 뜻을 이 문서와 `FidelityNotes`에 적는다. 벤치는 `-RunMode=Viz -Instrument=native_debug_draw`로 뷰어 없이 `native_draw.csv`(프레임별 타입 수, `h_draw`)를 남긴다.
+- **`IChaosDDRenderer` → `PtDebugDrawCmd` (타입별 필드, M9 수정 라운드 2, [Abi.md](Abi.md) §9.2 표와 같다):** 브리지의 렌더러 구현은 `Render*` 호출 하나를 명령 하나로 옮긴다. 쓰지 않는 필드는 0, 그때 `Rotation`은 (0, 0, 0, 1)이다.
+
+  | `IChaosDDRenderer` 호출 | `PtDebugDrawCmd` |
+  |---|---|
+  | `RenderPoint(Position, Color, PointSize, Lifetime)` | `PT_DD_POINT`, `A` = Position, `Size` = PointSize(px) |
+  | `RenderLine(A, B, Color, LineThickness, Lifetime)` | `PT_DD_LINE`, `A`, `B`, `Thickness` |
+  | `RenderArrow(A, B, ArrowSize, …)` | `PT_DD_ARROW`, `A` → `B`(끝), `Size` = ArrowSize(cm) |
+  | `RenderCircle(Center, Axes, Radius, …)` | `PT_DD_CIRCLE`, `A` = Center, `Size` = Radius, **`Rotation` = 정규직교 `Axes`의 `FQuat`** (원은 `Rotation`의 Y·Z가 펼치는 평면, UE `DrawDebugCircle`의 행렬판처럼 `Axes`의 Y·Z가 원을 펼친다; `Axes`에 스케일이 있으면 단위 축으로 바꾼 뒤 만든다) |
+  | `RenderSphere(Center, Radius, …)` | `PT_DD_SPHERE`, `A` = Center, `Size` = Radius |
+  | `RenderCapsule(Center, Rotation, HalfHeight, Radius, …)` | `PT_DD_CAPSULE`, `A`, `Rotation`(축 = Z), `Extent` = (Radius, HalfHeight, 0) - HalfHeight는 반지름을 포함한다 |
+  | `RenderBox(Position, Rotation, Size, …)` | `PT_DD_BOX`, `A`, `Rotation`, `Extent` = Size(half extent) |
+  | `RenderTriangle(A, B, C, …)` | `PT_DD_TRIANGLE`, `A`, `B`, `C` |
+  | `RenderString(TextLocation, Text, Color, FontScale, bDrawShadow, Lifetime)` | `PT_DD_STRING`, `A`, 문자열 풀의 `TextOffset`/`TextLength`, `Size` = FontScale, `bDrawShadow` |
+  | 공통 | `ColorBGRA` = `Color.ToPackedARGB()`, `DepthPriority` = SDPG, `Reserved` = 0, **`Lifetime` = 0**(이 캡처에서만; Chaos가 넘기는 수명은 버린다 - 호스트는 마지막 캡처를 매 프레임 다시 그리고, 저장소의 PhysX·Bullet도 0을 쓴다) |
+
+  `RenderLatentCommand`(옛 `FLatentDrawCommand`)는 그 타입에 맞는 줄로 옮긴다.
 - **G3와 DLL 구성:** G3는 `PT_CAP_CONTACT_POINTS`가 있어야 돈다. capability가 없어 Skip하면 `tolerances.json`에 Chaos의 `allowed_skip`이 없으므로 **실패**다 (Skip은 Null만 등록되어 있다, [Abi.md](Abi.md) §8). 그래서 G3는 Development DLL(뷰어용)로 돌리거나, Test DLL이 `CHAOS_DEBUG_DRAW` 없이 접촉을 캡처해 `PT_CAP_CONTACT_POINTS`를 선언해야 한다 (`FPBDCollisionConstraint`의 매니폴드 점과 `FManifoldPointResult`는 디버그 드로와 무관하게 읽을 수 있다 [R]). 브리지의 `ProvisionalRevision`이 호스트의 `PT_ABI_PROVISIONAL_REVISION`과 다르면 호스트가 `PT_CAP_CONTACT_*`를 없는 것으로 보므로 같은 실패가 난다 (M9에서 리비전이 오르면 브리지를 다시 빌드한다).
+
+### 10.1 조인트 (v1.1 확정, [Abi.md](Abi.md) §9.4)
+
+- **capability:** `PT_CAP_JOINT_BALL`, `PT_CAP_JOINT_HINGE`, 조인트 스냅샷을 내면 `PT_CAP_JOINT_SNAPSHOT`. 브리지는 `ProvisionalRevision` = `PT_ABI_PROVISIONAL_REVISION` 3(`abi-v1.1`에서 동결)으로 빌드한다.
+- **만드는 법:** `PtConstraintCreateInfo`를 `FConstraintInstance`로 되돌려 UE가 하는 그대로 만든다: Type BALL → `ConstraintUtils::ConfigureAsBallAndSocket`, HINGE → `ConfigureAsHinge` (twist = 프레임 X), 프레임은 `Frame1`/`Frame2`(actor 공간, 스케일 1), `bDisableCollision` = `PT_JOINTF_DISABLE_COLLISION`. 나머지 `FConstraintProfileProperties`는 UE 기본값 그대로 둔다 (bEnableProjection true 등, ConstraintInstance.cpp:179-200 [V]): 조인트 의미는 UE 동등성이고, SDK 엔진에는 projection이 없으므로 그 차이는 by-design이다. `FChaosEngineInterface::CreateConstraint(Body1, Body2, Frame1, Frame2)`가 `SetPhysicsBodies({ Body1, Body2 })`로 Body1을 particle[0]에 둔다 (ChaosEngineInterface.cpp:1389-1392 [V]). Body2가 `PT_INDEX_NONE`(월드)이면 UE처럼 kinematic end point가 생기고 Frame2는 월드 자세다 (:1395-1461 [V]).
+- **Kit이 하는 것:** 인자 검사(Body1 바디, Body1 ≠ Body2, 해제한 바디, flag, Reserved 0, 단위 프레임)와 capability 검사, 조인트 인덱스(`GetNumJoints`). 브리지는 `IPhysicsBackendScene::CreateConstraints`에서 검증된 배치를 만들기만 하고, 실패하면 아무것도 남기지 않는다 (전부 아니면 전무).
+- **해제:** `ReleaseActors`가 그 바디의 조인트를 함께 해제한다 (UE의 `TermConstraint`). 인덱스는 재사용하지 않는다.
+- **스냅샷:** `PtJointSnapshot` = 스텝 끝 자세의 world 프레임 둘, Body1(child)에 준 linear 충격량(kg·cm/s)과 **조인트 앵커(`Frame1World` 원점) 둘레의 angular 충격량**(kg·cm²/s, v1.1). 선형 충격량이 앵커에 작용하므로 각 충격량은 각 구속 행의 couple이다. **어디서 읽는가 (M9 수정 라운드 1, [V]):** UE 기본 `FConstraintInstance`는 `bUseLinearJointSolver` true(ConstraintInstance.cpp:195, `FPBDJointConstraints` 기본 `bUseLinearSolver` true, PBDJointConstraints.cpp:361)라 조인트는 `FPBDJointCachedSolver`로 풀린다. 그 `GetNetLinearImpulse`/`GetNetAngularImpulse`는 위치 충격량(충격량 × dt, 주석 "NOTE: This is a positional impulse", PBDJointCachedSolverGaussSeidel.h:329-330, :377-378)이고 각 쪽은 회전 구속 lambda만 더하므로 couple이다. 브리지는 이것을 바로 읽지 말고 **솔버 결과로 저장된 값**을 읽는다: `ScatterOutputImpl`이 `LinearImpulse = −GetNetLinearImpulse() / Dt`, `AngularImpulse = −GetNetAngularImpulse() / Dt`로 바꿔 넘긴다("Particle order was reversed in the solver", PBDJointContainerSolver.cpp:271-274, `SetSolverResults` :283). 이미 /Dt와 부호 반전이 된 값이다. Net*Impulse를 바로 내면 60 Hz에서 60배 작고 부호가 반대라 J1의 충격량 규약(m g dt, −50 m g dt)이 실패한다. [R: 저장된 값이 어느 particle 쪽(Body1 = particle[0])인지는 M13에서 확인.] (전에는 기본 경로가 아닌 `FPBDJointSolver`, PBDJointSolverGaussSeidel.cpp:1342, :1370, :1458, :1523을 인용했다.) Body1의 COM 둘레 값을 내면 안 된다: 게이트 J1의 충격량 규약(월드 hinge 끝에 수평으로 붙든 1 kg·100 cm 막대: m g dt 위, couple −50 m g dt)이 실패한다. COM 둘레 값을 앵커로 옮긴다면 **솔버가 쓴 지레**(스텝 시작 자세의 pivot − COM)로 옮긴다: 스텝 끝 자세로 옮기면 움직이는 조인트가 가짜 couple을 내고 J1의 움직이는 ball 검사(흔들림 바닥에서 couple ≤ 1e-3 × \|L\| × 앵커-COM 거리)가 실패한다 (M9 수정 라운드 0, Bullet). 프레임은 actor 공간이다: COM이 actor 원점이 아닌 바디(COMNudge·compound)에서 COM 공간 프레임을 쓰면 J1의 COM 넛지 막대가 실패한다. 깨어 있는 dynamic 바디가 없는 조인트는 0 + `PT_JOINTSNAP_SLEEPING`, 둘 다 모르면 NaN + `PT_JOINTSNAP_IMPULSE_NA`, 각 충격량만 모르면 그것만 NaN + `PT_JOINTSNAP_ANGULAR_IMPULSE_NA`(v1.1). 힘을 내는 API면 스텝 dt를 곱한다. 디버그 드로에서 Chaos의 a = particle[1] = Body2, b = particle[0] = Body1이다.
+- **확인 (M13 (b)):** **물리 게이트 J1**을 다른 물리 게이트와 같은 프로세스에서 돌린다: `PhysicsTestBench -Conformance -Backend=Chaos -ChaosDll=<dll> -Profile=UEParity` / `Normalized` (각각 새 프로세스, `conformance.json`의 `J1`이 Pass여야 한다; `-Gates=J1`로 따로 돌릴 수도 있다). J1은 선언한 조인트 타입마다 M6a 5° hinge·ball(stretch ≤ 0.5 cm, hinge 축 오차, 반대편으로 넘어감, 스냅샷 프레임 = 호스트 값, 움직이는 조인트의 couple 0, 해제), COM이 actor 원점이 아닌 막대(actor 공간 프레임), **충돌 스위치**(M9 수정 라운드 2: 6 cm 겹친 두 정육면체를 이은 조인트 - UE 기본 `bDisableCollision` false면 쌍이 충돌해 벌어지고, `PT_JOINTF_DISABLE_COLLISION`이면 겹친 채다. 브리지가 스위치를 뒤집으면 여기서 실패한다; 전에는 M6b/M6c의 혼돈계 차이로만 드러났을 것이다), hinge 외팔보의 충격량 규약을 보고, sleep을 켠 프로필(UEParity)에서는 **잠든 조인트**(두 고리를 `PutInstanceToSleep`하면 두 레코드가 `PT_JOINTSNAP_SLEEPING`과 정확히 0인 충격량)도 본다 ([Abi.md](Abi.md) §9.4 13). M9의 `PhysicsTest.Joint.BackendContract`·`SnapshotImpulseConvention`은 automation exe 안에서 레지스트리 SDK 엔진만 돌리므로(NO_REINIT DLL은 빠진다) Chaos의 확인이 될 수 없었다 - 수정 라운드 0에서 J1로 옮겼고 doctest는 SDK 엔진의 빠른 경로로 J1을 부른다. 그 밖에 `PhysicsTest.Bench.PreflightSweep`(조인트 씬 preflight), M6a/M6b/M6c 거동 씬(03 M9: 5° 주기 오차 < 0.5%, 체인 신장 보고, 에너지 비발산), A4의 조인트 음성 사례.
+- **조인트를 구현하기 전 (M13 (a)):** 조인트 capability를 하나도 선언하지 않는다. 그러면 조인트는 호스트 전용이고, 벤치가 조인트 씬을 `unsupported`로 거부하며 러너가 실패로 세지 않는다. J1은 호스트 전용 경로를 확인하고 Skip하며 `tolerances.json` `J1.allowed_skip`의 Chaos 항목으로 통과한다 (M13 (a)는 조인트가 필요 없다). `PhysicsTest.Bench.PreflightSweep`도 `-Describe`가 선언한 capability로 판정하므로 Chaos를 sweep 대상에 넣어도 조인트 씬 거부는 허용·목록화된다. **한 타입이라도 선언하면** J1은 그 타입의 사례를 돌리고 Skip할 수 없다 (선언하지 않은 타입은 호스트 전용인지 확인만 한다). **M13 (b)의 "조인트 씬이 돌고 조인트 스냅샷이 나온다"는 J1 Pass 하나로는 확인되지 않는다 (M9 마감, 검토 지적).** J1은 `PT_CAP_JOINT_SNAPSHOT`이 없어도 통과한다: 그때 스냅샷 프레임 검사, 움직이는 조인트의 couple, 충격량 규약, 잠든 조인트 사례는 노트로만 남는다 ("no PT_CAP_JOINT_SNAPSHOT - snapshot checks not run", "no PT_CAP_JOINT_SNAPSHOT: the impulse convention is not checked", "sleeping joint: no PT_CAP_JOINT_SNAPSHOT - PT_JOINTSNAP_SLEEPING is not checked"). §10대로 Test DLL은 스냅샷 요청에 `PT_E_UNSUPPORTED`를 내므로, Test DLL 브리지의 J1 Pass는 스냅샷 없이 M13 (b)를 "확인"할 것이다. 그래서 M13 (b)의 확인은 다음 넷을 **모두** 보인다: (1) 브리지가 `PT_CAP_JOINT_BALL`·`PT_CAP_JOINT_HINGE`·`PT_CAP_JOINT_SNAPSHOT`을 선언한다 (`-Describe`의 capability). 곧 J1을 Development DLL로 돌리거나, `CHAOS_DEBUG_DRAW` 없이 조인트 솔버 결과(`SetSolverResults`가 저장한 값, 위 "어디서 읽는가")를 읽어 스냅샷을 내는 Test DLL로 돌린다 [R: Test 구성에서 그 값을 읽을 수 있는지는 M13에서 확인]. (2) UEParity와 Normalized 두 `-Conformance` 프로세스 모두 `conformance.json`의 `J1`이 Pass다 (잠든 조인트 사례는 sleep을 켠 UEParity에서만 돈다). (3) 두 J1 보고의 노트에 위 "no PT_CAP_JOINT_SNAPSHOT" 줄이 하나도 없다 (스냅샷 사례가 모두 돌았다). (4) 거동 매트릭스의 M6a/M6b/M6c run이 `unsupported`가 아니고 `scene_desc.json`의 조인트가 `simulated`다.
+- **SDK 엔진과 다를 것 (by-design, M9 거동 표에 태그):** Chaos 브리지는 UE 기본값(`bEnableProjection` true 등)으로 만든다. 세 SDK 엔진에는 projection이 없다 (`joint.projection` 0). M9에서 SDK 엔진은 M6c(100:1)에서 신장이 크고(Jolt 35 cm, PhysX PGS 발산, Bullet 수 m) Chaos PBD + projection과 비교가 이 씬의 목적이다 ([Progress.md](Progress.md) M9 발견).
 
 ---
 
@@ -207,7 +235,7 @@
 | A0~A7 | lifecycle, 버전, 스레드, phase, 입력 검증, 용량, FP, effective 키 | `PhysicsTestAutomation -tc=PhysicsTest.Abi.SdkBackendsA0toA7`은 게이트마다 Init/Term하므로 **`PT_MODULE_NO_REINIT` 모듈은 프로세스당 첫 게이트만 통과한다.** 대신 게이트마다 새 프로세스로 `PhysicsTestBench -Conformance -Backend=Chaos -ChaosDll=<dll> -Gates=A0` (A1 … A7)를 돌린다. `NO_REINIT` 모듈에 ABI 게이트 둘 이상이나 ABI·물리 게이트를 섞은 목록은 벤치가 거부한다 (종료 코드 2). `PhysicsTest.Bench.Conformance`가 NO_REINIT 시험 대역(`PT_NULL_DLL_NO_REINIT=1`인 NullDll)으로 이 경로 전체(A0~A7, A10, 물리 게이트, 거부되는 목록)를 시험한다 (M6 수정 라운드 1) |
 | A9 | export는 `PT_GetBackendApi` 하나, import는 CRT + 시스템 + UE 런타임 | `Tools/check_modules.py` (UE 런타임 허용 목록은 M2.5/M13에서 더한다) |
 | A10 | Native 프레임 모델: `NumStepsTaken`(과 보고하면 `NumPushedSteps`)이 `FStepPlanner`와 같다 | `-Gates=A10` (프로세스 하나). A10은 모듈을 한 번만 Init하고 (a) 원시 ABI 부분과 (b)~(d) FPhysScene 부분이 그 초기화를 함께 쓴다 (M6 수정 라운드 1에서 고쳤다. 첫 판은 (a)가 Init·Term한 뒤 FPhysScene이 다시 Init해 `NO_REINIT` 브리지에서 실패했을 것이다) |
-| G1~G7, G9, G12 | 물리 게이트 (§12의 기대값). v1.0 계약 중 `SdkBackend.*` 단위 시험이 지키던 것(속도 쓰기의 깨우기, 깬 쌍의 유지 점 제외, flag 규칙)은 그 시험이 Chaos를 돌지 않으므로(`SdkBackendNames`가 Chaos를 뺀다) G6·G3가 지킨다 | `-Conformance -Backend=Chaos -Profile=UEParity` / `Normalized`, 각각 새 프로세스. `conformance.json`이 남는다. **G3는 접촉을 캡처하는 DLL로**(§10). `-Gates=G12`만 골라도 앞의 게이트를 모두 돌린 뒤 G12만 낸다 |
+| G1~G7, G9, J1, G12 | 물리 게이트 (§12의 기대값). J1(조인트 계약)은 조인트 capability가 없으면 등록된 Skip이다 (§10.1, M13 (b)에서 Pass). v1.0 계약 중 `SdkBackend.*` 단위 시험이 지키던 것(속도 쓰기의 깨우기, 깬 쌍의 유지 점 제외, flag 규칙)은 그 시험이 Chaos를 돌지 않으므로(`SdkBackendNames`가 Chaos를 뺀다) G6·G3가 지킨다 | `-Conformance -Backend=Chaos -Profile=UEParity` / `Normalized`, 각각 새 프로세스. `conformance.json`이 남는다. **G3는 접촉을 캡처하는 DLL로**(§10). `-Gates=G12`만 골라도 앞의 게이트를 모두 돌린 뒤 G12만 낸다 |
 | G0 | 빌드 자기보고, `.rsp` 기준 | M13 (`check_modules.py`의 `.rsp` 파서) |
 
 - 하네스 쪽 준비는 끝나 있다: 게이트 스위트(`Source/Runtime/PhysicsTestConformance/Private/Gates`), 허용치 파일, 벤치 `-Conformance`, Null 기준 결과.
@@ -278,7 +306,7 @@
 | C-3 | MXCSR: PreInit 뒤 FTZ/DAZ를 UE 값으로 둘지 호스트 값으로 둘지 (A6 경고) | M2.5 SP2 |
 | C-4 | `check_modules.py`의 UE 런타임 허용 목록과 `.rsp` 파서 (A9, G0) | M2.5 H 작업 |
 | C-5 | Chaos 엔진 오류의 bit 배치와 `errors.capacity_bits` | G12 |
-| C-6 | 스냅샷·네이티브 드로 구조체 | M9에서 잠정 해제 |
+| C-6 | 스냅샷·네이티브 드로 구조체 | M9에서 확정 (v1.1, [Abi.md](Abi.md) §9.2): 브리지는 규칙대로 채운다 (§10) |
 | C-8 | G3 narrow phase 자세와 접촉 점 식 (M6 수정 라운드 2) | 브리지의 PointOn0/1이 예측 자세 P, Q의 셰이프 표면 위인지, G3 노트가 "the predicted pose (Chaos convention)"를 고르는지 첫 G3 실행에서 확인한다. 정규화(§10)와 `NormalImpulse` = (`NetImpulse` + `NetPushOut` / Dt)·n의 부호도 함께 본다 [R] |
 | C-9 | `S05` 0.01 cm 틈에서의 Chaos 투기적 접촉 (G4) | step 38 끝 Phi = +0.01 cm에서 Chaos가 반발을 일찍 내지 않는지. 내면 원인을 소스로 확인하고 `G4.contact_frame_slack` Chaos 재정의를 첫 실행 전에 등록한다 [R] |
 | C-10 | Chaos `-Describe`의 stdout 순수성 (M7 추가) | `Bench.Conformance`의 `-Describe` 검사에 Chaos 항목을 더한다 (§2 stdout) |

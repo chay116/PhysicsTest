@@ -61,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", help="write the matrix as Markdown to this file")
     p.add_argument("--json", help="write the result as JSON to this file")
 
+    p = sub.add_parser("behavior", help="M9 behaviour analysis of -StatesEvery runs: references, cross-engine differences with tags, criteria")
+    p.add_argument("inputs", nargs="+", help="a behaviour session (Config/Matrices/behavior.json) and / or run directories")
+    p.add_argument("--out", help="write the behaviour section (index.md, PNG, differences.csv, behavior.json) to this directory")
+    p.add_argument("--json", help="write the result (physicstest.behavior/1) to this file")
+
     p = sub.add_parser("analytic", help="analytic references with dt_engine; --check-cpp compares them with the C++ ones")
     p.add_argument("--check-cpp", metavar="EXE", help="PhysicsTestBench.exe (-AnalyticReferences)")
     p.add_argument("--cpp-json", metavar="FILE", help="the saved output of -AnalyticReferences")
@@ -93,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
         from .analysis import determinism
 
         return determinism.main(args)
+    if args.command == "behavior":
+        from .analysis import behavior
+
+        return behavior.main(args)
     if args.command == "load":
         from .analysis import load
 

@@ -56,4 +56,23 @@ namespace PhysicsTest::Analytic
 	// G4 (S05.RestitutionCombine): the drop of a body from rest that touches exactly at the end of step K of the discrete
 	// trajectory: G dt^2 K (K + 1) / 2 (K = 38, dt_engine(1/60), g 980: 201.7167 cm; the speed then is G dt K = 620.67 cm/s).
 	[[nodiscard]] double StepBoundaryDropHeight(double G, double Dt, int32 K);
+
+	// ---- M9 behaviour references (03 M9; docs/Scenes.md 2.17, 2.19). Python: Tools/ptbench/analytic.py, same formulas ----
+
+	// The complete elliptic integral of the first kind K(k) (modulus k), by the arithmetic-geometric mean:
+	// K = pi / (2 AGM(1, sqrt(1 - k^2))).
+	[[nodiscard]] double CompleteEllipticK(double Modulus);
+
+	// M6a.Pendulum: the period of a physical pendulum - a solid sphere bob (radius BobRadius) whose centre is Length from a
+	// frictionless pivot on a massless rod - released from rest Amplitude rad off the vertical, for any amplitude:
+	//   T = 2 pi sqrt((L^2 + 2/5 r^2) / (G L)) x 2 K(sin(Amplitude / 2)) / pi
+	// L 100, r 5, g 980: 2.00905 s (5 deg), 2.04305 s (30 deg), 2.37023 s (90 deg) (03 M9). A continuous-time reference
+	// (the discrete integration error of a 60 Hz step is part of the measured period error).
+	[[nodiscard]] double PendulumPeriod(double Length, double BobRadius, double G, double AmplitudeRad);
+
+	// M4.InclineFriction: the distance down the slope after Steps semi-implicit Euler steps from rest on an incline of
+	// AngleRad under Coulomb friction Mu (static = dynamic): a = G (sin - Mu cos) when positive (else 0, the body holds),
+	// d_n = a dt^2 n (n + 1) / 2 (the discrete reference of the 03 M9 criterion "d(2 s) within 1 %"; the continuous
+	// a t^2 / 2 is the other reference the analysis reports).
+	[[nodiscard]] double InclineSlideDistance(double Mu, double AngleRad, double G, double Dt, int32 Steps);
 }

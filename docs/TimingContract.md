@@ -18,10 +18,10 @@
 | 1 | 인자 파싱, run 디렉터리, Fatal 훅(Fatal이면 `exit.json`에 3을 쓴다) | - |
 | 2 | 호스트 제어 (§5): affinity, HIGH_PRIORITY_CLASS, power throttling opt-out, `timeBeginPeriod(1)`. SDK 초기화와 LoadLibrary보다 먼저 | - |
 | 3 | ini 계층 리졸브 (Base → 프로필 → 변형 → 명령줄) | - |
-| 4 | 백엔드 로드와 `InitGamePhys` | `phases_ns.backend_init` |
+| 4 | 백엔드 로드와 `InitGamePhys`. M9: 씬이 요구하는 capability(조인트)가 모듈에 없으면 초기화 **전에** 거부한다 (종료 코드 2, status `unsupported`, `exit.json`만) | `phases_ns.backend_init` |
 | 4b | 엔진 옵션 preflight (바디 없는 시험 씬) | `phases_ns.option_preflight` |
-| 6 | 씬 구성: BuildScene → Flush → `desc_sha256` | `phases_ns.scene_create` |
-| 7 | effective 덤프와 preflight: 필수 키, G0, G9, G10a ([ResultsSchema.md](ResultsSchema.md) §2 gates) | `phases_ns.preflight` |
+| 6 | 씬 구성: BuildScene → Flush(M9: 강제 오버라이드, 조인트 생성) → `desc_sha256`. M9: 상태를 기록하는 run(`-StatesEvery`)은 여기서 `scene_desc.json`을 쓴다 (프레임 0 전, 타이밍 밖) | `phases_ns.scene_create` |
+| 7 | effective 덤프와 preflight: 필수 키, G0, G9, G10a ([ResultsSchema.md](ResultsSchema.md) §2 gates). M9: `preflight_diff.json` (G9 규칙의 기대값 대 엔진 값, 키마다) | `phases_ns.preflight` |
 | 8 | `PrepareForSimulation` (모든 엔진에 같은 비타이밍 기회: Jolt `OptimizeBroadPhase`·temp 블록 pre-fault, PhysX scratch pre-fault) | `phases_ns.prepare` |
 | 9 | spin pre-roll: T개 CPU 전부에서 0.5 s (`-PreRoll=`) | `phases_ns.pre_roll` |
 | 10 | frame 0, 이어서 측정 루프 | 프레임마다 버킷 (§2) |
@@ -67,7 +67,7 @@ QPC 눈금이 100 ns이므로 버킷 하나가 수 µs 아래인 작은 씬(`P0.
 |---|---|---|---|---|---|
 | Jolt | dt 저장, 중력이 바뀌면 `SetGravity` | 쌓아 둔 임펄스·힘 적용 + `PhysicsSystem::Update(dt, 1, temp, jobs)` | 없음 | update error를 오류 bit로 | NoLock + `GetActiveBodiesUnsafe` + 직전 프레임 활성 목록 |
 | PhysX | dt 저장, 중력이 바뀌면 `setGravity` | 쌓아 둔 명령 적용 + `simulate(dt, nullptr, scratch, 262144)` | `fetchResults(true)` | 이벤트(viz·contacts tier만), error callback bit | `getActiveActors` (SdkDefault는 `bEnableActiveActors=False`라 전체 순회) |
-| Bullet | dt 저장, 중력이 바뀌면 `setGravity` | 쌓아 둔 명령·kinematic 목표 + `stepSimulation(dt, 0, dt)` (내부 pre-tick: UE 순서 감쇠, 속도 한계) | 없음 | post-tick 집계, 풀 fallback bit | COM TM × inv(ComLocal), `isActive` |
+| Bullet | dt 저장, 중력이 바뀌면 `setGravity` | 쌓아 둔 명령·kinematic 목표 + `stepSimulation(dt, 0, dt)` (내부 pre-tick: UE 순서 감쇠, 속도 한계, 조인트가 있으면 조인트마다 스텝 시작 지레 캐시(M9 수정 라운드 0, O(조인트)); 내부 post-tick: 각속도 한계 집계, 풀 사용량, **UEParity(`SleepThresholds=UE`, sleep 켬)에서는 dynamic 바디마다 UE sleep 카운터 에뮬레이션(M9, O(N_dynamic))**) | 없음 | post-tick 집계, 풀 fallback bit | COM TM × inv(ComLocal), `isActive` |
 | Null | (Native driver) UE5 프레임 계획 | 스텝 적분 | 없음 | 스텝 수·오류 bit | 전체 상태 복사 |
 | Chaos (M13) | `FChaosScene::SetUpForFrame` (중력은 UE처럼 매 프레임) | `StartFrame` | `WaitPhysScenes` | `EndFrame` (PT→GT pull, SQ 갱신, 이벤트 flip 포함) | GT API X/R/V/W |
 
@@ -104,6 +104,7 @@ QPC 눈금이 100 ns이므로 버킷 하나가 수 µs 아래인 작은 씬(`P0.
 | `GetStepStats` 카운터 | `CountersEvery` 프레임 (counters tier면 기본 1) | 없음 (`CountersEvery = 0`) |
 | `states.ptst` | `StatesEvery` 프레임과 마지막 프레임 | 없음 |
 | `contacts.ptcn` | contacts tier에서 `CaptureEvery` 프레임 (기본 1) | 없음 |
+| `native_draw.csv` (M9) | native_debug_draw tier에서 `CaptureEvery` 프레임 (기본 1) | 없음 |
 
 "N 프레임마다"는 (f + 1) % N == 0인 프레임 f와 마지막 프레임이다 ([ResultsSchema.md](ResultsSchema.md) §1). 1만 바디의 해시나 카운터 패스는 1 MB 넘게 건드려 다음 프레임의 캐시를 식히므로 (02 §9.1), 마지막 프레임 해시 외의 기록이 하나라도 있으면 헤드라인 자격이 없다.
 
@@ -117,7 +118,7 @@ QPC 눈금이 100 ns이므로 버킷 하나가 수 µs 아래인 작은 씬(`P0.
 | phases | 백엔드가 `PT_CAP_PHASE_TIMERS`를 선언하면 매 프레임 `GetStepStats`를 읽어 phase timer의 합을 `solver_ns` 열에 쓴다 (counters 열은 `CountersEvery`를 따른다). SDK 백엔드는 선언하지 않는다. Null DLL 시험 대역(`PT_NULL_DLL_PHASE_TIMERS=1`, 타이머 `null.steps`)으로 경로를 확인한다 (CTest `PhysicsTest.Bench.InstrumentPhases`, manifest `recorders.phases`). Chaos 솔버 수준(02 §9.7)은 M13이다 |
 | alloc | 백엔드 쪽 할당 계측을 켜는 자리다 (M7에서 백엔드 동작은 같다. 할당 훅은 모든 run에서 켜져 있다) |
 | contacts | 백엔드가 접촉 listener를 설치하고 (Jolt, PhysX; Bullet은 캡처 때 매니폴드를 읽는다) 벤치가 `contacts.ptcn`을 쓴다 |
-| native_debug_draw | 백엔드에 전달만 한다. 명령 스트림 기록은 M9 |
+| native_debug_draw | 백엔드에 전달한다 (viz run에서 PhysX는 visualization 파라미터를 켜고 Bullet은 드로어를 붙인다). M9부터 벤치가 `CaptureEvery` 프레임마다 `PT_SNAP_NATIVE_DRAW`를 캡처해 `native_draw.csv`(타입별 수, `h_draw`)를 쓴다. 렌더링은 없다 ([ResultsSchema.md](ResultsSchema.md) §7.1). 캡처는 프레임 사이, 버킷 밖이다 |
 
 ## 5. 호스트 제어
 
@@ -200,6 +201,7 @@ spin pre-roll은 run의 마스크에 든 CPU마다 스레드 하나를 0.5 s 돌
 - M7의 manifest는 모두 `"unofficial": true`이고 `timing_label`이 사유를 적는다: 적합성 스탬프가 없고(M10), High performance 전원 계획 세션(M8 환경 게이트, M11)이 아니다.
 - `timing_valid_for_headline = true`는 "이 run이 M7 측정 프로토콜을 지켰다"는 뜻이지 보고할 수 있다는 뜻이 아니다.
 - 보고 가능한 수치의 조건: M10 스탬프 + 전원 계획 High performance/Ultimate + M8 러너의 반복·셔플 + M10 CV 게이트와 주장 규칙.
+- **같은 씬, 다른 작업량 (M11 주의, M9 수정 라운드 1):** 헤드라인 씬 `M3.BoxPile` 1k에서 세 행은 600 프레임 윈도 안에서 서 있는 더미를 돌리지 않는다. Bullet.Default는 더미가 무너지고(Checkpoints N-1), PhysX UE4Compat-TGS는 상자를 더미 밖으로 던지며(frame 599에 86개(UEParity 77개)가 제자리에서 50 cm 넘게 벗어남, N-4), PhysX SdkDefault Normalized는 퍼지기 시작한다(frame 599에 97개, 900 프레임까지 무너짐, N-5). 이 행들의 `T_frame`은 다른 행과 같은 일을 잰 값이 아니므로 M11 표에 그 사실을 함께 적는다 (거동 리포트의 규칙 `bullet-stack-solver`, `physx-tgs-pile-ejection`, `physx-sdkdefault-pile`과 probe가 근거다). 씬 정의는 그대로 둔다 (엔진 거동이다).
 
 ## 10. 이후 확장
 

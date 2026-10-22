@@ -385,6 +385,15 @@ namespace PhysicsTest
 			}
 			Out.MultiRunGate = EqualsNoCase(Text, "G8") ? "G8" : "G11";
 		}
+		if (FParse::Value(Cmd, "G11Knob=", Out.G11Knob, false))   // the variants pair holds a comma
+		{
+			const bool bVariants = Out.G11Knob.size() > 9 && EqualsNoCase(Out.G11Knob.substr(0, 9), "variants:") && Out.G11Knob.find(',') != std::string::npos;
+			if (!EqualsNoCase(Out.G11Knob, "contacts") && !EqualsNoCase(Out.G11Knob, "viz") && !bVariants)
+			{
+				OutError = "-G11Knob=" + Out.G11Knob + ": contacts, viz or variants:<A>,<B>";
+				return false;
+			}
+		}
 		if (!ParseScenarioParams(Cmd, Out.Params, OutError))
 		{
 			return false;

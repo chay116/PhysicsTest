@@ -53,9 +53,12 @@ namespace PhysicsTest::PhysXBackend
 		Out.BuildConfig = GetBuildConfig();
 		Out.BuildFlagsJson = GPhysXBuildReport;
 		// 02 7.5: contact points (viz) with the solver's own "active" (the point's normal impulse) and bounds through the debug
-		// snapshot; no native islands, no native frame model. The impulse values themselves stay NaN until M9 (Q8).
+		// snapshot; no native islands, no native frame model. The contact impulse values themselves stay NaN (Q8).
+		// M9 (docs/Abi.md 9.4): ball and hinge joints (PhysXConstraint.h), the joint snapshot with the engine's impulses, and the
+		// native debug draw of viz runs (PxScene::getRenderBuffer, PhysXDebugRender.h).
 		Out.Capabilities = PT_CAP_COLLISION | PT_CAP_KINEMATIC | PT_CAP_SLEEPING | PT_CAP_CCD | PT_CAP_GYROSCOPIC | PT_CAP_MULTITHREADED | PT_CAP_ACTIVE_LIST
-			| PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH | PT_CAP_CONTACT_POINTS | PT_CAP_CONTACT_ACTIVE_EXACT | PT_CAP_BOUNDS;
+			| PT_CAP_STATE_WRITE | PT_CAP_NATIVE_HASH | PT_CAP_CONTACT_POINTS | PT_CAP_CONTACT_ACTIVE_EXACT | PT_CAP_BOUNDS | PT_CAP_JOINT_BALL | PT_CAP_JOINT_HINGE
+			| PT_CAP_JOINT_SNAPSHOT | PT_CAP_NATIVE_DEBUG_DRAW;
 		// One PxPhysics and one PxTolerancesScale per process (PxPhysics.h:997, PxSceneDesc.h:541 [V]): the init options
 		// (ToleranceScale) are process-wide. UE4Compat / -TGS / -Stab share them; SdkDefault needs its own process.
 		Out.ModuleFlags = PT_MODULE_GLOBAL_SCENE_SETTINGS;

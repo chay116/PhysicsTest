@@ -57,6 +57,45 @@ namespace PhysicsTest::PhysXBackend
 		PxDefault,      // PxDefaultCpuDispatcherCreate(T = 1 ? 0 : T); T = 1 is the inline reference of the hash cross-check
 	};
 
+	// M9 (docs/Abi.md 9.4 engine mapping, 02_Architecture 8.2 "FConstraintInstance -> PxD6Joint"): the PhysX joint an ABI
+	// ball / hinge becomes. Both are hard joints (no limit, drive, break force or projection).
+	enum class EPhysXJointRecipe : uint8
+	{
+		D6,       // UE4 [M]: every FConstraintInstance is a PxD6Joint; linear X / Y / Z eLOCKED, ball = eTWIST / eSWING1 / eSWING2
+		          // eFREE, hinge = eTWIST eFREE (D6 twist = rotation about the frame X axis, PxD6Joint.h:45 [V])
+		Native,   // PxSphericalJoint (ball) / PxRevoluteJoint (hinge; revolute axis = frame X, PxRevoluteJoint.h:59 [V])
+	};
+
+	// Which ABI body becomes PhysX actor0. UE4 handed the actors over swapped [M] (02 8.2: PxD6JointCreate(SDK, actor2,
+	// frame2, actor1, frame1)): actor0 = Body2 (the parent, ConstraintBone2), actor1 = Body1 (the child). PhysX anchors the
+	// linear rows at actor1's frame and reports the constraint force on actor0 (ExtConstraintHelper.h:136-147,
+	// DySolverConstraints.cpp:578-603, ScConstraintSim.cpp:148-154 [V]), so the order is a behaviour switch, not cosmetics.
+	enum class EPhysXJointActorOrder : uint8
+	{
+		ParentFirst,   // actor0 = Body2 (world: NULL, frame = the world pose), actor1 = Body1 [M] UE4
+		ChildFirst,    // actor0 = Body1, actor1 = Body2
+	};
+
+	// Debug visualization categories (PxVisualizationParameter) of viz runs (PtSceneDesc::RunMode == PT_RUN_VIZ only; never in
+	// bench or behaviour runs). Lengths are the harness's, in cm, converted with LengthScale (PhysXDebugRender.cpp).
+	enum EPhysXVisualizationCategory : uint32
+	{
+		PhysXViz_CollisionShapes = 1u << 0,    // eCOLLISION_SHAPES
+		PhysXViz_CollisionAABBs = 1u << 1,     // eCOLLISION_AABBS
+		PhysXViz_ActorAxes = 1u << 2,          // eACTOR_AXES
+		PhysXViz_BodyMassAxes = 1u << 3,       // eBODY_MASS_AXES (the inertia box; red = asleep)
+		PhysXViz_BodyLinearVelocity = 1u << 4, // eBODY_LIN_VELOCITY
+		PhysXViz_JointLocalFrames = 1u << 5,   // eJOINT_LOCAL_FRAMES (needs PxConstraintFlag::eVISUALIZATION on the joint)
+		PhysXViz_JointLimits = 1u << 6,        // eJOINT_LIMITS
+		PhysXViz_ContactPoints = 1u << 7,      // eCONTACT_POINT
+		PhysXViz_ContactNormals = 1u << 8,     // eCONTACT_NORMAL
+		PhysXViz_All = (1u << 9) - 1u,
+	};
+	// [D] the default of every PhysX variant file (DebugVisualization=...): the engine's own shapes, joint frames and contact
+	// normals. ContactPoints (three 20 cm cross lines per point) is left out of the default: the host already draws the snapshot's
+	// contact points, and a pile's crosses would triple the commands of every viewer frame.
+	inline constexpr uint32 GPhysXDefaultVisualization = PhysXViz_CollisionShapes | PhysXViz_JointLocalFrames | PhysXViz_JointLimits | PhysXViz_ContactNormals;
+
 	struct FPhysXSceneConfig
 	{
 		double LengthScale = 1.0;                                            // D1: native units per cm (1 = cm, 0.01 = m)
@@ -88,6 +127,9 @@ namespace PhysicsTest::PhysXBackend
 		double ProjectMaxDepenetrationVelocityCm = 0.0;                      // [V] zero-initialised, "0 means no maximum" (PhysicsSettingsCore.h:93-95)
 		EPhysXDispatcherKind Dispatcher = EPhysXDispatcherKind::Auto;
 		EPhysXGyroscopicRule GyroscopicRule = EPhysXGyroscopicRule::Ignore;   // UE4Compat column (M6)
+		EPhysXJointRecipe JointRecipe = EPhysXJointRecipe::D6;               // [M] UE4 FConstraintInstance -> PxD6Joint (M9)
+		EPhysXJointActorOrder JointActorOrder = EPhysXJointActorOrder::ParentFirst;   // [M] UE4 swapped the actors (M9)
+		uint32 Visualization = GPhysXDefaultVisualization;                    // [D] EPhysXVisualizationCategory bits, viz runs only (M9)
 	};
 
 	// One [PhysicsTest.Backend.PhysX] key, case-insensitive. PT_OK, or PT_E_INVALID_ARG with a message in Error.
@@ -105,4 +147,8 @@ namespace PhysicsTest::PhysXBackend
 	const char* ToString(EPhysXDepenetrationRule Value);
 	const char* ToString(EPhysXDispatcherKind Value);
 	const char* ToString(EPhysXGyroscopicRule Value);
+	const char* ToString(EPhysXJointRecipe Value);
+	const char* ToString(EPhysXJointActorOrder Value);
+	// The variant-file name of one visualization category bit ("CollisionShapes", ...), "?" for anything else.
+	const char* GetVisualizationCategoryName(uint32 CategoryBit);
 }

@@ -386,7 +386,11 @@ inline namespace PT_BACKEND_NS
 		// Already validated by the kit: every index is below GetNumBodies(), live and listed once. IsReleased() reports
 		// them released only after this returns success (a failure leaves the set unchanged).
 		virtual PtResult ReleaseActors(const uint32_t* BodyIndices, uint32_t Num) = 0;
-		virtual PtResult CreateConstraints(TStridedView<PtConstraintCreateInfo> /*Infos*/) { return PT_E_UNSUPPORTED; }   // PROVISIONAL(M9)
+		// v1.1 (M9; PtBackendAbi.h, docs/Abi.md 9.4). Already validated by the kit: known type
+		// whose capability the backend declares, Body1 a live body, Body2 a live other body or PT_INDEX_NONE, known flags,
+		// Reserved 0, unit frames. Joint i of the call gets index GetNumJoints() + i (the kit adds Num on success). All or
+		// nothing: a failure must leave no joint behind. A backend without joints keeps this default.
+		virtual PtResult CreateConstraints(TStridedView<PtConstraintCreateInfo> /*Infos*/) { return PT_E_UNSUPPORTED; }
 		virtual PtResult PrepareForSimulation(FTextWriter& /*OutActions*/) { return PT_OK; }
 		virtual PtResult SetUpForFrame(const FFrameParams& Params) = 0;  // without NATIVE_FRAME_MODEL: MaxSubsteps == 1 && !bSubstepping
 		virtual PtResult StartFrame() = 0;
@@ -410,8 +414,8 @@ inline namespace PT_BACKEND_NS
 		// The range holds live bodies only (checked by the kit).
 		virtual PtResult ReadMassProperties(uint32_t First, uint32_t Num, PtMassProperties* Out) = 0;
 		virtual PtResult GetStepStats(PtStepStats& Out) = 0;
-		virtual PtResult CaptureDebugSnapshot(const PtDebugSnapshotRequest& /*Req*/, PtDebugSnapshotCounts& /*Out*/) { return PT_E_UNSUPPORTED; }   // PROVISIONAL(M9)
-		virtual PtResult ReadDebugSnapshot(const PtDebugSnapshotBuffers& /*Buffers*/) { return PT_E_UNSUPPORTED; }                              // PROVISIONAL(M9)
+		virtual PtResult CaptureDebugSnapshot(const PtDebugSnapshotRequest& /*Req*/, PtDebugSnapshotCounts& /*Out*/) { return PT_E_UNSUPPORTED; }   // v1.1 (docs/Abi.md 9.1, 9.2)
+		virtual PtResult ReadDebugSnapshot(const PtDebugSnapshotBuffers& /*Buffers*/) { return PT_E_UNSUPPORTED; }                              // v1.1
 		virtual PtResult ComputeNativeStateHash(uint64_t& /*OutHash*/) { return PT_E_UNSUPPORTED; }
 		virtual PtResult SetOption(FStringRef /*Key*/, FStringRef /*Value*/) { return PT_E_UNSUPPORTED; }
 		// Called twice per DumpEffectiveSettings (measure, then write): the output must be deterministic.
@@ -428,6 +432,7 @@ inline namespace PT_BACKEND_NS
 			return BodyIndex < NumBodies && ((ReleasedWords[BodyIndex >> 5u] >> (BodyIndex & 31u)) & 1u) != 0u;
 		}
 		uint32_t GetNumReleased() const { return NumReleased; }
+		uint32_t GetNumJoints() const { return NumJoints; }         // joints created so far (indices 0 .. N-1, M9)
 		FKitServices& GetKit() const { return *Kit; }              // bound by the provider after CreateScene
 
 	private:
@@ -462,6 +467,7 @@ inline namespace PT_BACKEND_NS
 		uint32_t* ReleasedWords = nullptr;
 		uint32_t NumReleasedWords = 0;
 		uint32_t NumReleased = 0;
+		uint32_t NumJoints = 0;
 		template <class> friend struct TBackendApiProvider;
 	};
 
@@ -764,6 +770,57 @@ inline namespace PT_BACKEND_NS
 		default:
 			return Error.Set(PT_E_INVALID_ARG, "command %u: type %u is unknown", Index, Cmd.Type);
 		}
+	}
+
+	// One joint of CreateConstraints (M9 semantics, docs/Abi.md 9.4): every argument check first (PT_E_INVALID_ARG), then the
+	// joint type's capability (PT_E_UNSUPPORTED). Scene supplies the created bodies and the released set.
+	inline PtResult ValidateConstraint(const PtConstraintCreateInfo& Info, const uint32_t Index, const IPhysicsBackendScene& Scene, const uint64_t Capabilities,
+		FValidationError& Error)
+	{
+		const uint32_t NumBodies = Scene.GetNumBodies();
+		if (Info.Type != PT_JOINT_BALL && Info.Type != PT_JOINT_HINGE)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: type %u is unknown or reserved (BALL %u, HINGE %u)", Index, Info.Type, PT_JOINT_BALL, PT_JOINT_HINGE);
+		}
+		if (Info.Body1 >= NumBodies)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: Body1 %u is not below the %u bodies created (the child is always a body)", Index, Info.Body1, NumBodies);
+		}
+		if (Info.Body2 != PT_INDEX_NONE && Info.Body2 >= NumBodies)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: Body2 %u is neither PT_INDEX_NONE (the world) nor below the %u bodies created", Index, Info.Body2, NumBodies);
+		}
+		if (Info.Body1 == Info.Body2)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: Body1 and Body2 are the same body %u", Index, Info.Body1);
+		}
+		if (Scene.IsReleased(Info.Body1) || (Info.Body2 != PT_INDEX_NONE && Scene.IsReleased(Info.Body2)))
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: body %u is released", Index, Scene.IsReleased(Info.Body1) ? Info.Body1 : Info.Body2);
+		}
+		if ((Info.Flags & ~PT_JOINTF_ALL) != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: unknown flags 0x%x", Index, Info.Flags);
+		}
+		uint64_t Reserved[2] = {};
+		memcpy(&Reserved[0], &Info.Reserved0, sizeof(uint64_t));
+		memcpy(&Reserved[1], &Info.Reserved1, sizeof(uint64_t));
+		if (Reserved[0] != 0 || Reserved[1] != 0)
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: Reserved0 / Reserved1 must be 0 (bits 0x%llx / 0x%llx)", Index,
+				static_cast<unsigned long long>(Reserved[0]), static_cast<unsigned long long>(Reserved[1]));
+		}
+		if (!IsValidTransform(Info.Frame1) || !IsValidTransform(Info.Frame2))
+		{
+			return Error.Set(PT_E_INVALID_ARG, "constraint %u: a frame is not finite or its rotation is not unit", Index);
+		}
+		const uint64_t Needed = Info.Type == PT_JOINT_BALL ? PT_CAP_JOINT_BALL : PT_CAP_JOINT_HINGE;
+		if ((Capabilities & Needed) == 0)
+		{
+			return Error.Set(PT_E_UNSUPPORTED, "constraint %u: %s joints need %s", Index, Info.Type == PT_JOINT_BALL ? "ball" : "hinge",
+				Info.Type == PT_JOINT_BALL ? "PT_CAP_JOINT_BALL" : "PT_CAP_JOINT_HINGE");
+		}
+		return PT_OK;
 	}
 
 	inline PtResult ValidateFrameParams(const FFrameParams& P, const uint64_t Capabilities, FValidationError& Error)
@@ -1309,16 +1366,44 @@ inline namespace PT_BACKEND_NS
 					return Kit.SetLastError(PT_E_INVALID_ARG, "CreateConstraints: invalid array pointer or stride %u", Stride);
 				}
 				const TStridedView<PtConstraintCreateInfo> View = TStridedView<PtConstraintCreateInfo>::Make(Infos, Num, Stride);
+				// M9 (docs/Abi.md 9.4): argument errors for every joint first, then capabilities, so a module without joints
+				// still reports a malformed call as PT_E_INVALID_ARG (A4).
+				FValidationError Error;
+				PtResult Unsupported = PT_OK;
 				for (uint32_t Index = 0; Index < Num; ++Index)
 				{
-					const PtConstraintCreateInfo& Info = View[Index];
-					if (Info.Type > PT_JOINT_HINGE || Info.Body1 >= Scene->NumBodies || (Info.Body2 != PT_INDEX_NONE && Info.Body2 >= Scene->NumBodies)
-						|| !IsValidTransform(Info.Frame1) || !IsValidTransform(Info.Frame2))
+					const PtResult Valid = ValidateConstraint(View[Index], Index, *Scene, Capabilities, Error);
+					if (Valid == PT_E_UNSUPPORTED)
 					{
-						return Kit.SetLastError(PT_E_INVALID_ARG, "CreateConstraints: constraint %u has an unknown type, a body out of range or an invalid frame", Index);
+						Unsupported = Unsupported == PT_OK ? Valid : Unsupported;
+						continue;
+					}
+					if (Valid != PT_OK)
+					{
+						return Fail(Valid, "CreateConstraints", Error);
 					}
 				}
-				return Scene->CreateConstraints(View);
+				if (Unsupported == PT_OK && (Capabilities & (PT_CAP_JOINT_BALL | PT_CAP_JOINT_HINGE)) == 0)
+				{
+					return Kit.SetLastError(PT_E_UNSUPPORTED, "CreateConstraints: the backend declares no joint capability (PT_CAP_JOINT_BALL / PT_CAP_JOINT_HINGE)");
+				}
+				if (Unsupported != PT_OK)
+				{
+					// The first unsupported joint's reason (argument errors of later joints were checked above).
+					for (uint32_t Index = 0; Index < Num; ++Index)
+					{
+						if (ValidateConstraint(View[Index], Index, *Scene, Capabilities, Error) == PT_E_UNSUPPORTED)
+						{
+							return Fail(PT_E_UNSUPPORTED, "CreateConstraints", Error);
+						}
+					}
+				}
+				const PtResult Result = Scene->CreateConstraints(View);
+				if (Result >= 0)
+				{
+					Scene->NumJoints += Num;
+				}
+				return Result;
 			});
 		}
 
@@ -1626,6 +1711,17 @@ inline namespace PT_BACKEND_NS
 				{
 					return Kit.SetLastError(PT_E_INVALID_ARG, "CaptureDebugSnapshot: Req / Out is NULL or Req->StructSize is too small");
 				}
+				// v1.1 (M9 fix round 1): the Reserved-field rule (docs/Abi.md 2) and the defined request bits, before the
+				// backend's capability: an argument error is PT_E_INVALID_ARG on every Kit-based module.
+				if (Req->Reserved != 0)
+				{
+					return Kit.SetLastError(PT_E_INVALID_ARG, "CaptureDebugSnapshot: PtDebugSnapshotRequest.Reserved must be 0 (0x%x)", Req->Reserved);
+				}
+				if ((Req->Flags & ~PT_SNAP_ALL) != 0)
+				{
+					return Kit.SetLastError(PT_E_INVALID_ARG, "CaptureDebugSnapshot: unknown PT_SNAP_* bits 0x%x (defined: PT_SNAP_ALL 0x%x)",
+						Req->Flags & ~PT_SNAP_ALL, PT_SNAP_ALL);
+				}
 				return Scene->CaptureDebugSnapshot(*Req, *Out);
 			});
 		}
@@ -1643,6 +1739,10 @@ inline namespace PT_BACKEND_NS
 				if (Buffers == nullptr)
 				{
 					return Kit.SetLastError(PT_E_INVALID_ARG, "ReadDebugSnapshot: Buffers is NULL");
+				}
+				if (Buffers->Reserved != 0)
+				{
+					return Kit.SetLastError(PT_E_INVALID_ARG, "ReadDebugSnapshot: PtDebugSnapshotBuffers.Reserved must be 0 (0x%x)", Buffers->Reserved);
 				}
 				return Scene->ReadDebugSnapshot(*Buffers);
 			});

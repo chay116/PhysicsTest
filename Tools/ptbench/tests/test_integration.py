@@ -268,6 +268,64 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn(completed.returncode, (0, 1), stderr)   # 1 = no headline-valid run (dev / dbg)
         completed.stdout.decode("utf-8")                       # UTF-8 ('µs'), never the console code page
 
+    def test_behaviour_session(self):
+        """M9: a small behaviour session (the three main engines x both profiles x M1 a, M4 mu 0.30, M5, M6a 5 deg) through the
+        runner, then analysis/behavior.py: the references the engines must meet, the M1 profile table, the tags, and the
+        joint scene either refused as unsupported (no joint capability) or meeting 03's 5 deg period criterion."""
+        from ptbench.analysis import behavior, behavior_rules
+
+        targets = [{"label": "jolt.Default", "backend": "Jolt", "variant": "Default"}, {"label": "bullet.Default", "backend": "Bullet", "variant": "Default"},
+                   {"label": "physx.UE4Compat", "backend": "PhysX", "variant": "UE4Compat"}]
+        scenes = [{"scenario": "M1.SingleBoxDrop", "params": {"Case": "a"}}, {"scenario": "M4.InclineFriction", "params": {"Mu": "0.30"}},
+                  {"scenario": "M5.BouncingBalls"}, {"scenario": "M6a.Pendulum", "params": {"Angle": "5", "Joint": "Hinge"}}]
+        document = {
+            "schema": "physicstest.matrix/1", "name": "behave", "description": "integration test (behaviour)", "purpose": "perf", "repeats": 1, "block_seed": 9,
+            "cooldown_s": 0.0, "timeout_s": 120.0, "contaminated_retries": 0,
+            # PT_TEST_BENCH_ARGS (';'-separated, optional): extra switches, e.g. -ConfigDir=<a frozen bench's Config> when PT_BENCH_EXE is
+            # not this build's bench (CTest does not set it)
+            "bench_args": ["-RunMode=Behavior", "-StatesEvery=1", "-HostCheck=record", "-PreRoll=0"] + [a for a in os.environ.get("PT_TEST_BENCH_ARGS", "").split(";") if a],
+            "targets": targets, "profiles": ["Normalized", "UEParity"], "scenes": scenes, "threads": [1],
+        }
+        path = self.out / "behave.json"
+        common.write_json_atomic(path, document)
+        session_dir, code, session = self._session(Matrix(path=path, document=document, sha256=common.sha256_file(path)))
+        self.assertEqual(code, 0, [(r["cell_id"], r["outcome"]) for r in session["runs"]])
+        analysis = behavior.analyze([session_dir])
+        self.assertEqual(analysis.errors, [])
+        self.assertEqual(analysis.skipped, [])
+        self.assertEqual(len(analysis.results) + len(analysis.unsupported), 24)
+        obs = analysis.observations
+
+        def value(label, profile, scenario, metric):
+            rows = obs[(obs["label"] == label) & (obs["profile"] == profile) & (obs["scenario"] == scenario) & (obs["metric"] == metric)]
+            self.assertEqual(len(rows), 1, (label, profile, scenario, metric))
+            return float(rows.iloc[0]["value"])
+
+        for label in ("jolt.Default", "bullet.Default", "physx.UE4Compat"):
+            for profile in ("Normalized", "UEParity"):
+                self.assertLess(value(label, profile, "M1.SingleBoxDrop", "fall_dz_max_cm"), 2e-3)        # the fall is the damped discrete fall
+        self.assertLess(abs(value("jolt.Default", "Normalized", "M4.InclineFriction", "d2s_err_pct")), 0.05)
+        self.assertLess(abs(value("jolt.Default", "UEParity", "M4.InclineFriction", "d2s_err_pct")), 0.05)   # the damped reference (UE 0.01)
+        for e in ("0.3", "0.5", "0.7", "0.9"):
+            self.assertLess(value("jolt.Default", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-4)       # model 0
+            self.assertLess(value("physx.UE4Compat", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-4)    # model 1 (M6 D-3)
+            self.assertLess(value("bullet.Default", "Normalized", "M5.BouncingBalls", f"e{e}.e_dev_model_max"), 1e-3)     # model 2 (M9 commit)
+        self.assertEqual(len(analysis.ue_vs_normalized), 3)
+        for row in analysis.ue_vs_normalized:
+            self.assertLess(abs(row["dz_residual_cm"]), 2e-3)                    # the profile difference in the fall window is UE's damping
+            self.assertGreater(row["dz_if_jolt_native_cm"], 4 * row["dz_measured_cm"])   # 0.05 would show about 5x the measured difference
+        differences = analysis.differences
+        self.assertTrue(set(differences["tag"]) <= set(behavior_rules.TAGS))
+        self.assertEqual(int((differences["rule"] == "unexplained").sum()), 0, differences[differences["rule"] == "unexplained"][["label", "scene", "metric"]].to_dict("records"))
+        period = [c for c in analysis.criteria if c["id"] == "M6a.period"]
+        self.assertEqual(len(period), 3)
+        for row in period:
+            self.assertIn(row["verdict"], ("unsupported", "pass"), row)          # joints land in M9: then 03's 5 deg criterion must hold
+        text = report.build_report(session_dir).read_text(encoding="utf-8")
+        self.assertIn("## 7. 거동", text)
+        self.assertIn("거동 run", text.split("## 6.")[0])                        # section 5 summarises the behaviour runs instead of listing them
+        self.assertTrue((next((session_dir / "report").iterdir()) / "behavior.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

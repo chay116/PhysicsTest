@@ -340,7 +340,7 @@ namespace PhysicsTest::BenchPreflight
 				{
 					SkipKeys.push_back("shape.wrapping");   // gate / behaviour scenes may need wrappers (S02 COMNudge, S03 capsules)
 				}
-				Gates::CheckEffectiveReadback(Target, Context, Settings, SkipKeys, bPerfScene, Inputs.Scenario->GetName(), G9);
+				Gates::CheckEffectiveReadback(Target, Context, Settings, SkipKeys, bPerfScene, Inputs.Scenario->GetName(), G9, &Result.Diff);
 				if (Fault.rfind("g9:", 0) == 0 || Fault.rfind("G9:", 0) == 0)
 				{
 					G9.Note(InjectNote);

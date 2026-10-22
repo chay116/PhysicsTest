@@ -144,7 +144,11 @@ namespace PhysicsTest::AbiGates
 		// frozen minimum is the v1.0 table (docs/Abi.md 2).
 		R.Check(Api.StructSize >= PT_ABI_V1_0_API_SIZE && Api.StructSize % sizeof(void*) == 0, "PtBackendApi.StructSize "
 			+ std::to_string(Api.StructSize) + " >= the v1.0 table size " + std::to_string(PT_ABI_V1_0_API_SIZE) + " (whole entries)");
-		R.Check(Api.AbiVersion == PT_ABI_VERSION, "PtBackendApi.AbiVersion == PT_ABI_VERSION (1.0)");
+		// M9 fix round 1 (docs/Abi.md 8 A1): conformance is for a module built against the host's own header. The host loads any
+		// v1.x module (major check only), but a v1.0-built one fails here - as it fails A4's Reserved cases - and is rebuilt.
+		R.Check(Api.AbiVersion == PT_ABI_VERSION, "PtBackendApi.AbiVersion " + std::to_string(Api.AbiVersion >> 16) + "." + std::to_string(Api.AbiVersion & 0xFFFFu)
+			+ " == PT_ABI_VERSION " + std::to_string(PT_ABI_VERSION_MAJOR) + "." + std::to_string(PT_ABI_VERSION_MINOR)
+			+ " (conformance needs a module rebuilt against the current header; the host itself loads any minor of major " + std::to_string(PT_ABI_VERSION_MAJOR) + ")");
 		R.Check(Target.Entry(0u) == nullptr, "PT_GetBackendApi(0) returns NULL (a v0.9 host or spike DLL is refused after the freeze)");
 		R.Check(Api.ModuleName != nullptr && Api.ModuleName[0] != '\0', "PtBackendApi.ModuleName is set");
 		std::string Error;
@@ -553,6 +557,17 @@ namespace PhysicsTest::AbiGates
 		const uint32 BadRelease = 99;
 		const uint32 RepeatedRelease[2] = { Bodies.FirstDynamic, Bodies.FirstDynamic };
 		PtConstraintCreateInfo Joint = {};
+		PtDebugSnapshotRequest SnapRequest = {};
+		PtDebugSnapshotCounts SnapCounts = {};
+		PtDebugSnapshotBuffers SnapBuffers = {};
+		const auto WithSnapRequest = [&](const std::function<void(PtDebugSnapshotRequest&)>& Edit)
+		{
+			SnapRequest = {};
+			SnapRequest.StructSize = sizeof(PtDebugSnapshotRequest);
+			SnapRequest.Flags = PT_SNAP_PARTICLES;
+			Edit(SnapRequest);
+			return Api.CaptureDebugSnapshot(Scene, &SnapRequest, &SnapCounts);
+		};
 
 		RunCases({
 				// scenes
@@ -624,6 +639,14 @@ namespace PhysicsTest::AbiGates
 				{ "ReleaseActors of a released body", PT_E_INVALID_ARG, [&] { return Api.ReleaseActors(Scene, &Released, 1); } },
 				{ "ReadMassProperties of a released body", PT_E_INVALID_ARG, [&] { return Api.ReadMassProperties(Scene, Released, 1, Mass); } },
 				{ "CreateConstraints body out of range", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(99, PT_INDEX_NONE); return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				// M9 joint semantics (docs/Abi.md 9.4): argument errors come before the capability, on every backend.
+				{ "CreateConstraints Body1 = PT_INDEX_NONE", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(PT_INDEX_NONE, Bodies.FirstDynamic); return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				{ "CreateConstraints Body1 == Body2", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(Bodies.FirstDynamic, Bodies.FirstDynamic); return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				{ "CreateConstraints reserved type FIXED", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(Bodies.FirstDynamic, PT_INDEX_NONE); Joint.Type = PT_JOINT_FIXED; return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				{ "CreateConstraints unknown flags", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(Bodies.FirstDynamic, PT_INDEX_NONE); Joint.Flags = 0x80u; return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				{ "CreateConstraints Reserved0 1", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(Bodies.FirstDynamic, PT_INDEX_NONE); Joint.Reserved0 = 1.0; return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				{ "CreateConstraints non-unit frame", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(Bodies.FirstDynamic, PT_INDEX_NONE); Joint.Frame2.Rotation = PtQuat{ 0.0, 0.0, 0.0, 2.0 }; return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
+				{ "CreateConstraints on a released body", PT_E_INVALID_ARG, [&] { Joint = MakeJoint(Released, PT_INDEX_NONE); return Api.CreateConstraints(Scene, &Joint, 1, sizeof(Joint)); } },
 				// frame
 				{ "SetUpForFrame dt NaN", PT_E_INVALID_ARG, [&] { return Api.SetUpForFrame(Scene, &Gravity, std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, 0.0f, 1, 0u); } },
 				{ "SetUpForFrame dt -1", PT_E_INVALID_ARG, [&] { return Api.SetUpForFrame(Scene, &Gravity, -1.0f, 0.0f, 0.0f, 0.0f, 1, 0u); } },
@@ -640,6 +663,11 @@ namespace PhysicsTest::AbiGates
 				{ "DumpEffectiveSettings Data NULL with Capacity 10", PT_E_INVALID_ARG, [&] { return Api.DumpEffectiveSettings(Scene, &BadText); } },
 				{ "GetMemoryStats(NULL)", PT_E_INVALID_ARG, [&] { return Api.GetMemoryStats(Scene, nullptr); } },
 				{ "GetLastErrorMessage Data NULL with Capacity 10", PT_E_INVALID_ARG, [&] { return Api.GetLastErrorMessage(&BadText); } },
+				// v1.1 (M9 fix round 1): the debug snapshot's Reserved fields and request bits follow the Reserved-field rule (docs/Abi.md
+				// 2), checked by the Kit before the backend's capability - the same code on a backend without snapshots (Null).
+				{ "CaptureDebugSnapshot Reserved 1", PT_E_INVALID_ARG, [&] { return WithSnapRequest([](PtDebugSnapshotRequest& Q) { Q.Reserved = 1; }); } },
+				{ "CaptureDebugSnapshot unknown PT_SNAP_* bit (0x80)", PT_E_INVALID_ARG, [&] { return WithSnapRequest([](PtDebugSnapshotRequest& Q) { Q.Flags |= 0x80u; }); } },
+				{ "ReadDebugSnapshot Reserved 1", PT_E_INVALID_ARG, [&] { SnapBuffers = {}; SnapBuffers.Reserved = 1; return Api.ReadDebugSnapshot(Scene, &SnapBuffers); } },
 			},
 			VerifyUnchanged);
 		R.Note(std::to_string(NumCases) + " negative cases");

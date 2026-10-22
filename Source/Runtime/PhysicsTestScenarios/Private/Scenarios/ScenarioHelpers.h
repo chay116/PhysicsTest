@@ -1,9 +1,14 @@
 // ScenarioHelpers.h - small authoring helpers shared by the scenarios (docs/Scenes.md conventions).
 #pragma once
 
+#include "BehaviorScenes.h"
+#include "PhysicsEngine/ConstraintUtils.h"
 #include "PhysicsTestScenario.h"
 #include "PhysScene.h"
 
+#include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <string>
 
 namespace PhysicsTest::ScenarioHelpers
@@ -121,6 +126,75 @@ namespace PhysicsTest::ScenarioHelpers
 	inline FScenarioCapacity MakePileCapacity(const uint32 N)
 	{
 		return FScenarioCapacity{ N + 1, 16u * N + 1024u, 8u * N + 1024u };
+	}
+
+	// ---- M9 behaviour scenes ----
+
+	// The same-engine perturbation parameter of the chaotic behaviour scenes (BehaviorScenes.h, docs/Scenes.md 1).
+	inline FScenarioParamDesc MakePerturbParamDesc()
+	{
+		return FScenarioParamDesc{ BehaviorScenes::PerturbParam, "0", {},
+			"0 = none; k != 0 = every dynamic body starts 1e-4 cm off along a unit direction drawn from FRandomStream(k) (same-engine sensitivity replicas)",
+			EScenarioParamType::Int32 };
+	}
+
+	// One draw per dynamic body, in spawn order, from a stream of its own (the layout's draws are unchanged).
+	class FPerturbation
+	{
+	public:
+		explicit FPerturbation(const FScenarioContext& Context)
+			: Seed(ParseSeed(Context.GetParam(BehaviorScenes::PerturbParam)))
+			, Stream(Seed)
+		{
+		}
+		[[nodiscard]] bool IsActive() const { return Seed != 0; }
+		// The next body's offset: PerturbationCm along a unit vector uniform on the sphere (z = U(-1, 1), phi = U(0, 2 pi)).
+		FVector Next()
+		{
+			if (Seed == 0)
+			{
+				return FVector(0.0, 0.0, 0.0);
+			}
+			const double Z = Stream.FRandRange(-1.0, 1.0);
+			const double Phi = Stream.FRandRange(0.0, 2.0 * 3.14159265358979323846);
+			const double R = std::sqrt(std::max(0.0, 1.0 - Z * Z));
+			return FVector(R * std::cos(Phi), R * std::sin(Phi), Z) * BehaviorScenes::PerturbationCm;
+		}
+
+	private:
+		static int32 ParseSeed(const std::string& Text)
+		{
+			int32 Value = 0;
+			const std::from_chars_result Result = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
+			return Result.ec == std::errc() ? Value : 0;   // validated as Int32 by ResolveParams
+		}
+		int32 Seed = 0;
+		FRandomStream Stream;
+	};
+
+	// A ball or hinge joint (ConstraintUtils presets, UE ConstraintUtils.h:10, :19 [V]) between Child (Body1) and Parent (Body2,
+	// nullptr = the world) with frames given by position and primary / secondary axes in each body's actor space.
+	inline FConstraintInstance MakeJoint(const char* Name, const bool bHinge, const FVector& Pos1, const FVector& Pri1, const FVector& Sec1, const FVector& Pos2,
+		const FVector& Pri2, const FVector& Sec2, const bool bDisableCollision)
+	{
+		FConstraintInstance Joint;
+		Joint.JointName = Name;
+		Joint.Pos1 = Pos1;
+		Joint.PriAxis1 = Pri1;
+		Joint.SecAxis1 = Sec1;
+		Joint.Pos2 = Pos2;
+		Joint.PriAxis2 = Pri2;
+		Joint.SecAxis2 = Sec2;
+		if (bHinge)
+		{
+			ConstraintUtils::ConfigureAsHinge(Joint);
+		}
+		else
+		{
+			ConstraintUtils::ConfigureAsBallAndSocket(Joint);
+		}
+		Joint.ProfileInstance.bDisableCollision = bDisableCollision;
+		return Joint;
 	}
 
 	// Parses a non-negative integer parameter (already validated against the scenario's allowed values).

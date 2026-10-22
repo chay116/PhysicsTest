@@ -3,6 +3,7 @@
 #include "PhysScene_Bullet.h"
 
 #include "BulletCombine.h"
+#include "BulletDebugDrawer.h"
 #include "BulletMath.h"
 #include "PtContactConvention.h"
 #include "PtDamping.h"
@@ -171,6 +172,19 @@ namespace PhysicsTest::BulletBackend
 		}
 
 		constexpr PtTransform GIdentityTransform = { PtQuat{ 0.0, 0.0, 0.0, 1.0 }, PtVec3{ 0.0, 0.0, 0.0 } };
+
+		// SleepThresholds=UE: the deactivation time of a body that must not want to sleep in the next step whatever the step's dt
+		// (m_deactivationTime + dt stays far below gDeactivationTime; Bullet resets it to 0 itself above the thresholds).
+		constexpr btScalar GNotReadyDeactivationTime = btScalar(-1.0e18);
+
+		// SleepThresholds=UE: the deactivation time the next step's btRigidBody::updateDeactivation starts from. Bullet adds the
+		// step's dt when the body stays under its thresholds and wantsSleeping then asks m_deactivationTime > gDeactivationTime
+		// (btRigidBody.h:494-530 [V]): gDeactivationTime itself makes the next step under the thresholds the one that wants to sleep.
+		// That is the SleepCounterThreshold-th consecutive step (Steps = the steps already under them).
+		btScalar GetUEDeactivationPreload(const uint32 Steps, const uint32 CounterThreshold)
+		{
+			return Steps + 1u >= CounterThreshold ? gDeactivationTime : GNotReadyDeactivationTime;
+		}
 	}
 
 	PtResult ApplySceneOption(FBulletSceneOptions& Options, const Abi::FStringRef Key, const Abi::FStringRef Value, char (&Error)[256])
@@ -273,6 +287,34 @@ namespace PhysicsTest::BulletBackend
 			}
 			return Fail("UE or Converted");
 		}
+		if (EqualsNoCase("SleepThresholds", Key))
+		{
+			if (EqualsNoCase("UE", Value))
+			{
+				Options.SleepRule = ESleepRule::UE;
+				return PT_OK;
+			}
+			if (EqualsNoCase("Bullet", Value))
+			{
+				Options.SleepRule = ESleepRule::Bullet;
+				return PT_OK;
+			}
+			return Fail("UE (the material thresholds and counter, M9) or Bullet (LinearSleepingThreshold / AngularSleepingThreshold, gDeactivationTime)");
+		}
+		if (EqualsNoCase("BallJoint", Key))
+		{
+			if (EqualsNoCase("Point2Point", Value))
+			{
+				Options.BallJoint = EBallJoint::Point2Point;
+				return PT_OK;
+			}
+			if (EqualsNoCase("Generic6DofSpring2", Value))
+			{
+				Options.BallJoint = EBallJoint::Generic6DofSpring2;
+				return PT_OK;
+			}
+			return Fail("Point2Point (btPoint2PointConstraint, docs/Abi.md 9.4) or Generic6DofSpring2 (btGeneric6DofSpring2Constraint, linear locked, angular free)");
+		}
 		if (EqualsNoCase("ManifoldPoolSize", Key) || EqualsNoCase("AlgorithmPoolSize", Key))
 		{
 			if (!ParseUInt(Value, Unsigned) || Unsigned > static_cast<uint64>(GMaxPoolSize))
@@ -282,9 +324,9 @@ namespace PhysicsTest::BulletBackend
 			(EqualsNoCase("ManifoldPoolSize", Key) ? Options.ManifoldPoolSize : Options.AlgorithmPoolSize) = static_cast<uint32>(Unsigned);
 			return PT_OK;
 		}
-		snprintf(Error, sizeof(Error), "Bullet: unknown scene option '%.*s' (NumIterations, SolverMode, SplitImpulse, SplitImpulsePenetrationThreshold, "
-			"SplitImpulseTurnErp, Erp2, LinearSlop, WarmstartingFactor, LinearSleepingThreshold, AngularSleepingThreshold, ForceUpdateAllAabbs, DampingModel, "
-			"ManifoldPoolSize, AlgorithmPoolSize)", static_cast<int>(Key.Length), Key.Data);
+		// The key list no longer fits the 256-byte message (M9 added SleepThresholds and BallJoint): the variant file names them all.
+		snprintf(Error, sizeof(Error), "Bullet: unknown scene option '%.*s' (see Config/Profiles/Backend/Bullet.Default.ini for the [PhysicsTest.Backend.Bullet] keys)",
+			static_cast<int>(Key.Length), Key.Data);
 		return PT_E_INVALID_ARG;
 	}
 
@@ -320,6 +362,13 @@ namespace PhysicsTest::BulletBackend
 		World->setInternalTickCallback(&PreTickCallback, this, true);
 		World->setInternalTickCallback(&PostTickCallback, this, false);
 		ApplySolverSettings();
+		// The native debug draw (M9): viz runs only (bench and behaviour runs never attach a drawer, 03 M5). DBG_NoDeactivation
+		// mirrors the profile, so the gDisableDeactivation that stepSimulation copies from it is what the bodies already have.
+		if (InDesc.RunMode == PT_RUN_VIZ)
+		{
+			DebugDrawer = new FBulletDebugDrawer(*this, !bSleepingAllowed);
+			World->setDebugDrawer(DebugDrawer);
+		}
 
 		const int32 Reserve = static_cast<int32>(InDesc.MaxBodiesHint > 0 ? InDesc.MaxBodiesHint : GDefaultBodyReserve);
 		Bodies.reserve(Reserve);
@@ -328,6 +377,14 @@ namespace PhysicsTest::BulletBackend
 
 	FPhysScene_Bullet::~FPhysScene_Bullet()
 	{
+		// Joints first: a btRigidBody must have no constraint refs when it is deleted (btRigidBody.cpp ~btRigidBody btAssert [V]).
+		for (int32 Index = 0; Index < Joints.size(); ++Index)
+		{
+			if (!Joints[Index].bReleased)
+			{
+				DestroyJoint(Joints[Index]);
+			}
+		}
 		for (int32 Index = 0; Index < Bodies.size(); ++Index)
 		{
 			if (!Bodies[Index].bReleased)
@@ -335,6 +392,9 @@ namespace PhysicsTest::BulletBackend
 				DestroyBody(Bodies[Index]);
 			}
 		}
+		delete WorldAnchor;
+		World->setDebugDrawer(nullptr);
+		delete DebugDrawer;
 		delete World;
 		delete Solver;
 		delete Broadphase;
@@ -525,7 +585,8 @@ namespace PhysicsTest::BulletBackend
 			// Damping is an InitDynamicProperties value (step 4).
 			Construction.m_linearDamping = 0;
 			Construction.m_angularDamping = 0;
-			// Bullet's own per-body sleep thresholds (the variant's; UE's material thresholds are mapped in M9).
+			// The variant's per-body sleep thresholds (SleepThresholds=Bullet, and kinematic bodies); a dynamic body under
+			// SleepThresholds=UE gets UE's in step 4 (InitDynamicProperties' sleep threshold, UE order).
 			Construction.m_linearSleepingThreshold = btScalar(GScale.Length(Options.LinearSleepingThresholdCm));
 			Construction.m_angularSleepingThreshold = btScalar(Options.AngularSleepingThreshold);
 			btRigidBody* Body = new btRigidBody(Construction);
@@ -607,7 +668,21 @@ namespace PhysicsTest::BulletBackend
 				NumDepenetrationOverrides += Info.MaxDepenetrationVelocity >= 0.0 ? 1u : 0u;
 				Body->setLinearVelocity(ToBtLength(Info.InitialLinearVelocity));
 				Body->setAngularVelocity(ToBtVector(Info.InitialAngularVelocity));
-				// (sleep / stabilisation threshold multipliers: Bullet's thresholds are the variant's, M9)
+				// Sleep thresholds (the header comment "Sleep"). SleepThresholds=UE: Chaos' per-particle rule - the first element's
+				// material thresholds x SleepThresholdMultiplier (the ESleepFamily factor), the material's counter (IslandManager.cpp:
+				// 239-256 [V]; the angular size scaling p.Chaos.Solver.Sleep.AngularSleepThresholdSize is 0 = off by default, :137).
+				// Bullet keeps the thresholds per body (btRigidBody::setSleepingThresholds); the counter is the post-tick's. (The
+				// stabilisation multiplier has no Bullet counterpart: no stabilisation pass.)
+				Record.SleepThresholdMultiplier = Info.SleepThresholdMultiplier;
+				if (Options.SleepRule == ESleepRule::UE)
+				{
+					btScalar Linear = 0;
+					btScalar Angular = 0;
+					GetSleepRuleThresholds(Record, Linear, Angular);
+					Body->setSleepingThresholds(Linear, Angular);
+					Record.SleepCounterThreshold = Materials[static_cast<int32>(Record.MaterialIndex)].SleepCounterThreshold;
+					Body->setDeactivationTime(GetUEDeactivationPreload(0u, Record.SleepCounterThreshold));
+				}
 				const bool bUEDamping = Options.DampingModel == EDampingModel::UEOrder && (Info.LinearDamping > 0.0 || Info.AngularDamping > 0.0);
 				if (bUEDamping || Record.MaxAngularVelocity > 0.0 || Record.MaxLinearVelocity > 0.0)
 				{
@@ -653,9 +728,11 @@ namespace PhysicsTest::BulletBackend
 
 	PtResult FPhysScene_Bullet::ReleaseActors(const uint32_t* BodyIndices, const uint32_t Num)
 	{
-		// The kit has rejected out-of-range, released and repeated indices.
+		// The kit has rejected out-of-range, released and repeated indices. docs/Abi.md 9.4 item 6: a released body releases every
+		// joint attached to it (removed from the world before the body, whose destructor asserts that no constraint refers to it).
 		for (uint32 Index = 0; Index < Num; ++Index)
 		{
+			ReleaseJointsOf(BodyIndices[Index]);
 			FBulletBody& Record = Bodies[static_cast<int32>(BodyIndices[Index])];
 			DestroyBody(Record);
 			Record.bReleased = true;
@@ -782,8 +859,12 @@ namespace PhysicsTest::BulletBackend
 			ApplyConvertedDamping(StepDeltaTime);
 		}
 		FrameErrorBits |= TakePoolErrorBits();   // the commands above (none allocate today)
-		// One variable step of exactly dt (maxSubSteps 0): the harness owns the frame plan (02 9.1).
+		// One variable step of exactly dt (maxSubSteps 0): the harness owns the frame plan (02 9.1). With the viz drawer attached,
+		// stepSimulation sets the process global gDisableDeactivation from the drawer's DBG_NoDeactivation (btDiscreteDynamicsWorld.cpp:
+		// 418-421 [V]): this scene's value during its step, the module's again afterwards (other scenes of the process).
+		const bool bSavedDisableDeactivation = gDisableDeactivation;
 		World->stepSimulation(btScalar(StepDeltaTime), 0, btScalar(StepDeltaTime));
+		gDisableDeactivation = bSavedDisableDeactivation;
 		FrameErrorBits |= TakePoolErrorBits();
 		TotalErrorBits |= FrameErrorBits;
 		bStepped = true;
@@ -857,6 +938,10 @@ namespace PhysicsTest::BulletBackend
 	void FPhysScene_Bullet::OnPreTick(const btScalar TimeStep)
 	{
 		const double Dt = static_cast<double>(TimeStep);
+		if (Joints.size() > 0)
+		{
+			UpdateJointLevers();   // the joint rows' levers of this step (the snapshot's AngularImpulse about the anchor)
+		}
 		// Kinematic velocities (computed in double at StartFrame): the target's, or zero without one (Reset). This replaces
 		// what saveKinematicState differentiated a moment ago.
 		for (int32 Slot = 0; Slot < Kinematics.size(); ++Slot)
@@ -959,6 +1044,75 @@ namespace PhysicsTest::BulletBackend
 		const int32 Algorithms = Dispatcher->GetAlgorithmPool().getUsedCount();
 		PeakManifoldsUsed = Manifolds > PeakManifoldsUsed ? Manifolds : PeakManifoldsUsed;
 		PeakAlgorithmsUsed = Algorithms > PeakAlgorithmsUsed ? Algorithms : PeakAlgorithmsUsed;
+		if (Options.SleepRule == ESleepRule::UE && bSleepingAllowed)
+		{
+			UpdateUESleepCounters();
+		}
+	}
+
+	void FPhysScene_Bullet::GetSleepRuleThresholds(const FBulletBody& Record, btScalar& OutLinear, btScalar& OutAngular) const
+	{
+		if (Options.SleepRule == ESleepRule::UE)
+		{
+			const PtPhysicalMaterial& Material = Materials[static_cast<int32>(Record.MaterialIndex)];
+			OutLinear = btScalar(GScale.Length(Record.SleepThresholdMultiplier * Material.SleepLinearVelocityThreshold));
+			OutAngular = btScalar(Record.SleepThresholdMultiplier * Material.SleepAngularVelocityThreshold);
+			return;
+		}
+		OutLinear = btScalar(GScale.Length(Options.LinearSleepingThresholdCm));
+		OutAngular = btScalar(Options.AngularSleepingThreshold);
+	}
+
+	void FPhysScene_Bullet::UpdateUESleepCounters()
+	{
+		// SleepThresholds=UE (the header comment "Sleep"). This callback runs right after btDiscreteDynamicsWorld::updateActivationState
+		// (internalSingleStepSimulation [V]), so the velocities below are the ones btRigidBody::updateDeactivation just tested, with
+		// the same expressions (btRigidBody.h:500-512 [V]). Chaos counts the island's consecutive steps with every particle under its
+		// thresholds and puts the island to sleep at the end of the step that count exceeds the largest SleepCounterThreshold
+		// (ProcessIslandSleep, IslandManager.cpp:2716-2787 [V]). Bullet puts an island to sleep at the start of the step after every
+		// body of it became WANTS_DEACTIVATION (btSimulationIslandManager::buildIslands [V]) - the body is not integrated in that
+		// step and reads back asleep at its end. A body here becomes WANTS_DEACTIVATION in the step its count reaches its threshold
+		// (the preload of GetUEDeactivationPreload), so the island reads back asleep at the end of the step after: the step Chaos'
+		// would. Approximations (bullet.sleep_rule): Bullet tests the step's velocity, Chaos a smoothed one (VSmooth, lerp
+		// p.Chaos.SmoothedPositionLerpRate 0.3); a body that woke as WANTS_DEACTIVATION (an island woken by a contact) may sleep again
+		// before its count (Bullet keeps the state while under the thresholds).
+		for (int32 Slot = 0; Slot < DynamicBodies.size(); ++Slot)
+		{
+			FBulletBody& Record = Bodies[static_cast<int32>(DynamicBodies[Slot])];
+			if (Record.bReleased)
+			{
+				continue;
+			}
+			btRigidBody& Body = *Record.Body;
+			const int State = Body.getActivationState();
+			if (State == ISLAND_SLEEPING || State == DISABLE_DEACTIVATION || State == DISABLE_SIMULATION)
+			{
+				Record.StepsUnderSleepThresholds = 0;
+				continue;
+			}
+			const bool bUnder = Body.getLinearVelocity().length2() < Body.getLinearSleepingThreshold() * Body.getLinearSleepingThreshold()
+				&& Body.getAngularVelocity().length2() < Body.getAngularSleepingThreshold() * Body.getAngularSleepingThreshold();
+			Record.StepsUnderSleepThresholds = bUnder ? (Record.StepsUnderSleepThresholds < 0x7FFFFFFFu ? Record.StepsUnderSleepThresholds + 1u : Record.StepsUnderSleepThresholds) : 0u;
+			Body.setDeactivationTime(GetUEDeactivationPreload(Record.StepsUnderSleepThresholds, Record.SleepCounterThreshold));
+		}
+	}
+
+	uint32 FPhysScene_Bullet::CountSleepRuleMismatches() const
+	{
+		uint32 Mismatches = 0;
+		for (int32 Slot = 0; Slot < DynamicBodies.size(); ++Slot)
+		{
+			const FBulletBody& Record = Bodies[static_cast<int32>(DynamicBodies[Slot])];
+			if (Record.bReleased)
+			{
+				continue;
+			}
+			btScalar Linear = 0;
+			btScalar Angular = 0;
+			GetSleepRuleThresholds(Record, Linear, Angular);
+			Mismatches += (Record.Body->getLinearSleepingThreshold() != Linear || Record.Body->getAngularSleepingThreshold() != Angular) ? 1u : 0u;
+		}
+		return Mismatches;
 	}
 
 	PtResult FPhysScene_Bullet::WaitPhysScenes()
@@ -1025,6 +1179,12 @@ namespace PhysicsTest::BulletBackend
 			if (bDynamic && !Body.isActive())
 			{
 				Body.activate();   // ACTIVE_TAG, deactivation time 0 (a DISABLE_DEACTIVATION body is always active)
+				if (Options.SleepRule == ESleepRule::UE)
+				{
+					// The counter starts again (and the preload of 0 steps replaces activate's 0: see UpdateUESleepCounters).
+					Record.StepsUnderSleepThresholds = 0;
+					Body.setDeactivationTime(GetUEDeactivationPreload(0u, Record.SleepCounterThreshold));
+				}
 				MarkDirty(Cmd.Body);
 				// M6 (contract (b)): its pairs were sleeping pairs with the last step's points; until the next narrow phase the
 				// snapshot leaves them out, as Jolt and PhysX drop a woken body's kept pairs (FlushKeptContactCommands).
@@ -1171,6 +1331,7 @@ namespace PhysicsTest::BulletBackend
 				Body.setActivationState(ISLAND_SLEEPING);
 				Body.setLinearVelocity(btVector3(0, 0, 0));
 				Body.setAngularVelocity(btVector3(0, 0, 0));
+				Record.StepsUnderSleepThresholds = 0;
 				MarkDirty(Cmd.Body);
 			}
 			break;
@@ -1385,6 +1546,7 @@ namespace PhysicsTest::BulletBackend
 		// Stage the snapshot now, so that ReadDebugSnapshot copies exactly what these counts describe.
 		SnapshotParticles.resizeNoInitialize(0);
 		SnapshotContacts.resizeNoInitialize(0);
+		SnapshotJoints.resizeNoInitialize(0);
 		bool bTruncated = false;
 		if ((Req.Flags & PT_SNAP_PARTICLES) != 0)
 		{
@@ -1500,11 +1662,28 @@ namespace PhysicsTest::BulletBackend
 				}
 			}
 		}
+		if ((Req.Flags & PT_SNAP_JOINTS) != 0)
+		{
+			CaptureJoints();   // PT_CAP_JOINT_SNAPSHOT (PhysScene_BulletJoints.cpp)
+		}
+		// PT_CAP_NATIVE_DEBUG_DRAW (viz runs): Bullet's own debug drawing of the world as it is now (the end of the last step).
+		// debugDrawWorld only reads the world (BulletDebugDrawer.h); without the viz drawer there is nothing to report.
+		bool bNativeDraw = false;
+		if ((Req.Flags & PT_SNAP_NATIVE_DRAW) != 0 && DebugDrawer != nullptr)
+		{
+			DebugDrawer->Begin(Req.MaxNativeCommands);
+			World->debugDrawWorld();
+			DebugDrawer->End();
+			bNativeDraw = true;
+			bTruncated = bTruncated || DebugDrawer->IsTruncated();
+		}
+		NumSnapshotCommands = bNativeDraw ? static_cast<uint32>(DebugDrawer->GetCommands().size()) : 0u;
+		NumSnapshotStringBytes = bNativeDraw ? static_cast<uint32>(DebugDrawer->GetStrings().size()) : 0u;
 		Out.NumParticles = static_cast<uint32>(SnapshotParticles.size());
 		Out.NumContactPoints = static_cast<uint32>(SnapshotContacts.size());
-		Out.NumJoints = 0;
-		Out.NumNativeCommands = 0;
-		Out.NumStringBytes = 0;
+		Out.NumJoints = static_cast<uint32>(SnapshotJoints.size());
+		Out.NumNativeCommands = NumSnapshotCommands;
+		Out.NumStringBytes = NumSnapshotStringBytes;
 		Out.bTruncated = bTruncated ? 1u : 0u;
 		return PT_OK;
 	}
@@ -1513,15 +1692,40 @@ namespace PhysicsTest::BulletBackend
 	{
 		const uint32 NumParticles = static_cast<uint32>(SnapshotParticles.size());
 		const uint32 NumContacts = static_cast<uint32>(SnapshotContacts.size());
-		if (Buffers.ParticleCapacity < NumParticles || Buffers.ContactCapacity < NumContacts)
+		const uint32 NumJointRecords = static_cast<uint32>(SnapshotJoints.size());
+		const uint32 NumCommands = NumSnapshotCommands;
+		const uint32 NumStringBytes = NumSnapshotStringBytes;
+		if (Buffers.ParticleCapacity < NumParticles || Buffers.ContactCapacity < NumContacts || Buffers.JointCapacity < NumJointRecords
+			|| Buffers.CommandCapacity < NumCommands || Buffers.StringCapacity < NumStringBytes)
 		{
-			return GetKit().SetLastError(PT_E_CAPACITY, "Bullet: ReadDebugSnapshot needs %u particles / %u contacts (capacity %u / %u)", NumParticles, NumContacts,
-				Buffers.ParticleCapacity, Buffers.ContactCapacity);
+			return GetKit().SetLastError(PT_E_CAPACITY, "Bullet: ReadDebugSnapshot needs %u particles / %u contacts / %u joints / %u native commands / %u string bytes "
+				"(capacity %u / %u / %u / %u / %u)", NumParticles, NumContacts, NumJointRecords, NumCommands, NumStringBytes, Buffers.ParticleCapacity, Buffers.ContactCapacity,
+				Buffers.JointCapacity, Buffers.CommandCapacity, Buffers.StringCapacity);
 		}
 		if ((NumParticles > 0 && (Buffers.Particles == nullptr || Buffers.ParticleStride < sizeof(PtParticleSnapshot)))
-			|| (NumContacts > 0 && (Buffers.ContactPoints == nullptr || Buffers.ContactStride < sizeof(PtContactPoint))))
+			|| (NumContacts > 0 && (Buffers.ContactPoints == nullptr || Buffers.ContactStride < sizeof(PtContactPoint)))
+			|| (NumJointRecords > 0 && (Buffers.Joints == nullptr || Buffers.JointStride < sizeof(PtJointSnapshot)))
+			|| (NumCommands > 0 && (Buffers.NativeCommands == nullptr || Buffers.CommandStride < sizeof(PtDebugDrawCmd)))
+			|| (NumStringBytes > 0 && Buffers.StringBytes == nullptr))
 		{
 			return GetKit().SetLastError(PT_E_INVALID_ARG, "Bullet: ReadDebugSnapshot buffers are NULL or their strides are too small");
+		}
+		for (uint32 Index = 0; Index < NumJointRecords; ++Index)
+		{
+			memcpy(reinterpret_cast<uint8*>(Buffers.Joints) + static_cast<size_t>(Index) * Buffers.JointStride, &SnapshotJoints[static_cast<int32>(Index)], sizeof(PtJointSnapshot));
+		}
+		if (NumCommands > 0)
+		{
+			const btAlignedObjectArray<PtDebugDrawCmd>& Commands = DebugDrawer->GetCommands();
+			for (uint32 Index = 0; Index < NumCommands; ++Index)
+			{
+				memcpy(reinterpret_cast<uint8*>(Buffers.NativeCommands) + static_cast<size_t>(Index) * Buffers.CommandStride, &Commands[static_cast<int32>(Index)],
+					sizeof(PtDebugDrawCmd));
+			}
+		}
+		if (NumStringBytes > 0)
+		{
+			memcpy(Buffers.StringBytes, &DebugDrawer->GetStrings()[0], NumStringBytes);
 		}
 		for (uint32 Index = 0; Index < NumParticles; ++Index)
 		{
@@ -1564,7 +1768,8 @@ namespace PhysicsTest::BulletBackend
 		// The solver keys can change between frames; the pools, the damping model and the per-body sleep thresholds are
 		// creation-time values.
 		if (EqualsNoCase("ManifoldPoolSize", Key) || EqualsNoCase("AlgorithmPoolSize", Key) || EqualsNoCase("DampingModel", Key)
-			|| EqualsNoCase("LinearSleepingThreshold", Key) || EqualsNoCase("AngularSleepingThreshold", Key))
+			|| EqualsNoCase("LinearSleepingThreshold", Key) || EqualsNoCase("AngularSleepingThreshold", Key) || EqualsNoCase("SleepThresholds", Key)
+			|| EqualsNoCase("BallJoint", Key))
 		{
 			return GetKit().SetLastError(PT_E_INVALID_ARG, "Bullet: scene option '%.*s' can only be given at CreateScene", static_cast<int>(Key.Length), Key.Data);
 		}
@@ -1701,6 +1906,7 @@ namespace PhysicsTest::BulletBackend
 		FRange MaxLinear;
 		FRange LinearSleep;
 		FRange AngularSleep;
+		FRange SleepCounter;
 		FRange BoxMargin;
 		uint32 NumDynamic = 0;
 		uint32 NumMaySleep = 0;
@@ -1750,6 +1956,7 @@ namespace PhysicsTest::BulletBackend
 			MaxLinear.Add(Record.MaxLinearVelocity);
 			LinearSleep.Add(GScale.ToCm(double(Body.getLinearSleepingThreshold())));
 			AngularSleep.Add(double(Body.getAngularSleepingThreshold()));
+			SleepCounter.Add(static_cast<double>(Record.SleepCounterThreshold));
 			NumMaySleep += Body.getActivationState() != DISABLE_DEACTIVATION ? 1u : 0u;
 			NumGyroscopic += (Body.getFlags() & (BT_ENABLE_GYROSCOPIC_FORCE_EXPLICIT | BT_ENABLE_GYROSCOPIC_FORCE_IMPLICIT_WORLD | BT_ENABLE_GYROSCOPIC_FORCE_IMPLICIT_BODY)) != 0 ? 1u : 0u;
 			NumCcd += Body.getCcdMotionThreshold() > 0 ? 1u : 0u;
@@ -1805,17 +2012,33 @@ namespace PhysicsTest::BulletBackend
 			const bool bMaySleep = bSleepingAllowed && !gDisableDeactivation;
 			Out.AppendEffective("sleep.enabled", Text, "bool", bMaySleep ? 1.0 : 0.0, "bool", "SET_ONLY");
 		}
-		if (LinearSleep.bAny)
+		// M9: the scene's sleep rule (SleepThresholds) as the bodies hold it. A rule key (docs/Abi.md 5.14): canonical = the dynamic
+		// bodies whose btRigidBody sleeping thresholds are not the ones the rule gives them (G9 compares it with 0); the native text
+		// has the ranges Bullet holds. The counter (UE rule) is the adapter's and is recorded in bullet.sleep_rule.
+		const bool bUESleep = Options.SleepRule == ESleepRule::UE;
 		{
-			snprintf(Text, sizeof(Text), "per body: linear < [%.9g, %.9g] cm/s and angular < [%.9g, %.9g] rad/s for gDeactivationTime %.9g s, island-wide "
-				"(Bullet's own; UE material thresholds not mapped, M9)", LinearSleep.Min, LinearSleep.Max, AngularSleep.Min, AngularSleep.Max, double(gDeactivationTime));
+			char SleepText[512];
+			const uint32 SleepMismatches = CountSleepRuleMismatches();
+			if (LinearSleep.bAny && bUESleep)
+			{
+				snprintf(SleepText, sizeof(SleepText), "UE rule (SleepThresholds=UE, approximate, bullet.sleep_rule): per dynamic body linear < [%.9g, %.9g] cm/s and angular "
+					"< [%.9g, %.9g] rad/s (btRigidBody sleeping thresholds = the first element's material SleepLinear / SleepAngularVelocityThreshold x "
+					"SleepThresholdMultiplier) for [%.9g, %.9g] consecutive steps (material SleepCounterThreshold); %u of %u bodies do not hold the rule",
+					LinearSleep.Min, LinearSleep.Max, AngularSleep.Min, AngularSleep.Max, SleepCounter.Min, SleepCounter.Max, SleepMismatches, NumDynamic);
+			}
+			else if (LinearSleep.bAny)
+			{
+				snprintf(SleepText, sizeof(SleepText), "Bullet rule (SleepThresholds=Bullet): per body linear < [%.9g, %.9g] cm/s and angular < [%.9g, %.9g] rad/s for "
+					"gDeactivationTime %.9g s, island-wide; %u of %u bodies do not hold the variant's LinearSleepingThreshold / AngularSleepingThreshold",
+					LinearSleep.Min, LinearSleep.Max, AngularSleep.Min, AngularSleep.Max, double(gDeactivationTime), SleepMismatches, NumDynamic);
+			}
+			else
+			{
+				snprintf(SleepText, sizeof(SleepText), "no dynamic body (SleepThresholds=%s; variant thresholds %.9g cm/s, %.9g rad/s; gDeactivationTime %.9g s)",
+					bUESleep ? "UE" : "Bullet", Options.LinearSleepingThresholdCm, Options.AngularSleepingThreshold, double(gDeactivationTime));
+			}
+			Out.AppendEffective("sleep.criteria", SleepText, "", LinearSleep.bAny ? static_cast<double>(SleepMismatches) : NaN, "bodies", "READBACK");
 		}
-		else
-		{
-			snprintf(Text, sizeof(Text), "no dynamic body (variant thresholds %.9g cm/s, %.9g rad/s; gDeactivationTime %.9g s)", Options.LinearSleepingThresholdCm,
-				Options.AngularSleepingThreshold, double(gDeactivationTime));
-		}
-		Out.AppendEffective("sleep.criteria", Text, "cm/s", LinearSleep.bAny ? LinearSleep.Max : NaN, "cm/s", "READBACK");
 		snprintf(Text, sizeof(Text), "%u of %u dynamic bodies have a CCD motion threshold (swept sphere); predictive contacts %s", NumCcd, NumDynamic,
 			World->getDispatchInfo().m_useContinuous ? "on" : "off");
 		Out.AppendEffective("ccd.enabled", Text, "bodies", NumCcd > 0 ? 1.0 : 0.0, "bool", "READBACK");
@@ -1892,11 +2115,42 @@ namespace PhysicsTest::BulletBackend
 		snprintf(Text, sizeof(Text), "n/a: no per-body initial-overlap rate (set on %u bodies, ignored)", NumDepenetrationOverrides);
 		Out.AppendEffective("bullet.max_depenetration_velocity", Text, "", NaN, "", "COMPILE_TIME");
 		Out.AppendEffective("bullet.inertia_conditioning", "n/a: PT_BODY_INERTIA_CONDITIONING ignored", "", NaN, "", "COMPILE_TIME");
-		const bool bDebugDrawer = World->getDebugDrawer() != nullptr;
-		Out.AppendEffective("bullet.debug_drawer",
-			bDebugDrawer ? "attached (btCollisionWorld::getDebugDrawer)"
-				: "none (btCollisionWorld::getDebugDrawer; never attached in bench / behaviour runs: it would override gDisableDeactivation; viz drawer M9)",
-			"bool", bDebugDrawer ? 1.0 : 0.0, "bool", "READBACK");
+		btIDebugDraw* const AttachedDrawer = World->getDebugDrawer();
+		if (AttachedDrawer != nullptr)
+		{
+			const int DrawMode = AttachedDrawer->getDebugMode();
+			snprintf(Text, sizeof(Text), "attached, viz run (btCollisionWorld::getDebugDrawer): mode 0x%x, DBG_NoDeactivation %s (= sleeping %s; gDisableDeactivation restored "
+				"after each step); %llu warnings", static_cast<unsigned>(DrawMode), (DrawMode & btIDebugDraw::DBG_NoDeactivation) != 0 ? "set" : "clear",
+				bSleepingAllowed ? "allowed" : "off", static_cast<unsigned long long>(DebugDrawer != nullptr ? DebugDrawer->GetNumWarnings() : 0u));
+		}
+		else
+		{
+			snprintf(Text, sizeof(Text), "none (btCollisionWorld::getDebugDrawer; attached in viz runs only: stepSimulation copies its DBG_NoDeactivation into gDisableDeactivation)");
+		}
+		Out.AppendEffective("bullet.debug_drawer", Text, "bool", AttachedDrawer != nullptr ? 1.0 : 0.0, "bool", "READBACK");
+		// M9: the sleep rule (SleepThresholds), the variant's choice applied by the adapter; the UE rule is an approximate mapping (03 M9
+		// "근사는 플래그"): what differs from Chaos is listed here.
+		if (bUESleep)
+		{
+			Out.AppendEffective("bullet.sleep_rule",
+				"UE (approximate): UE material thresholds x SleepThresholdMultiplier as btRigidBody sleeping thresholds; the material SleepCounterThreshold as the "
+				"adapter's count of consecutive steps under them (post-tick deactivation-time preload). Differs from Chaos: Bullet tests the step's velocity (Chaos "
+				"the smoothed VSmooth / WSmooth), each body counts alone and Bullet's island sleeps once every body wants to (Chaos: one island counter), a body an "
+				"island woke stays WANTS_DEACTIVATION while under its thresholds, no angular size scaling (Chaos default off), no isolated-particle factors (1)",
+				"", 1.0, "", "SET_ONLY");
+		}
+		else
+		{
+			Out.AppendEffective("bullet.sleep_rule", "Bullet: the variant's LinearSleepingThreshold / AngularSleepingThreshold and gDeactivationTime (M5)", "", 0.0, "", "SET_ONLY");
+		}
+		// M9 optional joint keys (docs/Abi.md 9.4 item 4): no projection; Bullet's own solver rows.
+		Out.AppendEffective("joint.projection", "0: Bullet has no joint projection (btPoint2PointConstraint / btHingeConstraint are hard rows of the sequential impulse solver)",
+			"bool", 0.0, "bool", "COMPILE_TIME");
+		Out.AppendEffective("joint.solver",
+			"btSequentialImpulseConstraintSolver: ball = btPoint2PointConstraint (3 linear rows), hinge = btHingeConstraint (3 linear + 2 angular rows, axis = frame Z = "
+			"the ABI frame X); position error by Baumgarte ERP btContactSolverInfo::m_erp (Bullet's 0.2, not a variant key), CFM 0, the world's iterations; no "
+			"limit, motor, softness or breaking (SIMD_INFINITY threshold)",
+			"", NaN, "", "COMPILE_TIME");
 		snprintf(Text, sizeof(Text), "%u", NumStartAsleepSkipped);
 		Out.AppendEffective("bullet.start_asleep_skipped", Text, "bodies", static_cast<double>(NumStartAsleepSkipped), "bodies", "SET_ONLY");
 		snprintf(Text, sizeof(Text), "0x%x", TotalErrorBits);

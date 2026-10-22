@@ -443,7 +443,7 @@ TEST_CASE("PhysicsTest.BulletBackend.SleepingIslandKeepsContacts")
 		++Frames;
 	}
 	REQUIRE(Scene->GetBodies()[1]->State.ObjectState == EObjectStateType::Sleeping);
-	MESSAGE("Bullet: the box fell asleep after " << Frames << " frames (Bullet's own deactivation: 2 s below 80 cm/s and 1 rad/s)");
+	MESSAGE("Bullet: the box fell asleep after " << Frames << " frames (M9 SleepThresholds=UE: the material's thresholds and counter, bullet.sleep_rule)");
 	FPhysicsDebugSnapshot Snapshot;
 	REQUIRE(Scene->CaptureDebugSnapshot(Snapshot));
 	REQUIRE(Snapshot.Contacts.size() == 4u);
@@ -826,6 +826,7 @@ TEST_CASE("PhysicsTest.BulletBackend.GlobalCombineRule")
 		Init.DebugName = "BulletFriction";
 		Init.BackendName = "Bullet";
 		Init.Config = &Config;
+		Init.bApplyForcedOverrides = false;   // the test authors per-material modes; Normalized's forced Average (M9) would undo them
 		FPhysScene Scene(Init);
 		FPhysicalMaterial GroundMaterial = *Scene.GetDefaultPhysicalMaterial();
 		GroundMaterial.Friction = 0.6f;

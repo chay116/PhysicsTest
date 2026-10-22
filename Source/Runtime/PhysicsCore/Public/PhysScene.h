@@ -97,6 +97,25 @@ namespace PhysicsTest
 		// receives, but not into the scene's test settings - a backend then installs, say, its contact listener while the
 		// run declares instrumentation tier 0, which the bench preflight (G10a) must refuse. 0 in every real run.
 		uint32 InjectedSceneInstrumentFlags = 0;
+		// M9 (02 10): apply the config's [/Script/PhysicsTest.ForcedOverrides] after authoring (FlushDeferredActors). False for
+		// the gate scenes and the gates themselves (IPhysicsTestScenario::AllowsForcedOverrides): S05 / S06 need their own
+		// per-material combine modes (docs/Scenes.md 2.9, 2.10).
+		bool bApplyForcedOverrides = true;
+	};
+
+	// M9: what the forced overrides did to one scene (manifest config.forced_overrides, the log).
+	struct FForcedOverrideReport
+	{
+		bool bEnabled = false;            // the scene applies them (FPhysSceneInitParams::bApplyForcedOverrides and a config)
+		int32 NumOverrides = 0;           // entries in the config
+		int32 NumMaterials = 0;           // distinct materials of flushed bodies
+		int32 NumMaterialsChanged = 0;
+		int32 NumForeignMaterials = 0;    // materials the scene does not own (a test's stack object): not forced, logged
+		int32 NumBodies = 0;              // flushed bodies
+		int32 NumBodiesChanged = 0;
+		// "material 'Name': PhysicalMaterial.FrictionCombineMode: Max -> Average" per material and value; bodies per distinct
+		// change with a count: "12 bodies: BodyInstance.LinearDamping: 0.01 -> 0".
+		std::vector<std::string> Changes;
 	};
 
 	// UE delegate names (PhysScene_PhysX.h, PhysScene_Chaos.h); single-cast in the harness. PreTick and PostTick receive
@@ -137,7 +156,10 @@ namespace PhysicsTest
 		// Copies Template, then InitBody(Setup, Transform, this): mass properties now, the actor at the next flush.
 		// Template.CollisionFilter must be valid (ObjectType < NumCollisionChannels; the marshalling rejects it too).
 		FBodyInstance* SpawnBody(const FBodyInstance& Template, const FBodySetup* Setup, const FTransform& Transform);
-		// Data only until the M9 joints: stored and counted, never sent to a backend. Bodies must be this scene's.
+		// M9 (02 6, docs/Abi.md 9.4): copies Template with Body1 (the child, required) and Body2 (the parent; nullptr = the world),
+		// both this scene's bodies. The joint must be a Phase-1 ball or hinge (MarshalConstraint; anything else is Fatal). It
+		// is sent at the next FlushDeferredActors, after the bodies' actors exist (CreateConstraints). A backend without the
+		// joint type's capability keeps it host-only (FPhysSceneStats::NumUnsupportedConstraints, a warning per type).
 		FConstraintInstance* SpawnConstraint(const FConstraintInstance& Template, FBodyInstance* Body1, FBodyInstance* Body2);
 		// Only bodies spawned by this scene (SpawnBody) can be deferred, once: a body that is already deferred or already has
 		// a backend actor is Fatal (one FBodyInstance never gets two actors; FBodyInstance::InitBody terminates a previous
@@ -147,7 +169,8 @@ namespace PhysicsTest
 		// drops a body that was deferred but not flushed yet, so the next FlushDeferredActors does not create an actor for it.
 		// FBodyInstance::TermBody calls it. No effect for a body that is not pending.
 		void RemoveBodyInstanceFromPendingLists_AssumesLocked(FBodyInstance* BodyInstance);
-		// [T_create] All deferred bodies in creation order, as one batch (see above).
+		// [T_create] All deferred bodies in creation order, as one batch (see above), then every deferred constraint
+		// (CreateConstraints, M9). The forced overrides apply to the deferred bodies and their materials first (M9).
 		void FlushDeferredActors();
 		// Releases the body's backend actor (ReleaseActors; phase Idle). FBodyInstance::TermBody calls it.
 		void ReleaseBody(FBodyInstance* Body);
@@ -185,6 +208,9 @@ namespace PhysicsTest
 		// ---- queries ----
 		[[nodiscard]] std::span<FBodyInstance* const> GetBodies() const;
 		[[nodiscard]] std::span<FConstraintInstance* const> GetConstraints() const;
+		// M9: the constraints as the backend received them (or would have: host-only ones too), spawn order; desc_sha256 hashes them.
+		[[nodiscard]] std::span<const PtConstraintCreateInfo> GetMarshalledConstraints() const;
+		[[nodiscard]] const FForcedOverrideReport& GetForcedOverrideReport() const;
 		[[nodiscard]] int32 GetNumDeferredActors() const;
 		[[nodiscard]] const FPhysicsSettings& GetSettings() const;
 		[[nodiscard]] const FPhysicsTestSettings& GetTestSettings() const;
@@ -204,9 +230,10 @@ namespace PhysicsTest
 		// Untimed backend reads (Idle only).
 		[[nodiscard]] uint64 ComputeNativeStateHash() const;
 		[[nodiscard]] std::string DumpEffectiveSettings() const;
-		// Debug snapshot (untimed, Idle; PROVISIONAL(M9) ABI): particles and, when the backend collects them (Jolt: viz runs
-		// or PT_INSTR_CONTACTS), contact points in the Chaos convention. False when the backend has no snapshot
-		// (PT_E_UNSUPPORTED, e.g. Null); a failing backend call is Fatal.
+		// Debug snapshot (untimed, Idle; ABI v1.1): particles and, when the backend collects them (Jolt: viz runs
+		// or PT_INSTR_CONTACTS), contact points in the Chaos convention; joints (PT_SNAP_JOINTS on a PT_CAP_JOINT_SNAPSHOT
+		// backend, M9) with JointHostIndex filled. False when the backend has no snapshot (PT_E_UNSUPPORTED, e.g. Null); a
+		// failing backend call is Fatal.
 		bool CaptureDebugSnapshot(FPhysicsDebugSnapshot& Out, uint32 SnapshotFlags = PT_SNAP_PARTICLES | PT_SNAP_CONTACTS) const;
 
 		// ---- run hashes (02 12.3, DL43) ----

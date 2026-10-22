@@ -1,8 +1,11 @@
 // BenchMultiRun.cpp - the multi-process gates of M7 (02_Architecture 14.3, 03_WorkPlan M7) and the exit-4 test load:
 //   -Gate=G8  (DET1)  the run in -Runs=N (default 3) fresh processes of this exe; every final h_native (and the harness-visible
 //                     state hash h_state) must be equal
-//   -Gate=G11         the run with contact capture off (-Instrument=none) and on (-Instrument=contacts -CaptureEvery=1), both
-//                     with -HashEvery=1; every frame's h_native and h_state must be equal (a result-neutral knob)
+//   -Gate=G11         the run twice with one result-neutral knob changed, both with -HashEvery=1; every frame's h_native and
+//                     h_state must be equal. -G11Knob= (M9): contacts (default, M7: capture off -Instrument=none / on
+//                     -Instrument=contacts -CaptureEvery=1), variants:<A>,<B> (two backend variants, e.g. Bullet Default and
+//                     StaticAabbOff; the desc_sha256 must be equal too), viz (Bench without instrumentation / Viz with
+//                     -Instrument=native_debug_draw -CaptureEvery=1: the Bullet viz drawer, 03 M9)
 //   -BusyHelper=<s>   spins the -Affinity CPUs at HIGH_PRIORITY_CLASS for <s> seconds (the contaminated-host CTest)
 // Test only: -InjectGateFault=<f> hands -InjectStatePerturbation=<f> to one child (G8: the last run, G11: contacts on), so
 // the comparison has to fail - the negative control that shows the gates can fail (M7 fix round 0).
@@ -280,16 +283,52 @@ namespace PhysicsTest
 		}
 		else
 		{
-			// G11 (02 14.3, 03 M7): contact capture is a result-neutral knob - every frame's state, with it off and on.
-			const std::vector<std::string> Switches = KeepSwitches(Spec.CommandLine, { "Gate=", "Runs=", "Out=", "Session=", "HostCheck=", "Instrument=",
-				"HashEvery=", "CaptureEvery=", "InjectGateFault=" });
-			std::vector<std::string> OnExtra = { "-HostCheck=record", "-Instrument=contacts", "-HashEvery=1", "-CaptureEvery=1" };
+			// G11 (02 14.3, 03 M7 / M9): a result-neutral knob - every frame's state, with the knob one way and the other.
+			const std::string Knob = Spec.G11Knob.empty() ? std::string("contacts") : Spec.G11Knob;
+			const bool bVariants = StartsWithNoCase(Knob, "variants:");
+			const bool bViz = StartsWithNoCase(Knob, "viz");
+			std::vector<const char*> Drop = { "Gate=", "Runs=", "Out=", "Session=", "HostCheck=", "Instrument=", "HashEvery=", "CaptureEvery=", "InjectGateFault=",
+				"G11Knob=" };
+			if (bVariants)
+			{
+				Drop.push_back("BackendProfile=");
+			}
+			if (bViz)
+			{
+				Drop.push_back("RunMode=");
+			}
+			const std::vector<std::string> Switches = KeepSwitches(Spec.CommandLine, Drop);
+			std::vector<std::string> OffExtra = { "-HostCheck=record", "-Instrument=none", "-HashEvery=1" };
+			std::vector<std::string> OnExtra;
+			std::string OffLabel = "contacts_off";
+			std::string OnLabel = "contacts_on";
+			if (bVariants)
+			{
+				const std::string Pair = Knob.substr(9);
+				const std::string A = Pair.substr(0, Pair.find(','));
+				const std::string B = Pair.substr(Pair.find(',') + 1);
+				OffExtra.push_back("-BackendProfile=" + A);
+				OnExtra = { "-HostCheck=record", "-Instrument=none", "-HashEvery=1", "-BackendProfile=" + B };
+				OffLabel = "variant_" + A;
+				OnLabel = "variant_" + B;
+			}
+			else if (bViz)
+			{
+				OffExtra.push_back("-RunMode=Bench");
+				OnExtra = { "-HostCheck=record", "-RunMode=Viz", "-Instrument=native_debug_draw", "-HashEvery=1", "-CaptureEvery=1" };
+				OffLabel = "bench";
+				OnLabel = "viz_native_draw";
+			}
+			else
+			{
+				OnExtra = { "-HostCheck=record", "-Instrument=contacts", "-HashEvery=1", "-CaptureEvery=1" };
+			}
 			if (Spec.InjectGateFaultFrame >= 0)
 			{
 				OnExtra.push_back("-InjectStatePerturbation=" + std::to_string(Spec.InjectGateFaultFrame));   // test only: the negative control
 			}
-			Children.push_back(RunChild("contacts_off", Switches, OutDir / "off", { "-HostCheck=record", "-Instrument=none", "-HashEvery=1" }));
-			Children.push_back(RunChild("contacts_on", Switches, OutDir / "on", OnExtra));
+			Children.push_back(RunChild(OffLabel, Switches, OutDir / "off", OffExtra));
+			Children.push_back(RunChild(OnLabel, Switches, OutDir / "on", OnExtra));
 			for (const FChildRun& Child : Children)
 			{
 				if (Child.ExitJsonCode != 0)
@@ -297,6 +336,11 @@ namespace PhysicsTest
 					Failures.push_back(Child.Label + ": exit.json " + std::to_string(Child.ExitJsonCode) + " (" + Child.Status + "), process " + std::to_string(Child.Process.ExitCode));
 				}
 			}
+			if (bVariants && Children[0].DescSha256 != Children[1].DescSha256)
+			{
+				Failures.push_back("desc_sha256 differs between the variants (" + Children[0].DescSha256 + ", " + Children[1].DescSha256 + "): not the same scene");
+			}
+			Notes.push_back("knob: " + Knob + " (" + OffLabel + " / " + OnLabel + ")");
 			const std::string Off = ReadTextFile(OutDir / "off" / "hashes.csv");
 			const std::string On = ReadTextFile(OutDir / "on" / "hashes.csv");
 			std::istringstream OffLines(Off);
@@ -334,8 +378,29 @@ namespace PhysicsTest
 			const uint64 ContactFrames = GetField(Recorders, "contacts", "frames", uint64(0));
 			const uint64 ContactPoints = GetField(Recorders, "contacts", "points", uint64(0));
 			const std::string ContactsNote = GetField(Recorders, "contacts", "note", std::string());
-			Notes.push_back(std::to_string(Rows) + " frames compared (h_native and h_state per frame); contacts on: " + std::to_string(ContactFrames)
-				+ " captured frames, " + std::to_string(ContactPoints) + " points" + (ContactsNote.empty() ? "" : " (" + ContactsNote + ")"));
+			if (bViz)
+			{
+				// M9 fix round 0: the knob is "the drawer attached and drawing every frame". A viz child whose drawer did not attach
+				// (or drew nothing) would compare two identical bench runs and pass vacuously, so the on child's own record must show a
+				// drawing in every frame it ran (-CaptureEvery=1): recorders.native_draw.frames == run.frames_run and commands > 0.
+				const uint64 DrawFrames = GetField(Recorders, "native_draw", "frames", uint64(0));
+				const uint64 DrawCommands = GetField(Recorders, "native_draw", "commands", uint64(0));
+				const std::string DrawNote = GetField(Recorders, "native_draw", "note", std::string());
+				const int32 OnFrames = Children.size() == 2 ? Children[1].FramesRun : 0;
+				if (DrawCommands == 0 || DrawFrames != static_cast<uint64>(OnFrames))
+				{
+					Failures.push_back("viz knob without a drawing: the on child recorded " + std::to_string(DrawCommands) + " native draw commands in "
+						+ std::to_string(DrawFrames) + " captured frames for " + std::to_string(OnFrames) + " frames run (recorders.native_draw" + (DrawNote.empty() ? "" : ": " + DrawNote)
+						+ "); the knob must draw every frame (a backend with PT_CAP_NATIVE_DEBUG_DRAW, -RunMode=Viz)");
+				}
+				Notes.push_back(std::to_string(Rows) + " frames compared (h_native and h_state per frame); viz on: " + std::to_string(DrawFrames) + " captured frames, "
+					+ std::to_string(DrawCommands) + " native draw commands" + (DrawNote.empty() ? "" : " (" + DrawNote + ")"));
+			}
+			else
+			{
+				Notes.push_back(std::to_string(Rows) + " frames compared (h_native and h_state per frame); contacts on: " + std::to_string(ContactFrames)
+					+ " captured frames, " + std::to_string(ContactPoints) + " points" + (ContactsNote.empty() ? "" : " (" + ContactsNote + ")"));
+			}
 		}
 		const bool bPassed = Failures.empty();
 		FJson Json;

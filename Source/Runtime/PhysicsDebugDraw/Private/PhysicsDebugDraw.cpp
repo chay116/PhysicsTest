@@ -18,6 +18,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <unordered_set>
 
@@ -819,13 +820,18 @@ namespace PhysicsTest::DebugDraw
 	{
 		// DrawJointConstraintImpl with the default features (actor connector + stretch, ChaosDebugDraw.h:179-185;
 		// ChaosDebugDraw.cpp:1816-1922 [V]). Chaos' frame "a" belongs to particle[1] and "b" to particle[0]; the harness maps
-		// FConstraintInstance::Body1 to particle[0] and Body2 to particle[1] (PtJointSnapshot is PROVISIONAL(M9)):
+		// FConstraintInstance::Body1 to particle[0] and Body2 to particle[1] (docs/Abi.md 9.4):
 		//   white actor -> gap (JointComSize), red gap -> frame a, cyan gap -> frame b (1.5 x LineThickness), magenta a -> b (3 x).
+		// M9: a captured snapshot names each joint's FConstraintInstance through JointHostIndex (the backend's JointIndex counts
+		// only the joints it created); a hand-made snapshot without it uses JointIndex as that index.
 		const FDebugDrawSettings& Settings = Context.Settings;
 		const std::span<FConstraintInstance* const> Constraints = Context.Scene.GetConstraints();
-		for (const PtJointSnapshot& Joint : Context.Snapshot.Joints)
+		const bool bHostIndex = Context.Snapshot.JointHostIndex.size() == Context.Snapshot.Joints.size();
+		for (size_t JointOffset = 0; JointOffset < Context.Snapshot.Joints.size(); ++JointOffset)
 		{
-			const FConstraintInstance* Constraint = Joint.JointIndex < Constraints.size() ? Constraints[Joint.JointIndex] : nullptr;
+			const PtJointSnapshot& Joint = Context.Snapshot.Joints[JointOffset];
+			const int64 HostIndex = bHostIndex ? static_cast<int64>(Context.Snapshot.JointHostIndex[JointOffset]) : static_cast<int64>(Joint.JointIndex);
+			const FConstraintInstance* Constraint = HostIndex >= 0 && HostIndex < static_cast<int64>(Constraints.size()) ? Constraints[static_cast<size_t>(HostIndex)] : nullptr;
 			const auto ParticleOf = [&](const FBodyInstance* Body) -> const PtParticleSnapshot*
 			{
 				return Body != nullptr && Body->ActorHandle.IsValid() ? FindParticle(Context, Body->ActorHandle.Index) : nullptr;
@@ -953,10 +959,58 @@ namespace PhysicsTest::DebugDraw
 		return SnapshotFlags;
 	}
 
+	namespace
+	{
+		PtTransform ToPtTransform(const FTransform& T)
+		{
+			const FQuat& Q = T.GetRotation();
+			const FVector& P = T.GetTranslation();
+			return PtTransform{ PtQuat{ Q.X, Q.Y, Q.Z, Q.W }, PtVec3{ P.X, P.Y, P.Z } };
+		}
+
+		// M9: joints from the host's pulled body states when the backend has no joint snapshot (no PT_CAP_JOINT_SNAPSHOT): every
+		// joint the backend simulates, world frames from FConstraintInstance::GetWorldFrame, impulses unknown.
+		void AddHostJoints(const FPhysScene& Scene, FPhysicsDebugSnapshot& Out)
+		{
+			const std::span<FConstraintInstance* const> Constraints = Scene.GetConstraints();
+			for (size_t Index = 0; Index < Constraints.size(); ++Index)
+			{
+				const FConstraintInstance* Constraint = Constraints[Index];
+				if (Constraint == nullptr || !Constraint->IsSimulated())
+				{
+					continue;
+				}
+				PtJointSnapshot Joint = {};
+				Joint.Frame1World = ToPtTransform(Constraint->GetWorldFrame(EConstraintFrame::Frame1));
+				Joint.Frame2World = ToPtTransform(Constraint->GetWorldFrame(EConstraintFrame::Frame2));
+				const double NaN = std::numeric_limits<double>::quiet_NaN();
+				Joint.LinearImpulse = PtVec3{ NaN, NaN, NaN };
+				Joint.AngularImpulse = PtVec3{ NaN, NaN, NaN };
+				Joint.JointIndex = Constraint->ConstraintHandle.Index;
+				Joint.Flags = PT_JOINTSNAP_IMPULSE_NA;
+				const auto IsAsleepOrStill = [](const FBodyInstance* Body) { return Body == nullptr || !Body->IsDynamic() || Body->State.ObjectState == EObjectStateType::Sleeping; };
+				if (IsAsleepOrStill(Constraint->Body1) && IsAsleepOrStill(Constraint->Body2))
+				{
+					Joint.Flags |= PT_JOINTSNAP_SLEEPING;
+				}
+				Out.Joints.push_back(Joint);
+				Out.JointHostIndex.push_back(static_cast<int32>(Index));
+			}
+			Out.bJointsFromHostState = true;
+		}
+	}
+
 	void CaptureSnapshot(const FPhysScene& Scene, const uint32 SnapshotFlags, FPhysicsDebugSnapshot& Out)
 	{
+		const bool bHostJoints = (SnapshotFlags & PT_SNAP_JOINTS) != 0 && !Scene.GetBackendInfo().Has(PT_CAP_JOINT_SNAPSHOT);
 		if (Scene.CaptureDebugSnapshot(Out, SnapshotFlags))
 		{
+			if (bHostJoints)
+			{
+				Out.Joints.clear();
+				Out.JointHostIndex.clear();
+				AddHostJoints(Scene, Out);
+			}
 			return;
 		}
 		// The backend has no snapshot: the host's view of every body with an actor (creation order = body index order).
@@ -1008,6 +1062,10 @@ namespace PhysicsTest::DebugDraw
 			Particle.NativeIslandId = -1;
 			Out.Particles.push_back(Particle);
 			Out.NumBodies = Particle.BodyIndex + 1 > Out.NumBodies ? Particle.BodyIndex + 1 : Out.NumBodies;   // host handles: valid
+		}
+		if (bHostJoints)
+		{
+			AddHostJoints(Scene, Out);
 		}
 	}
 }

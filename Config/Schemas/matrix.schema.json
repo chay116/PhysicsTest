@@ -12,8 +12,8 @@
     "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,32}$" },
     "description": { "type": "string", "minLength": 1 },
     "purpose": {
-      "description": "perf: timing tables (R >= 5 is the protocol, 02 12.5; the report marks fewer). determinism: DET1 groups (fresh processes of one exe, same T), usually with -HashEvery=1 for the first divergent frame. M9 (behavior) and M11 (thread series) extend this enum and the schema version.",
-      "enum": [ "perf", "determinism" ]
+      "description": "perf: timing tables (R >= 5 is the protocol, 02 12.5; the report marks fewer). determinism: DET1 groups (fresh processes of one exe, same T), usually with -HashEvery=1 for the first divergent frame. behavior (M9): behaviour runs (-RunMode=Behavior with -StatesEvery: states.ptst + scene_desc.json) for analysis/behavior.py; their timings never enter a table. M11 (thread series) extends this enum.",
+      "enum": [ "perf", "determinism", "behavior" ]
     },
     "preset": {
       "description": "The build whose out/<preset>/bin/PhysicsTestBench.exe runs the matrix (headline timing: test or test-avx2). --exe / --preset override it.",
@@ -25,7 +25,7 @@
     "timeout_s": { "description": "A run that does not end in time is killed and recorded as timed_out (no exit.json).", "type": "number", "exclusiveMinimum": 0, "maximum": 86400 },
     "contaminated_retries": { "description": "Fresh-process retries of a run that ends with exit code 4 (default 2); the cell is 'contaminated' when every attempt ends with 4.", "type": "integer", "minimum": 0, "maximum": 10 },
     "window": { "description": "The scene window whose per-run mean is the run's value (default headline).", "type": "string", "minLength": 1 },
-    "bench_args": { "description": "Extra PhysicsTestBench switches for every run (e.g. -HashEvery=1 for a determinism matrix). ptbench refuses a switch key (case-insensitive, before '='; -ini: up to [Section]:Key) that appears twice for a cell over the matrix's, the target's and --bench-arg switches - the bench reads the first occurrence only (FParse::Value) - and the switches the runner sets per cell (-Out, -Backend, -BackendProfile, -Profile, -Scenario, -Param:, -Threads, -Frames, -Repeat, -Order, -BlockSeed, -Session) or that start another mode (-Gate, -List, -Describe, -Conformance, -AnalyticReferences, -SceneHashes, -BusyHelper).", "type": "array", "items": { "type": "string", "pattern": "^-" } },
+    "bench_args": { "description": "Extra PhysicsTestBench switches for every run (e.g. -HashEvery=1 for a determinism matrix). ptbench refuses a switch key (case-insensitive, before '='; -ini: up to [Section]:Key) that appears twice for a cell over the matrix's, the target's, the scene's (M9) and --bench-arg switches - the bench reads the first occurrence only (FParse::Value) - and the switches the runner sets per cell (-Out, -Backend, -BackendProfile, -Profile, -Scenario, -Param:, -Threads, -Frames, -Repeat, -Order, -BlockSeed, -Session) or that start another mode (-Gate, -List, -Describe, -Conformance, -AnalyticReferences, -SceneHashes, -BusyHelper).", "type": "array", "items": { "type": "string", "pattern": "^-" } },
     "targets": {
       "type": "array",
       "minItems": 1,
@@ -56,7 +56,12 @@
         "properties": {
           "scenario": { "type": "string", "minLength": 1 },
           "params": { "type": "object", "additionalProperties": { "type": [ "string", "integer" ] } },
-          "frames": { "description": "0 or absent = the scene's default.", "type": [ "integer", "null" ], "minimum": 0 }
+          "frames": { "description": "0 or absent = the scene's default.", "type": [ "integer", "null" ], "minimum": 0 },
+          "bench_args": {
+            "description": "Extra PhysicsTestBench switches for this scene entry only (M9: e.g. -StatesEvery=1 for the behaviour scenes, -StatesEvery=100 for a 1000-body pile in the same matrix). Same rules as bench_args: no key may repeat one of the matrix's, the target's or --bench-arg switches of the same cell, nor be a runner or mode switch. Not part of the cell id: two scene entries that differ only here are duplicate cells.",
+            "type": "array",
+            "items": { "type": "string", "pattern": "^-" }
+          }
         }
       }
     },

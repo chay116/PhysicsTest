@@ -297,7 +297,8 @@ TEST_CASE("PhysicsTest.Profile.LoadErrors")
 	ExpectPinned("[/Script/PhysicsTest.BodyInstanceDefaults]\nPositionSolverIterationCount=300\n", "in range");
 	ExpectPinned("[/Script/PhysicsTest.BodyInstanceDefaults]\n+LinearDamping=0\n", "array operators");
 	ExpectPinned("[/Script/Engine.PhysicsSettings]\nSolverOptions=(PositionIterations=x)\n", "PositionIterations");
-	ExpectPinned("[/Script/PhysicsTest.ForcedOverrides]\nFriction=0.5\n", "M9");
+	// M9: the forced overrides exist; a key without its target is an error (PhysicsTest.Profile.ForcedOverrides has the rest).
+	ExpectPinned("[/Script/PhysicsTest.ForcedOverrides]\nFriction=0.5\n", "PhysicalMaterial.<field> or BodyInstance.<field>");
 	ExpectPinned("[Some.Other.Section]\nA=1\n", "unknown section");
 	ExpectPinned("[PhysicsTest.Backend.PhysX]\nSolverType=TGS\n", "belong in a backend variant");
 	ExpectPinned("[ConsoleVariables]\np.ComNudgeAffectsInertia=maybe\n", "does not parse");

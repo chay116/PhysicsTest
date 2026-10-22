@@ -133,8 +133,10 @@ namespace PhysicsTest::PhysXBackend
 
 	FPhysScene_PhysX::~FPhysScene_PhysX()
 	{
-		// Actors are owned by the PxPhysics, not the scene: release every live one (which removes it from the scene), then the
-		// scene, the dispatcher it used, the materials and the scratch block.
+		// Actors are owned by the PxPhysics, not the scene: release the joints (M9; PhysX does not release a joint with its
+		// actors), then every live actor (which removes it from the scene), then the scene, the dispatcher it used, the
+		// materials and the scratch block.
+		ReleaseAllJoints();
 		for (FPhysXBody& Body : Bodies)
 		{
 			if (!Body.bReleased && Body.Actor != nullptr)
@@ -290,6 +292,13 @@ namespace PhysicsTest::PhysXBackend
 		{
 			snprintf(Error, sizeof(Error), "PhysX: PxPhysics::createScene failed");
 			return PT_E_ENGINE;
+		}
+		// M9 native debug draw: PhysX's visualization in viz runs only (PhysXDebugRender.h). Every other run keeps eSCALE 0, so
+		// PhysX draws nothing and spends nothing on it.
+		if (Desc.RunMode == PT_RUN_VIZ && Config.Visualization != 0)
+		{
+			ApplyVisualizationParameters(*Scene, Config.Visualization, Scale);
+			bVisualization = true;
 		}
 		// UE4's SimulateScratchMemorySize block: 16-byte aligned, a multiple of 16 KiB (PxScene::simulate).
 		if (Config.ScratchMemoryBytes > 0)
@@ -777,9 +786,11 @@ namespace PhysicsTest::PhysXBackend
 
 	PtResult FPhysScene_PhysX::ReleaseActors(const uint32_t* BodyIndices, const uint32_t Num)
 	{
-		// The kit has rejected out-of-range, released and repeated indices.
+		// The kit has rejected out-of-range, released and repeated indices. M9: the body's joints go first (docs/Abi.md 9.4
+		// item 6), the indices stay taken.
 		for (uint32 Index = 0; Index < Num; ++Index)
 		{
+			ReleaseJointsOf(BodyIndices[Index]);
 			FPhysXBody& Body = Bodies[BodyIndices[Index]];
 			Body.Actor->release();   // removes it from the scene
 			Body.Actor = nullptr;
@@ -939,6 +950,7 @@ namespace PhysicsTest::PhysXBackend
 		else
 		{
 			bSimulating = true;
+			LastSimulatedDeltaTime = StepDeltaTime;   // PxConstraint::getForce divides the joint impulse by this dt (joint snapshot)
 		}
 		CheckPhysXErrors(false);
 		return PT_OK;
@@ -1490,6 +1502,8 @@ namespace PhysicsTest::PhysXBackend
 		// Stage the snapshot now, so that ReadDebugSnapshot copies exactly what these counts describe.
 		SnapshotParticles.clear();
 		SnapshotContacts.clear();
+		SnapshotJoints.clear();
+		SnapshotCommands.clear();
 		bool bTruncated = false;
 		if ((Req.Flags & PT_SNAP_PARTICLES) != 0)
 		{
@@ -1572,24 +1586,41 @@ namespace PhysicsTest::PhysXBackend
 				SnapshotContacts.pushBack(Contact);
 			}
 		}
+		// M9: every live joint with the engine's world frames and the impulse on Body1 (PT_CAP_JOINT_SNAPSHOT, PhysXConstraint.cpp).
+		if ((Req.Flags & PT_SNAP_JOINTS) != 0)
+		{
+			StageJointSnapshots();
+		}
+		// M9 native debug draw: PhysX's render buffer of the last step (viz runs; PhysXDebugRender.h). Elsewhere eSCALE is 0 and
+		// the buffer is empty. Req.NativeDrawCategories is not used: the categories are the variant's DebugVisualization, fixed
+		// when the scene is created (PhysX draws during simulate, so a capture cannot select what the last step drew).
+		if ((Req.Flags & PT_SNAP_NATIVE_DRAW) != 0 && bVisualization)
+		{
+			LastCaptureCommands = ConvertRenderBuffer(Scene->getRenderBuffer(), Scale, Req.MaxNativeCommands, SnapshotCommands, bTruncated);
+			++NumNativeCaptures;
+		}
 		Out.NumParticles = SnapshotParticles.size();
 		Out.NumContactPoints = SnapshotContacts.size();
-		Out.NumJoints = 0;
-		Out.NumNativeCommands = 0;
-		Out.NumStringBytes = 0;
+		Out.NumJoints = SnapshotJoints.size();
+		Out.NumNativeCommands = SnapshotCommands.size();
+		Out.NumStringBytes = 0;   // PhysX 5.11's render buffer holds no text
 		Out.bTruncated = bTruncated ? 1u : 0u;
 		return PT_OK;
 	}
 
 	PtResult FPhysScene_PhysX::ReadDebugSnapshot(const PtDebugSnapshotBuffers& Buffers)
 	{
-		if (Buffers.ParticleCapacity < SnapshotParticles.size() || Buffers.ContactCapacity < SnapshotContacts.size())
+		if (Buffers.ParticleCapacity < SnapshotParticles.size() || Buffers.ContactCapacity < SnapshotContacts.size() || Buffers.JointCapacity < SnapshotJoints.size()
+			|| Buffers.CommandCapacity < SnapshotCommands.size())
 		{
-			return GetKit().SetLastError(PT_E_CAPACITY, "PhysX: ReadDebugSnapshot needs %u particles / %u contacts (capacity %u / %u)", SnapshotParticles.size(),
-				SnapshotContacts.size(), Buffers.ParticleCapacity, Buffers.ContactCapacity);
+			return GetKit().SetLastError(PT_E_CAPACITY, "PhysX: ReadDebugSnapshot needs %u particles / %u contacts / %u joints / %u native commands (capacity %u / %u / %u / %u)",
+				SnapshotParticles.size(), SnapshotContacts.size(), SnapshotJoints.size(), SnapshotCommands.size(), Buffers.ParticleCapacity, Buffers.ContactCapacity,
+				Buffers.JointCapacity, Buffers.CommandCapacity);
 		}
 		if ((!SnapshotParticles.empty() && (Buffers.Particles == nullptr || Buffers.ParticleStride < sizeof(PtParticleSnapshot)))
-			|| (!SnapshotContacts.empty() && (Buffers.ContactPoints == nullptr || Buffers.ContactStride < sizeof(PtContactPoint))))
+			|| (!SnapshotContacts.empty() && (Buffers.ContactPoints == nullptr || Buffers.ContactStride < sizeof(PtContactPoint)))
+			|| (!SnapshotJoints.empty() && (Buffers.Joints == nullptr || Buffers.JointStride < sizeof(PtJointSnapshot)))
+			|| (!SnapshotCommands.empty() && (Buffers.NativeCommands == nullptr || Buffers.CommandStride < sizeof(PtDebugDrawCmd))))
 		{
 			return GetKit().SetLastError(PT_E_INVALID_ARG, "PhysX: ReadDebugSnapshot buffers are NULL or their strides are too small");
 		}
@@ -1600,6 +1631,14 @@ namespace PhysicsTest::PhysXBackend
 		for (uint32 Index = 0; Index < SnapshotContacts.size(); ++Index)
 		{
 			memcpy(reinterpret_cast<uint8*>(Buffers.ContactPoints) + static_cast<size_t>(Index) * Buffers.ContactStride, &SnapshotContacts[Index], sizeof(PtContactPoint));
+		}
+		for (uint32 Index = 0; Index < SnapshotJoints.size(); ++Index)
+		{
+			memcpy(reinterpret_cast<uint8*>(Buffers.Joints) + static_cast<size_t>(Index) * Buffers.JointStride, &SnapshotJoints[Index], sizeof(PtJointSnapshot));
+		}
+		for (uint32 Index = 0; Index < SnapshotCommands.size(); ++Index)
+		{
+			memcpy(reinterpret_cast<uint8*>(Buffers.NativeCommands) + static_cast<size_t>(Index) * Buffers.CommandStride, &SnapshotCommands[Index], sizeof(PtDebugDrawCmd));
 		}
 		return PT_OK;
 	}
@@ -1897,6 +1936,9 @@ namespace PhysicsTest::PhysXBackend
 		Out.AppendEffective("contact.point_pose", "0 (start of step: the narrow phase collides the poses the step began with)", "", 0.0, "", "COMPILE_TIME");
 		Out.AppendEffective("listeners.installed", bListener ? "1 (FPhysXSimEventCallback: viz / PT_INSTR_CONTACTS)" : "0", "listeners", bListener ? 1.0 : 0.0,
 			"listeners", "READBACK");
+		// M9: the joint recipe and the native debug draw (optional keys; docs/Abi.md 9.4 item 4).
+		AppendJointSettings(Out);
+		AppendVisualizationSettings(Out);
 
 		// PhysX-specific (physx.tolerances_* and physx.cpu_dispatcher are the backend's required keys).
 		snprintf(Text, sizeof(Text), "%.9g (PxPhysics::getTolerancesScale().length, native units)", static_cast<double>(Tolerances.length));
@@ -1988,6 +2030,39 @@ namespace PhysicsTest::PhysXBackend
 		snprintf(Text, sizeof(Text), "0x%x (eOUT_OF_MEMORY; PhysX grows its pools itself)", GPhysXCapacityErrorBits);
 		Out.AppendEffective("errors.capacity_bits", Text, "bits", static_cast<double>(GPhysXCapacityErrorBits), "bits", "COMPILE_TIME");
 		return PT_OK;
+	}
+
+	void FPhysScene_PhysX::AppendVisualizationSettings(Abi::FTextWriter& Out) const
+	{
+		// What the scene holds (PxScene::getVisualizationParameter) and what its render buffer holds now (the last step's
+		// drawing). SET_ONLY: the categories are the adapter's input and no G9 rule covers the key (docs/Abi.md 9.1 decision 11).
+		char Text[1024];
+		if (!bVisualization)
+		{
+			snprintf(Text, sizeof(Text), "off: %s (PxVisualizationParameter::eSCALE %.9g; the parameters are set in viz runs only, PT_SNAP_NATIVE_DRAW reports no command)",
+				Desc.RunMode == PT_RUN_VIZ ? "DebugVisualization=None" : "not a viz run", static_cast<double>(Scene->getVisualizationParameter(physx::PxVisualizationParameter::eSCALE)));
+			Out.AppendEffective("physx.debug_visualization", Text, "categories", 0.0, "categories", "SET_ONLY");
+			return;
+		}
+		char List[512] = {};
+		uint32 Length = 0;
+		uint32 NumCategories = 0;
+		for (uint32 Bit = 1; Bit <= PhysXViz_All; Bit <<= 1u)
+		{
+			if ((Config.Visualization & Bit) == 0)
+			{
+				continue;
+			}
+			const int Written = snprintf(List + Length, sizeof(List) - Length, "%s%s", NumCategories > 0 ? "," : "", GetVisualizationCategoryName(Bit));
+			Length += Written > 0 && static_cast<uint32>(Written) < sizeof(List) - Length ? static_cast<uint32>(Written) : 0u;
+			++NumCategories;
+		}
+		const FPhysXRenderCounts Now = CountRenderBuffer(Scene->getRenderBuffer());
+		snprintf(Text, sizeof(Text), "on (viz run): DebugVisualization=%s, eSCALE %.9g native units (1 m), axes %.9g cm, contact normals %.9g cm; render buffer of the last "
+			"step: %u points, %u lines, %u triangles (%u multi-colour; PxScene::getRenderBuffer); %u PT_SNAP_NATIVE_DRAW captures, the last of %u primitives", List,
+			static_cast<double>(Scene->getVisualizationParameter(physx::PxVisualizationParameter::eSCALE)), GVizAxisLengthCm, GVizNormalLengthCm, Now.NumPoints, Now.NumLines,
+			Now.NumTriangles, Now.NumMultiColour, NumNativeCaptures, LastCaptureCommands.Total());
+		Out.AppendEffective("physx.debug_visualization", Text, "categories", static_cast<double>(NumCategories), "categories", "SET_ONLY");
 	}
 
 	PtResult FPhysScene_PhysX::GetMemoryStats(PtMemoryStats& Out)

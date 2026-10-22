@@ -14,8 +14,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ptbench"
-version = "0.8.0"
-description = "PhysicsTest bench orchestration (matrix runner, environment gate) and basic analysis (load, validate, perf, report, determinism, analytic)"
+version = "0.9.0"
+description = "PhysicsTest bench orchestration (matrix runner, environment gate) and analysis (load, validate, perf, report, determinism, analytic, behavior)"
 requires-python = ">=3.11"
 # Exact versions: requirements.lock (pip freeze of requirements.in). Installed with --no-deps, so this list is documentation.
 dependencies = ["numpy", "pandas", "pyarrow", "scipy", "matplotlib", "jsonschema"]

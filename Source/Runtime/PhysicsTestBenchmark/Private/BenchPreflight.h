@@ -16,6 +16,7 @@
 
 #include "BenchmarkRunner.h"
 #include "ConformanceGate.h"
+#include "Gates/PhysicsGates.h"
 #include "Physics/EffectiveSettings.h"
 
 #include <string>
@@ -52,6 +53,8 @@ namespace PhysicsTest
 			std::vector<FGateReport> Reports;   // G0, G9, G10a
 			bool bPassed = true;
 			std::vector<std::string> TimingInvalidReasons;   // what G10a found that keeps the timing off the headline
+			// M9 (02 10): every effective key of the run next to its resolved expectation (G9's rule) - preflight_diff.json.
+			std::vector<Gates::FReadbackDiffRow> Diff;
 			// A test-only -InjectPreflightFault=g9:<key> that cannot fail G9 (no such key, or G9 does not compare it on this
 			// scene): the run is refused as a usage error, so a mistyped injection never passes silently (M8, M7 review).
 			std::string InjectionError;

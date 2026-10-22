@@ -1,7 +1,9 @@
 # 부록 A. 헤더 스케치 (Header Sketches)
 
+> **v1.1이 이 초안을 대신한다 (M9, 2026-10-22).** 이 부록은 구현 전의 역사적 설계 초안이다: 여기의 `PROVISIONAL(M9)` 표시, `TwistLimitLow`/`TwistLimitHigh`, `PT_ABI_VERSION_MINOR 0`, `PT_ABI_PROVISIONAL_REVISION 1`은 계약이 아니다. 계약의 정본은 `Source/Runtime/PhysicsTestAbi/Public/PhysicsTestAbi/PtBackendAbi.h`(v1.1: minor 1, 리비전 3에서 동결, `TwistLimitLow/High` → `Reserved0/1`)와 [Abi.md](../Abi.md) §9.2·§9.4다. v1.1은 v1.0과 append-only로 호환된다 (모든 구조체의 크기·오프셋이 같다). 태그 `abi-v1.1`은 리드가 M9 커밋에 단다.
+>
 > **작성일:** 2026-10-21
-> **상태:** 설계 초안 v1.0 (구현 전)
+> **상태:** 설계 초안 v1.0 (구현 전, 역사 기록. 위 v1.1 안내 참조)
 > **관련 문서:** [01_Feasibility.md](../01_Feasibility.md) · [02_Architecture.md](../02_Architecture.md) · [03_WorkPlan.md](../03_WorkPlan.md) · [04_DecisionLog.md](../04_DecisionLog.md)
 > **근거 표기:** **[V]** 로컬 소스(`D:\UnrealEngine` 5.8.3, `D:\PhysicsRefs`)를 읽었거나 직접 컴파일·실행해 확인 · **[M]** UE 4.18 서드파티 미러에서 온 내용(미확인, 복사 금지, 사용자가 4.27로 확인할 대상) · **[R]** 기억에 의존해 미검증
 

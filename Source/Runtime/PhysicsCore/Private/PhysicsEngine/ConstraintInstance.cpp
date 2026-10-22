@@ -1,7 +1,9 @@
 // ConstraintInstance.cpp - reference frames and the ball / hinge presets (UE ConstraintInstance.cpp:792-812,
-// ConstraintUtils.cpp:8-27, :70-137 [V]); data only until the M9 joints.
+// ConstraintUtils.cpp:8-27, :70-137 [V]) and, from M9, the world frames of a joint at the host's pulled body poses.
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsEngine/ConstraintUtils.h"
+
+#include "PhysicsEngine/BodyInstance.h"
 
 #include "Logging/LogMacros.h"
 #include "Math/UnrealMathUtility.h"
@@ -22,6 +24,18 @@ namespace PhysicsTest
 			UE_LOG(LogPhysicsTest, Warning, "FConstraintInstance::GetRefFrame: '%s' frame axes are not orthonormal (contained scale)", JointName.c_str());
 		}
 		return FTransform(Private::QuatFromRotationMatrix(Axes), Pos);
+	}
+
+	FTransform FConstraintInstance::GetWorldFrame(const EConstraintFrame Frame) const
+	{
+		const FTransform Local = GetRefFrame(Frame);
+		const FBodyInstance* Body = Frame == EConstraintFrame::Frame1 ? Body1 : Body2;
+		if (Body == nullptr)
+		{
+			return Local;   // the world: Frame2 is already a world pose
+		}
+		const FTransform& BodyTM = Body->State.BodyTM;
+		return FTransform((BodyTM.GetRotation() * Local.GetRotation()).GetNormalized(), BodyTM.TransformPosition(Local.GetTranslation()));
 	}
 
 	namespace ConstraintUtils

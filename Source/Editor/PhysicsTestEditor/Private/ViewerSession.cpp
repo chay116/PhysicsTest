@@ -207,6 +207,7 @@ namespace PhysicsTest
 		InitScene.MaxBodiesHint = Capacity.MaxBodies;
 		InitScene.MaxBodyPairsHint = Capacity.MaxBodyPairs;
 		InitScene.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
+		InitScene.bApplyForcedOverrides = NewScenario->AllowsForcedOverrides();   // M9: as the bench (gate scenes keep their own values)
 		Config = std::move(NewConfig);
 		ConfigFiles = NewFiles;
 		Scene = std::make_unique<FPhysScene>(InitScene);

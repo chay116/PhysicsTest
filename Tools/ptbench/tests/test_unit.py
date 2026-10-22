@@ -330,6 +330,24 @@ class ValidateTests(unittest.TestCase):
             self.assertEqual(verdict["schema_errors"], [])
             self.assertEqual(verdict["outcome"], "exit_3_fatal")
 
+    def test_unsupported_scene_is_reported_not_failed(self):
+        # M9: the bench refuses a scene whose required capability (joints) the backend lacks: exit.json 2, status unsupported,
+        # no manifest. The run's outcome is "unsupported", the cell is "unsupported" and does not fail the session.
+        self.assertFalse(runner.manifest_expected(2, "unsupported", True))
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            common.write_json_atomic(path / "exit.json", {"schema": "physicstest.exit/1", "exit_code": 2, "meaning": "gate_or_preflight_or_usage",
+                                                          "status": "unsupported", "category": "unsupported",
+                                                          "reason": "backend 'Null' does not support scenario M6a.Pendulum", "run_id": "x",
+                                                          "utc": "2026-10-22T00:00:00Z", "pid": 1, "terminate_process": False, "outputs": []})
+            verdict = runner.judge(path, {"process_exit_code": 2, "timed_out": False}, "headline")
+            self.assertEqual(verdict["schema_errors"], [])
+            self.assertEqual(verdict["outcome"], "unsupported")
+        cells = [{"key": "k", "cell_id": "c"}]
+        runs = [{"cell_key": "k", "repeat": 0, "attempt": 0, "outcome": "unsupported"}, {"cell_key": "k", "repeat": 1, "attempt": 0, "outcome": "unsupported"}]
+        runner.summarize_cells(cells, runs, 2)
+        self.assertEqual(cells[0]["state"], "unsupported")
+
     def test_table_notes_for_mixed_builds(self):
         table = validate.classify(pd.DataFrame([_row(exe_sha256="1" * 64, git_sha="g1", preset="test"), _row(exe_sha256="2" * 64, git_sha="g1", preset="test")]))
         notes = validate.table_notes(table)
@@ -759,6 +777,12 @@ class SchemaTests(unittest.TestCase):
         self.assertTrue(errors)   # an attempt without exit.json can never be "ok" (raw exit code 0 notwithstanding)
         run["outcome"] = "no_exit_json"
         self.assertEqual(list(jsonschema.Draft202012Validator(item_schema).iter_errors(run)), [])
+
+
+# M9: the behaviour analysis tests live in test_behavior; CTest PhysicsTest.Py.Unit runs this module, so its test classes
+# are imported here (unittest collects every TestCase in the module namespace).
+from ptbench.tests.test_behavior import (AnalyticBehaviourTests, AnalyzerTests, BehaviourMatrixTests, GeometryTests,  # noqa: E402,F401
+                                         StatesFileTests, TagTests)
 
 
 if __name__ == "__main__":

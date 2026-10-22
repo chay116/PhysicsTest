@@ -194,11 +194,12 @@ namespace PhysicsTest::BulletBackend
 		Out.SourceCommit = PT_BULLET_SOURCE_COMMIT;
 		Out.BuildConfig = GetBuildConfig();
 		Out.BuildFlagsJson = GBulletBuildReport;
-		// 02 7.5: contact points with the solver's impulses and an exact active flag, Bullet's island tags, bounds. No native
-		// debug draw yet (viz drawer, M9), no native frame model, single threaded (BT_THREADSAFE=0).
+		// 02 7.5: contact points with the solver's impulses and an exact active flag, Bullet's island tags, bounds. M9: ball and
+		// hinge joints (btPoint2PointConstraint / btHingeConstraint) with their snapshot (btJointFeedback impulses), the native
+		// debug draw of viz runs (FBulletDebugDrawer). No native frame model, single threaded (BT_THREADSAFE=0).
 		Out.Capabilities = PT_CAP_COLLISION | PT_CAP_KINEMATIC | PT_CAP_SLEEPING | PT_CAP_CCD | PT_CAP_GYROSCOPIC | PT_CAP_ACTIVE_LIST | PT_CAP_STATE_WRITE
 			| PT_CAP_NATIVE_HASH | PT_CAP_CONTACT_POINTS | PT_CAP_CONTACT_NORMAL_IMPULSE | PT_CAP_CONTACT_FRICTION_IMPULSE | PT_CAP_CONTACT_ACTIVE_EXACT
-			| PT_CAP_NATIVE_ISLANDS | PT_CAP_BOUNDS;
+			| PT_CAP_NATIVE_ISLANDS | PT_CAP_BOUNDS | PT_CAP_JOINT_BALL | PT_CAP_JOINT_HINGE | PT_CAP_JOINT_SNAPSHOT | PT_CAP_NATIVE_DEBUG_DRAW;
 		Out.ModuleFlags = PT_MODULE_GLOBAL_SCENE_SETTINGS;   // Bullet's combine callbacks and sleep / contact globals
 		Out.NumPhaseTimers = 0;
 		Out.PhaseTimerNames = nullptr;

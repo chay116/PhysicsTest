@@ -814,6 +814,24 @@ TEST_CASE("PhysicsTest.SdkBackend.PutToSleepKeepsEachContactOnce")
 		CAPTURE(Backend);
 		FResolvedPhysicsConfig Config = LoadSdkConfig(Backend, "UEParity");
 		PrepareGlobalSettingsModule(Backend, Config.InitOptions);
+		if (Backend == "Jolt")
+		{
+			// M9: Jolt maps UE's sleep thresholds (SleepThresholdMapping=UE; the resting box would sleep 5 frames after it
+			// lands, frame 36). This test is about the command path, so Jolt keeps its own 0.5 s timer: awake at frame 40.
+			bool bSet = false;
+			for (auto& [Key, Value] : Config.SceneOptions)
+			{
+				if (Key == "SleepThresholdMapping")
+				{
+					Value = "Native";
+					bSet = true;
+				}
+			}
+			if (!bSet)
+			{
+				Config.SceneOptions.emplace_back("SleepThresholdMapping", "Native");
+			}
+		}
 		Config.TestSettings.RunMode = EPhysicsRunMode::Viz;   // the contact listener exists in viz runs
 		std::unique_ptr<FPhysScene> Scene = MakeScenarioScene("M1.SingleBoxDrop", { { "Case", "a" } }, Backend, Config);
 		if (!Scene->GetBackendInfo().Has(PT_CAP_CONTACT_POINTS))

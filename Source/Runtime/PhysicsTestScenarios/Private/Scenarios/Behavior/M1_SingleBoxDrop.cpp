@@ -3,7 +3,8 @@
 // both; 300 frames. Case a: axis-aligned (flat landing). Case b: roll 30 deg then pitch 20 deg (FRotator(20, 0, 30):
 // UE applies Roll first, UnrealMath.cpp:483), so it lands on a corner and tips over. A deterministic scene used for
 // per-body comparisons (02 13: M1.SingleBoxDrop) and for the resting-contact snapshot check (03 M3: normal . +Z > 0.999,
-// -2.5 cm <= Phi <= 0.5 cm for case a).
+// -2.5 cm <= Phi <= 0.5 cm for case a). M9 adds the behaviour window "fall" (the frames before the first contact).
+#include "BehaviorScenes.h"
 #include "PhysicsTestScenario.h"
 #include "PhysScene.h"
 #include "ScenarioHelpers.h"
@@ -35,9 +36,14 @@ namespace PhysicsTest
 				return { FScenarioParamDesc{ "Case", "a", { "a", "b" }, "a: axis-aligned; b: roll 30 deg then pitch 20 deg" } };
 			}
 			int32 GetDefaultFrames(const FScenarioParams& /*Params*/) const override { return Frames; }
-			std::vector<FStepWindow> GetWindows(const FScenarioParams& /*Params*/) const override
+			std::vector<FStepWindow> GetWindows(const FScenarioParams& Params) const override
 			{
-				return { FStepWindow{ "headline", 1, Frames - 1 }, FStepWindow{ "impact", 1, 89 }, FStepWindow{ "settled", 150, Frames - 1 } };
+				// M9 behaviour window "fall": the free fall before the first contact (BehaviorScenes::M1), where only damping
+				// separates the profiles (03 M9: the UEParity vs Normalized table).
+				const auto Case = Params.find("Case");
+				const bool bCaseB = Case != Params.end() && Case->second == "b";
+				return { FStepWindow{ "headline", 1, Frames - 1 }, FStepWindow{ "impact", 1, 89 }, FStepWindow{ "settled", 150, Frames - 1 },
+					FStepWindow{ "fall", 1, bCaseB ? BehaviorScenes::M1::FallLastFrameB : BehaviorScenes::M1::FallLastFrameA } };
 			}
 			FScenarioCapacity GetCapacity(const FScenarioParams& /*Params*/) const override { return FScenarioCapacity{ 2, 64, 64 }; }
 

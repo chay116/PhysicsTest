@@ -12,6 +12,7 @@
 #include "BuildFlagsSha.h"
 #include "Containers/StringConv.h"
 #include "Abi/AbiGates.h"
+#include "BehaviorScenes.h"
 #include "GateScenes.h"
 #include "Gates/PhysicsGates.h"
 #include "HAL/PlatformMisc.h"
@@ -37,6 +38,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <system_error>
@@ -231,6 +233,19 @@ namespace PhysicsTest
 				Json["module_sha256"] = nullptr;
 			}
 			Json["abi_version"] = std::to_string(PT_ABI_VERSION_MAJOR) + "." + std::to_string(PT_ABI_VERSION_MINOR);
+			// M9 fix round 2 (append): the module's own ABI - PtBackendApi.AbiVersion and PtBackendInfo.ProvisionalRevision as the module
+			// reported them. abi_version above is the host header's; a v1.0-built DLL under a v1.1 host shows "1.0" / 1 here.
+			if (Module != nullptr)
+			{
+				const uint32 ModuleAbi = Module->GetApi().AbiVersion;
+				Json["module_abi_version"] = std::to_string(ModuleAbi >> 16) + "." + std::to_string(ModuleAbi & 0xFFFFu);
+				Json["module_provisional_revision"] = Info.ProvisionalRevision;
+			}
+			else
+			{
+				Json["module_abi_version"] = nullptr;
+				Json["module_provisional_revision"] = nullptr;
+			}
 			Json["capabilities"] = MakeCapabilitiesJson(Info.Capabilities);
 			Json["module_flags"] = Info.ModuleFlags;
 			Json["required_effective_keys"] = Info.RequiredEffectiveKeys;
@@ -258,6 +273,168 @@ namespace PhysicsTest
 				List.push_back(Entry);
 			}
 			return List;
+		}
+
+		// ---- M9 outputs ---------------------------------------------------------------------------------------------------
+		FJson ToJson(const PtTransform& T)
+		{
+			return FJson{ { "rotation", { T.Rotation.X, T.Rotation.Y, T.Rotation.Z, T.Rotation.W } }, { "translation", { T.Translation.X, T.Translation.Y, T.Translation.Z } } };
+		}
+
+		FJson ToJsonOrNull(const bool bHas, const double Value)
+		{
+			return bHas && std::isfinite(Value) ? FJson(Value) : FJson(nullptr);
+		}
+
+		const char* CombineModeName(const uint32 Mode)
+		{
+			switch (Mode)
+			{
+			case PT_COMBINE_AVERAGE:  return "Average";
+			case PT_COMBINE_MIN:      return "Min";
+			case PT_COMBINE_MULTIPLY: return "Multiply";
+			case PT_COMBINE_MAX:      return "Max";
+			default:                  return "?";
+			}
+		}
+
+		// scene_desc.json (physicstest.scene_desc/1, M9): the scene as the backend received it - materials, bodies with their
+		// marshalled shapes, mass properties and initial pose, joints - so the behaviour analysis (Tools/ptbench, no C++) can
+		// compute geometry penetration, joint stretch and energies from states.ptst. Written before frame 0 (untimed) when
+		// the run records states. Units cm, kg, s, rad; poses are actor origins, quaternions (x, y, z, w).
+		FJson MakeSceneDescJson(const FPhysScene& Scene, const IPhysicsTestScenario& Scenario, const FScenarioParams& Params, const std::string& DescSha256,
+			std::string& OutError)
+		{
+			FPhysicsBackendScene& Backend = Scene.GetBackendScene();
+			std::vector<FBodyInstance*> Bodies(Backend.GetNumBodies(), nullptr);
+			for (uint32 Index = 0; Index < Backend.GetNumBodies(); ++Index)
+			{
+				Bodies[Index] = Backend.GetBody(Index);
+				if (Bodies[Index] == nullptr)
+				{
+					OutError = "body " + std::to_string(Index) + " is released: scene_desc.json describes the scene before frame 0";
+					return FJson();
+				}
+			}
+			FMarshalledActorBatch Batch;
+			if (!Backend.MarshalBodies(Bodies, 0, Scene.GetSettings(), Batch, OutError))
+			{
+				return FJson();
+			}
+			FJson Json;
+			Json["schema"] = "physicstest.scene_desc/1";
+			Json["scenario"] = Scenario.GetName();
+			Json["version"] = Scenario.GetVersion();
+			Json["params"] = Params;
+			Json["desc_sha256"] = DescSha256;
+			Json["units"] = "cm, kg, s, rad; poses = actor origin; quaternion (x, y, z, w); box half extents; capsule radius + half segment along local Z";
+			Json["gravity"] = { Scene.GetGravity().X, Scene.GetGravity().Y, Scene.GetGravity().Z };
+			FJson Materials = FJson::array();
+			const std::span<const FPhysicalMaterial* const> Sources = Backend.GetMaterialSources();
+			for (size_t Index = 0; Index < Sources.size(); ++Index)
+			{
+				const PtPhysicalMaterial M = MarshalPhysicalMaterial(*Sources[Index], Scene.GetSettings());
+				Materials.push_back({ { "index", Index }, { "name", Sources[Index]->Name }, { "friction", M.Friction }, { "static_friction", M.StaticFriction },
+					{ "restitution", M.Restitution }, { "friction_combine", CombineModeName(M.FrictionCombineMode) },
+					{ "restitution_combine", CombineModeName(M.RestitutionCombineMode) } });
+			}
+			Json["materials"] = Materials;
+			FJson BodiesJson = FJson::array();
+			for (size_t Index = 0; Index < Batch.Actors.size(); ++Index)
+			{
+				const PtActorCreateInfo& A = Batch.Actors[Index];
+				FJson Shapes = FJson::array();
+				for (uint32 Shape = A.FirstShape; Shape < A.FirstShape + A.NumShapes; ++Shape)
+				{
+					const PtShapeElem& E = Batch.Shapes[Shape];
+					FJson S{ { "type", E.Type == PT_SHAPE_SPHERE ? "sphere" : E.Type == PT_SHAPE_BOX ? "box" : E.Type == PT_SHAPE_CAPSULE ? "capsule" : "convex" },
+						{ "local", ToJson(E.LocalTransform) }, { "material", E.MaterialIndex } };
+					if (E.Type == PT_SHAPE_SPHERE || E.Type == PT_SHAPE_CAPSULE)
+					{
+						S["radius"] = E.Radius;
+					}
+					if (E.Type == PT_SHAPE_CAPSULE)
+					{
+						S["half_length"] = E.HalfLength;
+					}
+					if (E.Type == PT_SHAPE_BOX)
+					{
+						S["half_extent"] = { E.BoxHalfExtent.X, E.BoxHalfExtent.Y, E.BoxHalfExtent.Z };
+					}
+					Shapes.push_back(S);
+				}
+				BodiesJson.push_back({ { "index", A.BodyIndex }, { "name", Bodies[Index]->BodyName },
+					{ "motion", A.Motion == PT_MOTION_STATIC ? "static" : (A.Motion == PT_MOTION_KINEMATIC ? "kinematic" : "dynamic") }, { "mass", A.Mass },
+					{ "inertia_diagonal", { A.InertiaDiagonal.X, A.InertiaDiagonal.Y, A.InertiaDiagonal.Z } }, { "com_local", ToJson(A.CenterOfMassLocal) },
+					{ "initial_pose", ToJson(A.ActorTransform) }, { "linear_damping", A.LinearDamping }, { "angular_damping", A.AngularDamping },
+					{ "shapes", Shapes } });
+			}
+			Json["bodies"] = BodiesJson;
+			FJson Joints = FJson::array();
+			const std::span<FConstraintInstance* const> Constraints = Scene.GetConstraints();
+			const std::span<const PtConstraintCreateInfo> Marshalled = Scene.GetMarshalledConstraints();
+			for (size_t Index = 0; Index < Marshalled.size() && Index < Constraints.size(); ++Index)
+			{
+				const PtConstraintCreateInfo& C = Marshalled[Index];
+				Joints.push_back({ { "index", Index }, { "name", Constraints[Index]->JointName }, { "type", C.Type == PT_JOINT_BALL ? "ball" : "hinge" },
+					{ "body1", C.Body1 }, { "body2", C.Body2 == PT_INDEX_NONE ? FJson(-1) : FJson(C.Body2) }, { "frame1", ToJson(C.Frame1) },
+					{ "frame2", ToJson(C.Frame2) }, { "disable_collision", (C.Flags & PT_JOINTF_DISABLE_COLLISION) != 0 },
+					{ "simulated", Constraints[Index]->IsSimulated() } });
+			}
+			Json["joints"] = Joints;
+			Json["joints_note"] = "body2 -1 = the world (frame2 is then a world pose); frames in each body's actor space; hinge axis = frame X (docs/Abi.md 9.4)";
+			return Json;
+		}
+
+		// preflight_diff.json (physicstest.preflight_diff/1, M9, 02 10): every effective key of the run next to what the
+		// profile, variant and scene resolved for it (the G9 rule's expectation), with the comparison's status.
+		FJson MakePreflightDiffJson(const std::vector<Gates::FReadbackDiffRow>& Rows, const FResolvedPhysicsConfig& Config, const std::string& Backend,
+			const std::string& Variant)
+		{
+			FJson Json;
+			Json["schema"] = "physicstest.preflight_diff/1";
+			Json["backend"] = Backend;
+			Json["variant"] = Variant;
+			Json["profile"] = Config.ProfileName;
+			std::map<std::string, int32> Counts;
+			FJson List = FJson::array();
+			for (const Gates::FReadbackDiffRow& Row : Rows)
+			{
+				++Counts[Row.Status];
+				List.push_back({ { "key", Row.Key }, { "source", Row.Source }, { "effective", ToJsonOrNull(Row.bHasEffective, Row.Effective) },
+					{ "native", Row.Native }, { "rule", Row.Rule }, { "resolved", ToJsonOrNull(Row.bHasResolved, Row.Resolved) }, { "status", Row.Status },
+					{ "note", Row.Note } });
+			}
+			Json["counts"] = Counts;
+			Json["keys"] = List;
+			Json["status_note"] = "match / mismatch: compared with the resolved value (G9 rule); unchecked: registered as not profile-derived; skipped: not "
+				"compared on this scene; no_rule: READBACK without a rule (G9 fails); not_readback: SET_ONLY / COMPILE_TIME / ENGINE_DEFAULT, recorded only";
+			return Json;
+		}
+
+		FJson MakeForcedOverridesJson(const FResolvedPhysicsConfig& Config, const FPhysScene* Scene)
+		{
+			FJson Json;
+			FJson Entries = FJson::array();
+			for (const FForcedOverride& Override : Config.ForcedOverrides)
+			{
+				Entries.push_back({ { "key", Override.GetKey() }, { "value", Override.Value }, { "origin", Override.OriginName } });
+			}
+			Json["config"] = Entries;
+			if (Scene == nullptr)
+			{
+				Json["applied"] = nullptr;
+				return Json;
+			}
+			const FForcedOverrideReport& Report = Scene->GetForcedOverrideReport();
+			Json["applied"] = Report.bEnabled;
+			Json["materials"] = Report.NumMaterials;
+			Json["materials_changed"] = Report.NumMaterialsChanged;
+			Json["foreign_materials"] = Report.NumForeignMaterials;
+			Json["bodies"] = Report.NumBodies;
+			Json["bodies_changed"] = Report.NumBodiesChanged;
+			Json["changes"] = Report.Changes;
+			return Json;
 		}
 
 		FJson ParseEffectiveToJson(const std::string& Lines)
@@ -681,6 +858,29 @@ namespace PhysicsTest
 		};
 		AddDrop("S05.drop_height_k38", 980.0, DtEngine, GateScenes::S05::TouchStep);
 		AddDrop("drop_height_k10", 980.0, DtEngine, 10);
+		// M9 behaviour references (BehaviorScenes.h, docs/Scenes.md 2.17, 2.19): the M6a pendulum periods (03 M9: 2.00905 /
+		// 2.04305 / 2.37023 s) and the M4 discrete slide d(2 s) = d after 120 steps.
+		const auto AddPendulum = [&Cases](const char* Id, const double AngleDegrees)
+		{
+			const double Amplitude = AngleDegrees * 3.14159265358979323846 / 180.0;
+			Cases.push_back({ { "id", Id }, { "function", "PendulumPeriod" },
+				{ "inputs", { { "length", BehaviorScenes::M6a::Length }, { "bob_radius", BehaviorScenes::M6a::BobRadius }, { "g", 980.0 }, { "amplitude_deg", AngleDegrees } } },
+				{ "values", { { "period", Analytic::PendulumPeriod(BehaviorScenes::M6a::Length, BehaviorScenes::M6a::BobRadius, 980.0, Amplitude) } } } });
+		};
+		AddPendulum("M6a.period_5deg", 5.0);
+		AddPendulum("M6a.period_30deg", 30.0);
+		AddPendulum("M6a.period_90deg", 90.0);
+		const auto AddIncline = [&Cases, DtEngine](const char* Id, const double Mu, const int32 Steps)
+		{
+			const double Angle = BehaviorScenes::M4::AngleDegrees * 3.14159265358979323846 / 180.0;
+			Cases.push_back({ { "id", Id }, { "function", "InclineSlideDistance" },
+				{ "inputs", { { "mu", Mu }, { "angle_deg", BehaviorScenes::M4::AngleDegrees }, { "g", 980.0 }, { "dt", DtEngine }, { "steps", Steps } } },
+				{ "values", { { "distance", Analytic::InclineSlideDistance(Mu, Angle, 980.0, DtEngine, Steps) } } } });
+		};
+		AddIncline("M4.d2s_mu_0_30", 0.30, 120);
+		AddIncline("M4.d2s_mu_0_50", 0.50, 120);
+		AddIncline("M4.d2s_mu_0_55", 0.55, 120);
+		AddIncline("M4.d2s_mu_0_60", 0.60, 120);
 		FJson Json;
 		Json["schema"] = "physicstest.analytic/1";
 		Json["note"] = "C++ Analytic:: references (Source/Runtime/PhysicsCore/Public/Physics/AnalyticReference.h) on the gate scenes' canonical inputs; "
@@ -708,6 +908,9 @@ namespace PhysicsTest
 			std::string Ignored;
 			Scenario->ResolveParams(FScenarioParams(), Defaults, Ignored);
 			Entry["default_frames"] = Scenario->GetDefaultFrames(Defaults);
+			// M9: the capabilities the scene needs with its default parameters (a joint scene's Joint parameter may change them).
+			Entry["required_capabilities"] = MakeCapabilitiesJson(Scenario->GetRequiredCapabilities(Defaults));
+			Entry["forced_overrides"] = Scenario->AllowsForcedOverrides();
 			FJson Params = FJson::array();
 			for (const FScenarioParamDesc& Desc : Scenario->GetParamDescs())
 			{
@@ -772,6 +975,7 @@ namespace PhysicsTest
 			InitParams.MaxBodiesHint = Capacity.MaxBodies;
 			InitParams.MaxBodyPairsHint = Capacity.MaxBodyPairs;
 			InitParams.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
+			InitParams.bApplyForcedOverrides = Scenario->AllowsForcedOverrides();
 		}
 		FPhysScene Scene(InitParams);
 		if (Scenario != nullptr)
@@ -848,6 +1052,7 @@ namespace PhysicsTest
 			FBenchConfig Files;
 			bool bCountersTier = false;
 			bool bContactsTier = false;
+			bool bNativeDrawTier = false;      // M9: -Instrument=native_debug_draw (native_draw.csv)
 			bool bPhasesTier = false;
 			int32 StatesEvery = 0;
 			float FrameDeltaSeconds = 0.0f;
@@ -891,10 +1096,14 @@ namespace PhysicsTest
 			BenchRecorders::FHashRecorder Hashes;
 			BenchRecorders::FStateRecorder States;
 			BenchRecorders::FContactRecorder Contacts;
+			BenchRecorders::FNativeDrawRecorder NativeDraw;
 			bool bStates = false;
 			bool bContacts = false;
+			bool bNativeDraw = false;          // M9: the native draw stream is recorded (tier on, PT_CAP_NATIVE_DEBUG_DRAW)
 			std::string StatesError;
 			std::string ContactsNote;
+			std::string NativeDrawNote;
+			bool bSceneDesc = false;           // scene_desc.json written (M9: runs that record states)
 			uint64 TickAllocations = 0;        // operator new calls inside Scene->Tick (the timed buckets) over every frame
 			uint64 TickFrees = 0;
 			uint64 Frame0Allocations = 0;
@@ -1094,14 +1303,15 @@ namespace PhysicsTest
 			Test.AffinityMask = Controls.Mask;
 			bCountersTier = (Test.InstrumentFlags & PT_INSTR_COUNTERS) != 0;
 			bContactsTier = (Test.InstrumentFlags & PT_INSTR_CONTACTS) != 0;
+			bNativeDrawTier = (Test.InstrumentFlags & PT_INSTR_NATIVE_DEBUG_DRAW) != 0;
 			bPhasesTier = (Test.InstrumentFlags & PT_INSTR_PHASES) != 0;
 			if (bCountersTier && Test.CountersEvery == 0)
 			{
 				Test.CountersEvery = 1;   // -Instrument=counters without a period: every frame
 			}
-			if (bContactsTier && Test.CaptureEvery == 0)
+			if ((bContactsTier || bNativeDrawTier) && Test.CaptureEvery == 0)
 			{
-				Test.CaptureEvery = 1;    // -Instrument=contacts without a period: every frame
+				Test.CaptureEvery = 1;    // -Instrument=contacts / native_debug_draw without a period: every frame
 			}
 			StatesEvery = Spec.StatesEvery.value_or(0);
 			Frames = Spec.Frames > 0 ? Spec.Frames : Scenario->GetDefaultFrames(Params);
@@ -1120,6 +1330,35 @@ namespace PhysicsTest
 			if (Loaded == nullptr)
 			{
 				Finish(EBenchExit::BackendUnavailable, "backend_unavailable", "backend", Error);
+				return false;
+			}
+			// M9: a scene that needs a capability the backend lacks (the joint scenes on a backend without joints) is refused
+			// before the backend is initialised: exit 2, status / category "unsupported", exit.json only (docs/ResultsSchema.md).
+			// The runner reports such a cell as unsupported, not failed.
+			const uint64 Required = Scenario->GetRequiredCapabilities(Params);
+			const uint64 Missing = Required & ~Loaded->GetInfo().Capabilities;
+			if (Missing != 0)
+			{
+				std::string Names;
+				for (const FJson& Name : MakeCapabilitiesJson(Missing))
+				{
+					Names += (Names.empty() ? "PT_CAP_" : ", PT_CAP_") + Name.get<std::string>();
+				}
+				// M9 fix round 1: a capability the module declares but the host masks (built against another
+				// PT_ABI_PROVISIONAL_REVISION, i.e. before the v1.1 freeze) is a misbuilt module, not a backend without joints: exit 6
+				// backend_unavailable, which the runner counts as failed, so such a DLL cannot skip every joint cell of a session
+				// silently. Only a capability the module does not declare at all is "unsupported" (exit 2, not a failure).
+				const bool bRevision = (Missing & Loaded->GetInfo().DeclaredCapabilities) != 0;
+				if (bRevision)
+				{
+					Finish(EBenchExit::BackendUnavailable, "backend_unavailable", "backend", "backend '" + Spec.Backend + "' declares " + Names
+						+ " for scenario " + Scenario->GetName() + " but was built with PT_ABI_PROVISIONAL_REVISION "
+						+ std::to_string(Loaded->GetInfo().ProvisionalRevision) + " (host " + std::to_string(PT_ABI_PROVISIONAL_REVISION)
+						+ "): the host reads those capabilities as absent - rebuild the module against the current PtBackendAbi.h (docs/Abi.md 2)");
+					return false;
+				}
+				Finish(EBenchExit::GateFailed, "unsupported", "unsupported", "backend '" + Spec.Backend + "' does not support scenario " + Scenario->GetName()
+					+ ": it needs " + Names + " (03 M9: joint scenes run only on backends with joints)");
 				return false;
 			}
 			if (Test.NumThreads > 1 && !Loaded->GetInfo().Has(PT_CAP_MULTITHREADED))
@@ -1192,6 +1431,7 @@ namespace PhysicsTest
 			InitParams.MaxBodyPairsHint = Capacity.MaxBodyPairs;
 			InitParams.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
 			InitParams.InjectedSceneInstrumentFlags = Spec.InjectSceneInstrumentFlags;   // test only
+			InitParams.bApplyForcedOverrides = Scenario->AllowsForcedOverrides();      // M9 (02 10): gate scenes keep their values
 			const uint64 PhaseBegin = FClockBuckets::Begin();
 			Scene = std::make_unique<FPhysScene>(InitParams);
 			FRandomStream Random(Seed);
@@ -1202,6 +1442,17 @@ namespace PhysicsTest
 			const std::vector<float> FrameDts(static_cast<size_t>(Frames), FrameDeltaSeconds);
 			DescSha256 = Scene->ComputeDescSha256(FrameDts);
 			OptionsSha256 = Scene->ComputeOptionsSha256();
+			// M9: the scene description for the behaviour analysis, with the states it describes (untimed, before frame 0).
+			if (StatesEvery > 0)
+			{
+				std::string DescError;
+				const FJson Desc = MakeSceneDescJson(*Scene, *Scenario, Params, DescSha256, DescError);
+				bSceneDesc = !Desc.is_null() && WriteText(OutDir / "scene_desc.json", Desc.dump(1) + "\n");
+				if (!bSceneDesc)
+				{
+					UE_LOG(LogPhysicsBench, Warning, "scene_desc.json not written: %s", DescError.empty() ? "cannot write the file" : DescError.c_str());
+				}
+			}
 		}
 
 		// ---- 7. effective settings + the preflight: required keys (A7 at run time), G0, G9, G10a -------------------------
@@ -1244,6 +1495,28 @@ namespace PhysicsTest
 			Inputs.DtEngine = DtEngine;
 			Preflight = BenchPreflight::Run(Inputs);
 			PreflightTicks = FClockBuckets::End(PhaseBegin);
+			// M9 (02 10): the preflight diff - every effective key next to its resolved value - and a summary in the log.
+			if (!Preflight.Diff.empty())
+			{
+				WriteText(OutDir / "preflight_diff.json", MakePreflightDiffJson(Preflight.Diff, Config, Spec.Backend, Files.VariantName).dump(1) + "\n");
+				Outputs.push_back("preflight_diff.json");
+				std::map<std::string, int32> Counts;
+				for (const Gates::FReadbackDiffRow& Row : Preflight.Diff)
+				{
+					++Counts[Row.Status];
+					if (Row.Status == "mismatch" || Row.Status == "no_rule")
+					{
+						UE_LOG(LogPhysicsBench, Warning, "preflight diff: %s %s: effective %s, resolved %s (%s)", Row.Key.c_str(), Row.Status.c_str(), Row.Native.c_str(),
+							Row.bHasResolved ? std::to_string(Row.Resolved).c_str() : "-", Row.Rule.c_str());
+					}
+				}
+				std::string Summary;
+				for (const auto& [RowStatus, Count] : Counts)
+				{
+					Summary += (Summary.empty() ? "" : ", ") + std::to_string(Count) + " " + RowStatus;
+				}
+				UE_LOG(LogPhysicsBench, Display, "preflight diff (resolved vs effective, preflight_diff.json): %zu keys: %s", Preflight.Diff.size(), Summary.c_str());
+			}
 			bPreflightPassed = MissingKeys.empty() && Preflight.bPassed && Preflight.InjectionError.empty();
 			if (!MissingKeys.empty())
 			{
@@ -1311,7 +1584,7 @@ namespace PhysicsTest
 			FPhysicsDebugSnapshot Snapshot;
 			if (bContactsTier)
 			{
-				// The header records the PROVISIONAL(M9) layout revision of the PtContactPoint records and the backend's declared
+				// The header records the layout revision (PT_ABI_PROVISIONAL_REVISION, 3 since v1.1) of the PtContactPoint records and the backend's declared
 				// narrow-phase pose (contact.point_pose; M7 review), so the M9 analysis can reject a file of another layout.
 				const auto PointPose = std::find_if(Settings.begin(), Settings.end(), [](const FEffectiveSetting& S) { return S.Key == "contact.point_pose"; });
 				const uint32 PointPoseValue = PointPose != Settings.end() && PointPose->bHasCanonical && PointPose->Canonical >= 0.0
@@ -1320,6 +1593,20 @@ namespace PhysicsTest
 				ContactsNote = bContacts ? "" : "the backend declares no contact points (PT_CAP_CONTACT_POINTS): no contacts.ptcn";
 				Snapshot.Contacts.reserve(static_cast<size_t>(std::max<uint32>(Capacity.MaxContactConstraints, 64u)) * 4);
 				Snapshot.Particles.reserve(Scene->GetBodies().size());
+			}
+			// M9 (03 M9: the native draw verified without a viewer, "the command stream only"): -Instrument=native_debug_draw
+			// captures PT_SNAP_NATIVE_DRAW every CaptureEvery frames into native_draw.csv (counts per type and h_draw). The
+			// backend draws only in viz runs (-RunMode=Viz; PhysX sets its visualization parameters, Bullet attaches its drawer).
+			FPhysicsDebugSnapshot DrawSnapshot;
+			if (bNativeDrawTier)
+			{
+				bNativeDraw = Scene->GetBackendInfo().Has(PT_CAP_NATIVE_DEBUG_DRAW);
+				NativeDrawNote = !bNativeDraw ? "the backend declares no native debug draw (PT_CAP_NATIVE_DEBUG_DRAW): no native_draw.csv"
+					: (Test.RunMode != EPhysicsRunMode::Viz ? "not a viz run (-RunMode=Viz): the backend draws nothing, every row is empty" : "");
+				if (bNativeDraw)
+				{
+					NativeDraw.Reserve(static_cast<size_t>(CountRecordedFrames(Test.CaptureEvery, Frames)));
+				}
 			}
 			// Test only (-InjectStatePerturbation=<f>, the G8 / G11 negative control): a velocity change of 1e-3 cm/s on the
 			// last dynamic body after frame f, between frames.
@@ -1416,6 +1703,13 @@ namespace PhysicsTest
 					if (Scene->CaptureDebugSnapshot(Snapshot, PT_SNAP_CONTACTS))
 					{
 						Contacts.Append(static_cast<uint32>(Frame), Snapshot.Contacts);
+					}
+				}
+				if (bNativeDraw && IsRecordedFrame(Test.CaptureEvery, Frame, Frames))
+				{
+					if (Scene->CaptureDebugSnapshot(DrawSnapshot, PT_SNAP_NATIVE_DRAW))
+					{
+						NativeDraw.Record(static_cast<uint32>(Frame), DrawSnapshot.NativeCommands, DrawSnapshot.StringPool, DrawSnapshot.bTruncated);
 					}
 				}
 				if (PerturbedBody != nullptr && Frame == Spec.InjectStatePerturbationFrame)
@@ -1596,10 +1890,25 @@ namespace PhysicsTest
 			{
 				Outputs.push_back("contacts.ptcn");
 			}
+			if (bNativeDraw)
+			{
+				if (NativeDraw.WriteCsv(OutDir / "native_draw.csv"))
+				{
+					Outputs.push_back("native_draw.csv");
+				}
+				else
+				{
+					NativeDrawNote = "writing native_draw.csv failed";
+				}
+			}
 			if (Scene)
 			{
 				WriteText(OutDir / "scene.json", Scenario->MakeCanonicalJson(Params) + "\n");
 				Outputs.push_back("scene.json");
+			}
+			if (bSceneDesc)
+			{
+				Outputs.push_back("scene_desc.json");   // written before frame 0 (BuildScene, M9)
 			}
 			Outputs.push_back("manifest.json");
 			MakeManifest().Write(OutDir / "manifest.json");
@@ -1710,6 +2019,7 @@ namespace PhysicsTest
 				Profile["variant_sha256"] = Files.VariantSha256;
 				Profile["warnings"] = Config.Warnings;
 				Profile["resolved"] = MakeResolvedJson(Config);
+				Profile["forced_overrides"] = MakeForcedOverridesJson(Config, Scene.get());   // M9 (02 10)
 				J["profile"] = Profile;
 			}
 			if (!bPreflightPassed)
@@ -1732,6 +2042,11 @@ namespace PhysicsTest
 				SceneJson["num_bodies"] = Scene ? FJson(Scene->GetStats().NumBodies) : FJson(nullptr);
 				SceneJson["num_dynamic_bodies"] = Scene ? FJson(Scene->GetStats().NumDynamicBodies) : FJson(nullptr);
 				SceneJson["start_asleep_skipped"] = Scene ? FJson(Scene->GetStats().NumStartAsleepSkipped) : FJson(nullptr);
+				// M9: joints (spawned; kept host-only because the backend lacks the type - a refused run never gets here).
+				SceneJson["num_constraints"] = Scene ? FJson(Scene->GetStats().NumConstraints) : FJson(nullptr);
+				SceneJson["num_unsupported_constraints"] = Scene ? FJson(Scene->GetStats().NumUnsupportedConstraints) : FJson(nullptr);
+				SceneJson["required_capabilities"] = MakeCapabilitiesJson(Scenario->GetRequiredCapabilities(Params));
+				SceneJson["chaotic"] = Scenario->IsChaotic();
 				const FScenarioCapacity Hints = Scenario->GetCapacity(Params);
 				SceneJson["capacity_hints"] = { Hints.MaxBodies, Hints.MaxBodyPairs, Hints.MaxContactConstraints };
 				FJson Windows = FJson::array();
@@ -2034,6 +2349,9 @@ namespace PhysicsTest
 				Recorders["states"] = { { "frames", bStates ? States.GetFrameCount() : 0u }, { "every", StatesEvery }, { "error", StatesError } };
 				Recorders["contacts"] = { { "frames", bContacts ? Contacts.GetFrameCount() : 0u }, { "points", bContacts ? Contacts.GetPointCount() : 0ull },
 					{ "every", Test.CaptureEvery }, { "note", ContactsNote } };
+				Recorders["native_draw"] = { { "frames", bNativeDraw ? NativeDraw.GetRows().size() : size_t(0) }, { "commands", bNativeDraw ? NativeDraw.GetCommandCount() : 0ull },
+					{ "truncated_frames", bNativeDraw ? NativeDraw.GetTruncatedFrames() : 0u }, { "every", bNativeDrawTier ? Test.CaptureEvery : 0 },
+					{ "note", bNativeDrawTier ? NativeDrawNote : std::string("native_debug_draw tier off") } };
 				FJson PhaseNames = FJson::array();
 				for (const std::string& Name : Info.PhaseTimerNames)
 				{
@@ -2419,6 +2737,7 @@ namespace PhysicsTest
 				InitParams.MaxBodiesHint = Capacity.MaxBodies;
 				InitParams.MaxBodyPairsHint = Capacity.MaxBodyPairs;
 				InitParams.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
+				InitParams.bApplyForcedOverrides = Scenario->AllowsForcedOverrides();   // gate scenes: false (M9)
 				FPhysScene Scene(InitParams);
 				FRandomStream Random(Scenario->GetSeed(Params));
 				const FScenarioContext Context{ Params, Random, &Config };

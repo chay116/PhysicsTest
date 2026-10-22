@@ -1,5 +1,5 @@
 // PhysicsDebugSnapshot.h - one untimed debug snapshot of a scene (02_Architecture 11.1, A.11). [MVP M3 read path (Jolt
-// snapshot criterion); the viewer and FIslandBuilder use it from M4; the ABI structs it holds are PROVISIONAL(M9)]
+// snapshot criterion); the viewer and FIslandBuilder use it from M4; the ABI structs it holds are final since ABI v1.1 (M9)]
 // The ABI structs are kept as the backend wrote them: cm, kg, s, rad, and the Chaos contact convention (the normal lies on
 // Body1 and points toward Body0, Phi < 0 is penetrating, Body0 is the more mobile body; ContactPoint.h:49-53 [V]).
 #pragma once
@@ -28,9 +28,18 @@ namespace PhysicsTest
 		// implausibly large indices (M5 round 0).
 		uint32 NumBodies = 0;
 		uint32 NumRejectedParticles = 0;
+		// M9: joints whose JointIndex names no live joint of the scene (a backend bug, dropped and logged once per scene).
+		uint32 NumRejectedJoints = 0;
+		// M9: the joints come from the host's pulled body states and constraint frames (DebugDraw::CaptureSnapshot), not from
+		// the backend (no PT_CAP_JOINT_SNAPSHOT): impulses are NaN with PT_JOINTSNAP_IMPULSE_NA.
+		bool bJointsFromHostState = false;
 		std::vector<PtParticleSnapshot> Particles;
 		std::vector<PtContactPoint> Contacts;
 		std::vector<PtJointSnapshot> Joints;
+		// M9: parallel to Joints when the capture filled it: the index of each joint's FConstraintInstance in
+		// FPhysScene::GetConstraints() (the backend's JointIndex counts only the joints it created). Empty for a hand-made
+		// snapshot, whose JointIndex is read as that index.
+		std::vector<int32> JointHostIndex;
 		std::vector<PtDebugDrawCmd> NativeCommands;
 		std::string StringPool;
 		std::vector<int32> HarnessIslandIndex;   // FIslandBuilder output, parallel to Particles (M4; INDEX_NONE = no island)
@@ -44,9 +53,12 @@ namespace PhysicsTest
 			bFromHostState = false;
 			NumBodies = 0;
 			NumRejectedParticles = 0;
+			NumRejectedJoints = 0;
+			bJointsFromHostState = false;
 			Particles.clear();
 			Contacts.clear();
 			Joints.clear();
+			JointHostIndex.clear();
 			NativeCommands.clear();
 			StringPool.clear();
 			HarnessIslandIndex.clear();

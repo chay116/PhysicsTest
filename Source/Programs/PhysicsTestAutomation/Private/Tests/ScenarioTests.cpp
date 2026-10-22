@@ -99,6 +99,7 @@ namespace
 		InitParams.MaxBodiesHint = Capacity.MaxBodies;
 		InitParams.MaxBodyPairsHint = Capacity.MaxBodyPairs;
 		InitParams.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
+		InitParams.bApplyForcedOverrides = Scenario->AllowsForcedOverrides();   // as the bench (M9)
 		FBuiltScene Built;
 		Built.Scene = std::make_unique<FPhysScene>(InitParams);
 		FRandomStream Random(Scenario->GetSeed(Params));

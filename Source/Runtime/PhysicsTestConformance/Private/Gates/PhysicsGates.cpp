@@ -12,6 +12,7 @@
 #include "Physics/PhysicsBackend.h"
 #include "Physics/PhysicsDebugSnapshot.h"
 #include "Physics/PhysicsProfile.h"
+#include "PhysicsEngine/ConstraintUtils.h"
 #include "PhysicsTestScenario.h"
 #include "PhysScene.h"
 #include "Math/UnrealMathUtility.h"
@@ -37,9 +38,29 @@ namespace PhysicsTest::Gates
 			char Text[1024];
 			va_list Args;
 			va_start(Args, Pattern);
-			std::vsnprintf(Text, sizeof(Text), Pattern, Args);
+			const int Written = std::vsnprintf(Text, sizeof(Text), Pattern, Args);
 			va_end(Args);
-			return Text;
+			std::string Out(Text);
+			if (Written >= static_cast<int>(sizeof(Text)))
+			{
+				// Truncated (a long tolerances.json reason in a note): drop a UTF-8 sequence cut at the end, so the note stays valid
+				// UTF-8 - conformance.json's writer (nlohmann) throws on invalid UTF-8 and the bench would end without its outputs.
+				size_t Lead = Out.size();
+				while (Lead > 0 && (static_cast<unsigned char>(Out[Lead - 1]) & 0xC0u) == 0x80u)
+				{
+					--Lead;
+				}
+				if (Lead > 0)
+				{
+					const unsigned char First = static_cast<unsigned char>(Out[Lead - 1]);
+					const size_t Need = First >= 0xF0u ? 4u : First >= 0xE0u ? 3u : First >= 0xC0u ? 2u : 1u;
+					if (Out.size() - (Lead - 1) < Need)
+					{
+						Out.resize(Lead - 1);
+					}
+				}
+			}
+			return Out;
 		}
 
 		std::string ToLowerAscii(std::string_view Text)
@@ -70,14 +91,20 @@ namespace PhysicsTest::Gates
 		};
 
 		// Builds ScenarioName with Overrides on the target. RunMode / Instrument override the profile's when set (G3: viz).
+		// bSleepOff (J1): the scene runs with sleeping off whatever the profile says (a joint that falls asleep checks nothing; G6
+		// owns sleep); every other setting of the profile and the variant stays.
 		std::unique_ptr<FGateScene> MakeGateScene(const FGateTarget& Target, const char* ScenarioName, const FScenarioParams& Overrides,
-			const EPhysicsRunMode* RunMode = nullptr)
+			const EPhysicsRunMode* RunMode = nullptr, const bool bSleepOff = false)
 		{
 			auto Run = std::make_unique<FGateScene>();
 			Run->Config = std::make_unique<FResolvedPhysicsConfig>(*Target.Config);
 			if (RunMode != nullptr)
 			{
 				Run->Config->TestSettings.RunMode = *RunMode;
+			}
+			if (bSleepOff)
+			{
+				Run->Config->TestSettings.bAllowSleeping = false;
 			}
 			Run->Scenario = FScenarioRegistry::Get().Find(ScenarioName);
 			if (Run->Scenario == nullptr)
@@ -97,6 +124,9 @@ namespace PhysicsTest::Gates
 			InitParams.MaxBodiesHint = Capacity.MaxBodies;
 			InitParams.MaxBodyPairsHint = Capacity.MaxBodyPairs;
 			InitParams.MaxContactConstraintsHint = Capacity.MaxContactConstraints;
+			// M9: the gates never apply [/Script/PhysicsTest.ForcedOverrides] (docs/Scenes.md 2.9, 2.10: S05 / S06 need their own
+			// combine modes; G9 / G12 judge the profile and the engine, not the forced values).
+			InitParams.bApplyForcedOverrides = false;
 			Run->Scene = std::make_unique<FPhysScene>(InitParams);
 			IPhysicsTestScenario* Scenario = Run->Scenario;
 			Run->Scene->OnPhysScenePreTick = [Scenario](FPhysScene* InScene, const float DeltaSeconds) { Scenario->OnPreTick(*InScene, DeltaSeconds); };
@@ -829,14 +859,18 @@ namespace PhysicsTest::Gates
 				const double DetectAbs = ToleranceNoted(Target, Report, "G4", "contact_detect_cms");
 				const double DetectRel = ToleranceNoted(Target, Report, "G4", "contact_detect_rel");
 				// Which normal velocity the engine applies -e to (tolerances.json G4.restitution_velocity_model): 0 = the velocity
-				// before the contact step, |v_before| (Jolt, Bullet); 1 = the contact step's pre-solve velocity with that step's
-				// gravity in it, |v_before| + g dt (PhysX: DyDynamics.cpp:1979, DyContactPrepShared.h:305-323 [V]). The model
-				// predicts the measured e = -v_after / v_before exactly; the other model is 0.021 away for e 0.8.
+				// before the contact step, |v_before| (Jolt); 1 = the contact step's pre-solve velocity with that step's gravity in
+				// it, |v_before| + g dt (PhysX: DyDynamics.cpp:1979, DyContactPrepShared.h:305-323 [V]); 2 = the contact state at
+				// the contact step's start (Bullet, M9, btSequentialImpulseConstraintSolver.cpp:944-972 [V]): a gap g > 0 there
+				// takes g / dt off the rebound, e |v_before| - g / dt (S05's TouchGap 0.01 cm: 0.79903 for e 0.8). The model
+				// predicts the measured e = -v_after / v_before exactly; the other model (1 for 0, 0 for 1 and 2) is 0.021 away
+				// for e 0.8 (model 1) or 0.00097 (model 2, the gap term).
 				const int32 VelocityModel = static_cast<int32>(ToleranceNoted(Target, Report, "G4", "restitution_velocity_model"));
-				if (!Report.Check(VelocityModel == 0 || VelocityModel == 1, Format("G4.restitution_velocity_model %d is not 0 or 1", VelocityModel)))
+				if (!Report.Check(VelocityModel >= 0 && VelocityModel <= 2, Format("G4.restitution_velocity_model %d is not 0, 1 or 2", VelocityModel)))
 				{
 					return Report;
 				}
+				const int32 OtherModel = VelocityModel == 0 ? 1 : 0;
 				const double GDt = G * Run->DtEngine;
 				for (uint32 Slot = 0; Slot < 3; ++Slot)
 				{
@@ -861,10 +895,20 @@ namespace PhysicsTest::Gates
 					const double VOut = Vz[Slot][Contact];
 					const double E = -VOut / VIn;
 					const double Speed = std::abs(VIn);
-					const double ModelSpeed[2] = { Speed, Speed + GDt };
-					const double ExpectedVOut = ExpectedE[Slot] * ModelSpeed[VelocityModel];
+					// The gap at the contact step's start: the lowest point of the ball in the last free-fall frame (model 2).
+					const double Gap = Z[Slot][Contact - 1] - Radius;
+					if (VelocityModel == 2 && !Report.Check(Gap > 0.0, Format("%s: restitution model 2 needs the contact step to start with a gap (S05's "
+						"TouchGap); the ball is %.4g cm above the ground in frame %d", Names[Slot], Gap, Contact - 1)))
+					{
+						continue;
+					}
+					const auto ModelVOut = [&](int32 Model)
+					{
+						return Model == 1 ? ExpectedE[Slot] * (Speed + GDt) : Model == 2 ? ExpectedE[Slot] * Speed - Gap / Run->DtEngine : ExpectedE[Slot] * Speed;
+					};
+					const double ExpectedVOut = ModelVOut(VelocityModel);
 					const double ExpectedMeasuredE = ExpectedVOut / Speed;
-					const double OtherMeasuredE = ExpectedE[Slot] * ModelSpeed[1 - VelocityModel] / Speed;
+					const double OtherMeasuredE = ModelVOut(OtherModel) / Speed;
 					Report.Check(std::abs(E - ExpectedMeasuredE) <= ETol, Format("%s: e = -v_after / v_before = -(%.4f) / (%.4f) = %.5f, model %d expects %.5f (e %.3f) "
 						"+- %.3g", Names[Slot], VOut, VIn, E, VelocityModel, ExpectedMeasuredE, ExpectedE[Slot], ETol));
 					if (std::abs(ExpectedMeasuredE - OtherMeasuredE) > 1e-9)
@@ -1383,7 +1427,7 @@ namespace PhysicsTest::Gates
 		}
 
 		void CheckReadbackRule(const FGateTarget& Target, const FReadbackContext& Run, const FEffectiveSetting& Setting, const FReadbackRule& Rule, FGateReport& Report,
-			int32& OutCompared, int32& OutUnchecked)
+			int32& OutCompared, int32& OutUnchecked, FReadbackDiffRow* OutRow = nullptr)
 		{
 			const std::string Where = "G9 " + Setting.Key + " (native '" + Setting.Native.substr(0, 160) + "')";
 			if (!Rule.Unchecked.empty())
@@ -1425,6 +1469,11 @@ namespace PhysicsTest::Gates
 			if (!bResolved && !Rule.Fallback.empty())
 			{
 				bResolved = ResolveExpectation(Rule.Fallback, Target, Run, Expected, Why);
+			}
+			if (OutRow != nullptr && bResolved)
+			{
+				OutRow->bHasResolved = true;
+				OutRow->Resolved = Expected;
 			}
 			if (!Report.Check(bResolved, Where + ": " + Why))
 			{
@@ -1502,6 +1551,627 @@ namespace PhysicsTest::Gates
 			}
 		};
 
+		// ---- J1 (M9 fix round 0) ------------------------------------------------------------------------------------
+		// The joint contract of docs/Abi.md 9.4 (item 13) as a physics gate, so that a DLL backend - the Chaos bridge, M13 (b) - runs
+		// it in its own -Conformance process like every other gate (the doctests of the automation exe run the registry's SDK
+		// engines only: PhysicsTest.Joint.BackendContract and PhysicsTest.Gates.J1 call this gate in process). Per declared type:
+		//   frames     M6a.Pendulum 5 deg, 120 frames: the two world frames stay together (J1.hinge_stretch_cm / ball_stretch_cm),
+		//              the hinge X axes stay aligned (hinge_axis_rad), the bob swings through to x < swing_through_x_cm
+		//   snapshot   (PT_CAP_JOINT_SNAPSHOT) one record, JointIndex 0, JointHostIndex 0, not SLEEPING, Frame1World / Frame2World
+		//              = the host's FConstraintInstance::GetWorldFrame (snapshot_frame_cm / snapshot_frame_rad); at the bottom of the
+		//              swing (frame 29, the bob at its fastest) the joint transmits no couple about its anchor: |AngularImpulse| <=
+		//              moving_couple_rel x |LinearImpulse| x the anchor-to-COM distance (a COM lever taken at the end of the step
+		//              instead of the solver's shows here: M9 fix round 0, Bullet)
+		//   release    releasing the bob releases the joint: not simulated, the snapshot drops it
+		//   COM offset a 10 x 10 x 100 cm rod whose COMNudge puts its COM 5 cm off the vertical and 10 cm down, hung from the world
+		//              at its top: the frames are in actor space, not COM space (a mapping that mixes them is off by the nudge
+		//              from frame 0): stretch <= com_offset_stretch_cm over 60 frames, snapshot frames = the host's
+		//   collision  (M9 fix round 2, item 5) two 20 cm cubes overlapping by 6 cm, gravity off, joined 40 cm above their centres (a
+		//              hinge's axis is world Y, so the pair can open like a V): with UE's default (bDisableCollision false) the pair
+		//              collides and the contact pushes the centres apart by >= collision_push_cm in 60 frames; with
+		//              PT_JOINTF_DISABLE_COLLISION nothing acts and they keep their overlap (<= disable_collision_drift_cm) - measured
+		//              on the host's poses, so a backend without contact capture runs it too
+		//   sleeping   (M9 fix round 2, item 9; a profile with sleep on - UEParity - and PT_CAP_JOINT_SNAPSHOT) a two-link chain hung at
+		//              rest from the world: awake, both joints carry the weight; after PUT_TO_SLEEP of both links and two steps the links
+		//              stay asleep and both records are PT_JOINTSNAP_SLEEPING with zero impulses
+		// and once (hinge + snapshot), the impulse convention (abi-v1.1, item 9): a level 100 cm rod of 1 kg held at its end by a
+		// world hinge about X gets LinearImpulse = m g dt up (impulse_rel) and AngularImpulse = the couple -50 m g dt about Y
+		// (couple_rel) - or NaN with PT_JOINTSNAP_ANGULAR_IMPULSE_NA (PhysX TGS).
+		// The J1 scenes run with sleeping off (a joint that falls asleep checks nothing; G6 owns sleep) except the sleeping case, which
+		// needs the profile's sleep; damping, iterations and the rest of the profile and the variant stay. A backend that declares neither joint type keeps its joints host-only (not
+		// simulated, NumUnsupportedConstraints; checked) and reports Skip, allowed only where tolerances.json registers it (Null;
+		// the Chaos bridge until it implements joints, docs/ChaosBackendGuide.md 10.1).
+		struct FJ1Type
+		{
+			const char* Name;            // the M6a Joint parameter
+			uint64 Capability;
+			const char* StretchCheck;    // tolerances.json J1.<check>
+			bool bHinge;
+		};
+		const FJ1Type GJ1Types[] = {
+			{ "Hinge", PT_CAP_JOINT_HINGE, "hinge_stretch_cm", true },
+			{ "Ball", PT_CAP_JOINT_BALL, "ball_stretch_cm", false },
+		};
+
+		// An empty scene on the target for the J1 cases with bodies of their own: no scenario, small hints, sleeping off unless
+		// bKeepProfileSleep (the J1 sleeping case keeps the profile's sleep).
+		std::unique_ptr<FGateScene> MakeEmptyGateScene(const FGateTarget& Target, const char* Label, const bool bKeepProfileSleep = false)
+		{
+			auto Run = std::make_unique<FGateScene>();
+			Run->Config = std::make_unique<FResolvedPhysicsConfig>(*Target.Config);
+			if (!bKeepProfileSleep)
+			{
+				Run->Config->TestSettings.bAllowSleeping = false;
+			}
+			FPhysSceneInitParams InitParams;
+			InitParams.DebugName = std::string("Gate:") + Label;
+			InitParams.BackendName = Target.Backend;
+			InitParams.Config = Run->Config.get();
+			InitParams.MaxBodiesHint = 8;
+			InitParams.MaxBodyPairsHint = 16;
+			InitParams.MaxContactConstraintsHint = 16;
+			InitParams.bApplyForcedOverrides = false;
+			Run->Scene = std::make_unique<FPhysScene>(InitParams);
+			Run->Dt = Run->Config->TestSettings.FixedDeltaTime;
+			Run->DtEngine = Analytic::EngineDeltaTime(Run->Dt);
+			Run->InjectedEngineErrorBits = Target.InjectedEngineErrorBits;
+			Run->Label = Label;
+			return Run;
+		}
+
+		// The world frames of a joint at the host's pulled poses: the distance of their origins (cm) and the angle between their X
+		// axes (rad, the hinge axis).
+		void MeasureJointFrames(const FConstraintInstance& Joint, double& OutStretch, double& OutAxis)
+		{
+			const FTransform A = Joint.GetWorldFrame(EConstraintFrame::Frame1);
+			const FTransform B = Joint.GetWorldFrame(EConstraintFrame::Frame2);
+			OutStretch = (A.GetTranslation() - B.GetTranslation()).Size();
+			OutAxis = std::acos(std::clamp(A.GetRotation().GetAxisX() | B.GetRotation().GetAxisX(), -1.0, 1.0));
+		}
+
+		FVector ToFVector(const PtVec3& V)
+		{
+			return FVector(V.X, V.Y, V.Z);
+		}
+
+		// One captured joint record against the host's FConstraintInstance at the same pulled poses (docs/Abi.md 9.4 item 9).
+		void CheckSnapshotFrames(const FGateTarget& Target, FGateReport& Report, const PtJointSnapshot& Engine, const FConstraintInstance& Joint, const std::string& What)
+		{
+			const double FrameTol = Tolerance(Target, Report, "J1", "snapshot_frame_cm");
+			const double AngleTol = Tolerance(Target, Report, "J1", "snapshot_frame_rad");
+			double WorstDistance = 0.0;
+			double WorstAngle = 0.0;
+			for (const EConstraintFrame Frame : { EConstraintFrame::Frame1, EConstraintFrame::Frame2 })
+			{
+				const PtTransform& Reported = Frame == EConstraintFrame::Frame1 ? Engine.Frame1World : Engine.Frame2World;
+				const FTransform Host = Joint.GetWorldFrame(Frame);
+				WorstDistance = std::max(WorstDistance, (Host.GetTranslation() - ToFVector(Reported.Translation)).Size());
+				WorstAngle = std::max(WorstAngle, AngleBetween(Host.GetRotation(), FQuat(Reported.Rotation.X, Reported.Rotation.Y, Reported.Rotation.Z, Reported.Rotation.W)));
+			}
+			Report.Check(WorstDistance <= FrameTol, Format("%s: snapshot frame origins %.3g cm from the host's GetWorldFrame (> %.3g)", What.c_str(), WorstDistance, FrameTol));
+			Report.Check(WorstAngle <= AngleTol, Format("%s: snapshot frame rotations %.3g rad from the host's GetWorldFrame (> %.3g)", What.c_str(), WorstAngle, AngleTol));
+		}
+
+		class FGateJ1 final : public IConformanceGate
+		{
+		public:
+			const char* GetId() const override { return "J1"; }
+			const char* GetDescription() const override
+			{
+				return "joint contract (docs/Abi.md 9.4): M6a ball / hinge frames, swing, snapshot and release; a COM-offset body; the collision switch "
+					"(bDisableCollision); a sleeping joint (sleep on); the snapshot impulse convention";
+			}
+			FGateReport Run(const FGateTarget& Target, FGateRunState& State) override
+			{
+				FGateReport Report;
+				std::vector<const FJ1Type*> Declared;
+				bool bSnapshot = false;
+				for (const FJ1Type& Type : GJ1Types)
+				{
+					std::unique_ptr<FGateScene> Run = MakeGateScene(Target, "M6a.Pendulum", { { "Angle", "5" }, { "Joint", Type.Name } }, nullptr, true);
+					const std::span<FConstraintInstance* const> Constraints = Run->Scene->GetConstraints();
+					if (!Report.Check(Constraints.size() == 1u, Format("M6a %s: %zu constraints in the scene, expected 1", Type.Name, Constraints.size())))
+					{
+						continue;
+					}
+					bSnapshot = Declares(*Run->Scene, PT_CAP_JOINT_SNAPSHOT);
+					if (!Declares(*Run->Scene, Type.Capability))
+					{
+						// docs/Abi.md 9.4 (P-4): a joint the backend does not declare stays on the host - not sent, not simulated, counted.
+						const int32 Unsupported = Run->Scene->GetStats().NumUnsupportedConstraints;
+						Report.Check(!Constraints[0]->IsSimulated() && Unsupported == 1, Format("M6a %s without its capability: the joint must stay host-only "
+							"(simulated %d, NumUnsupportedConstraints %d)", Type.Name, Constraints[0]->IsSimulated() ? 1 : 0, Unsupported));
+						Report.Note(Format("%s: capability not declared - the joint is host-only (not simulated); its cases do not run", Type.Name));
+						continue;
+					}
+					Declared.push_back(&Type);
+					CheckPendulum(Target, Report, *Run, Type, State);
+					FinishGateScene(*Run, State);
+				}
+				if (Declared.empty())
+				{
+					if (Report.Failures.empty())
+					{
+						Report.Result = EGateResult::Skip;   // allowed only where tolerances.json registers it (RunPhysicsGates)
+					}
+					Report.Note("the backend declares neither PT_CAP_JOINT_BALL nor PT_CAP_JOINT_HINGE: joints stay host-only (docs/Abi.md 9.4)");
+					return Report;
+				}
+				for (const FJ1Type* Type : Declared)
+				{
+					CheckComOffset(Target, Report, *Type, State);
+					CheckCollisionSwitch(Target, Report, *Type, State);
+				}
+				if (!Target.Config->TestSettings.bAllowSleeping)
+				{
+					Report.Note("sleeping joint: the profile turns sleep off - the case runs under a profile with sleep on (UEParity)");
+				}
+				else if (!bSnapshot)
+				{
+					Report.Note("sleeping joint: no PT_CAP_JOINT_SNAPSHOT - PT_JOINTSNAP_SLEEPING is not checked");
+				}
+				else
+				{
+					CheckSleepingJoint(Target, Report, *Declared.front(), State);
+				}
+				const bool bHinge = std::any_of(Declared.begin(), Declared.end(), [](const FJ1Type* Type) { return Type->bHinge; });
+				if (bHinge && bSnapshot)
+				{
+					CheckImpulseConvention(Target, Report, State);
+				}
+				else
+				{
+					Report.Note(bHinge ? "no PT_CAP_JOINT_SNAPSHOT: the impulse convention is not checked" : "no hinge: the impulse convention (a hinged cantilever) is not checked");
+				}
+				return Report;
+			}
+
+		private:
+			static void CheckPendulum(const FGateTarget& Target, FGateReport& Report, FGateScene& Run, const FJ1Type& Type, FGateRunState& State)
+			{
+				FPhysScene& Scene = *Run.Scene;
+				FConstraintInstance& Joint = *Scene.GetConstraints()[0];
+				FBodyInstance& Bob = Run.Body(0);
+				const std::string What = std::string("M6a 5 deg ") + Type.Name;
+				if (!Report.Check(Joint.IsSimulated(), What + ": the backend declares the type, but the joint is not simulated"))
+				{
+					return;
+				}
+				Report.Check(Joint.ConstraintHandle.Index == 0u, Format("%s: joint index %u, expected 0 (creation order, docs/Abi.md 9.4 item 7)", What.c_str(),
+					Joint.ConstraintHandle.Index));
+				const bool bSnapshot = Declares(Scene, PT_CAP_JOINT_SNAPSHOT);
+				const double StretchTol = ToleranceNoted(Target, Report, "J1", Type.StretchCheck);
+				const double AxisTol = Tolerance(Target, Report, "J1", "hinge_axis_rad");
+				const double SwingX = Tolerance(Target, Report, "J1", "swing_through_x_cm");
+				const double CoupleRel = Tolerance(Target, Report, "J1", "moving_couple_rel");
+				constexpr int32 Frames = 120;
+				constexpr int32 BottomFrame = 29;   // the state after 30 steps (0.5 s, a quarter of the 2.009 s period): the bob passes the bottom
+				double MaxStretch = 0.0;
+				double MaxAxis = 0.0;
+				double MinX = 1e30;
+				for (int32 Frame = 0; Frame < Frames; ++Frame)
+				{
+					TickGateScene(Run, State);
+					double Stretch = 0.0;
+					double Axis = 0.0;
+					MeasureJointFrames(Joint, Stretch, Axis);
+					MaxStretch = std::max(MaxStretch, Stretch);
+					MaxAxis = Type.bHinge ? std::max(MaxAxis, Axis) : MaxAxis;
+					MinX = std::min(MinX, Bob.State.BodyTM.GetTranslation().X);
+					if (bSnapshot && Frame == BottomFrame)
+					{
+						CheckMovingCouple(Report, Scene, Bob, What, CoupleRel);
+					}
+				}
+				Report.Check(MaxStretch <= StretchTol, Format("%s: max stretch %.4g cm over %d frames (> %.3g)", What.c_str(), MaxStretch, Frames, StretchTol));
+				if (Type.bHinge)
+				{
+					Report.Check(MaxAxis <= AxisTol, Format("%s: max hinge axis error %.3g rad (> %.3g)", What.c_str(), MaxAxis, AxisTol));
+				}
+				Report.Check(MinX < SwingX, Format("%s: released at x = +8.7 cm, the bob never swung through to x < %.3g cm in %d frames (min %.3f)", What.c_str(),
+					SwingX, Frames, MinX));
+				Report.Note(Format("%s: max stretch %.3g cm, max hinge axis error %.2g rad, min bob x %.2f cm over %d frames", What.c_str(), MaxStretch, MaxAxis, MinX, Frames));
+				FPhysicsDebugSnapshot Snapshot;
+				if (bSnapshot)
+				{
+					const bool bCaptured = Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS);
+					if (Report.Check(bCaptured && Snapshot.Joints.size() == 1u && Snapshot.JointHostIndex.size() == 1u, Format("%s: snapshot with %zu joint records "
+						"(%zu host indices), expected 1", What.c_str(), Snapshot.Joints.size(), Snapshot.JointHostIndex.size())))
+					{
+						const PtJointSnapshot& Record = Snapshot.Joints[0];
+						Report.Check(Record.JointIndex == 0u, Format("%s: snapshot JointIndex %u, expected 0", What.c_str(), Record.JointIndex));
+						Report.Check(Snapshot.JointHostIndex[0] == 0, Format("%s: JointHostIndex %d, expected 0", What.c_str(), Snapshot.JointHostIndex[0]));
+						Report.Check((Record.Flags & ~PT_JOINTSNAP_ALL) == 0u, Format("%s: undefined PT_JOINTSNAP_* bits 0x%x", What.c_str(), Record.Flags));
+						Report.Check((Record.Flags & PT_JOINTSNAP_SLEEPING) == 0u, What + ": a swinging joint (sleeping off) reported PT_JOINTSNAP_SLEEPING");
+						CheckSnapshotFrames(Target, Report, Record, Joint, What);
+					}
+				}
+				Scene.ReleaseBody(&Bob);
+				Report.Check(!Joint.IsSimulated(), What + ": releasing the bob must release its joint (docs/Abi.md 9.4 item 8)");
+				if (bSnapshot)
+				{
+					const bool bCaptured = Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS);
+					Report.Check(bCaptured && Snapshot.Joints.empty(), Format("%s: %zu joint records after the release, expected none", What.c_str(), Snapshot.Joints.size()));
+				}
+				else
+				{
+					Report.Note(What + ": no PT_CAP_JOINT_SNAPSHOT - snapshot checks not run");
+				}
+			}
+
+			// A ball or a hinge swinging in its plane transmits no couple: about the anchor (abi-v1.1) the angular impulse is 0.
+			static void CheckMovingCouple(FGateReport& Report, const FPhysScene& Scene, const FBodyInstance& Bob, const std::string& What, const double CoupleRel)
+			{
+				FPhysicsDebugSnapshot Snapshot;
+				if (!Report.Check(Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS) && Snapshot.Joints.size() == 1u,
+					What + ": no joint record at the bottom of the swing"))
+				{
+					return;
+				}
+				const PtJointSnapshot& Moving = Snapshot.Joints[0];
+				const FVector Linear = ToFVector(Moving.LinearImpulse);
+				const FVector Angular = ToFVector(Moving.AngularImpulse);
+				const FVector Com = Bob.State.BodyTM.TransformPosition(Bob.MassProperties.CenterOfMass);
+				const double Lever = (ToFVector(Moving.Frame1World.Translation) - Com).Size();
+				const double Speed = Bob.State.LinearVelocity.Size();
+				if ((Moving.Flags & PT_JOINTSNAP_IMPULSE_NA) != 0u)
+				{
+					Report.Note(What + ": PT_JOINTSNAP_IMPULSE_NA at the bottom of the swing - the couple is not checked");
+					return;
+				}
+				const double Weight = Bob.MassProperties.Mass * std::abs(Scene.GetGravity().Z) * Analytic::EngineDeltaTime(Scene.GetTestSettings().FixedDeltaTime);
+				Report.Check(Linear.Size() > 0.5 * Weight, Format("%s: |LinearImpulse| %.4g kg cm/s at the bottom of the swing, below half of m g dt %.4g", What.c_str(),
+					Linear.Size(), Weight));
+				if ((Moving.Flags & PT_JOINTSNAP_ANGULAR_IMPULSE_NA) != 0u)
+				{
+					Report.Note(What + ": PT_JOINTSNAP_ANGULAR_IMPULSE_NA - the moving joint's couple is not checked");
+					return;
+				}
+				const double Bound = CoupleRel * Linear.Size() * Lever;
+				Report.Check(Angular.Size() <= Bound, Format("%s: the moving joint reports a couple |AngularImpulse| %.4g kg cm^2/s about its anchor at the bottom of "
+					"the swing (bob speed %.3g cm/s; > %.3g = moving_couple_rel x |LinearImpulse| %.4g x anchor-COM %.4g cm): a ball or a hinge in its plane "
+					"transmits none (docs/Abi.md 9.4 item 9)", What.c_str(), Angular.Size(), Speed, Bound, Linear.Size(), Lever));
+				Report.Note(Format("%s at the bottom of the swing (bob %.3g cm/s): LinearImpulse |%.4g| kg cm/s, AngularImpulse |%.3g| kg cm^2/s about the anchor "
+					"(%.2g of |L| x %.4g cm)", What.c_str(), Speed, Linear.Size(), Angular.Size(), Linear.Size() * Lever > 0.0 ? Angular.Size() / (Linear.Size() * Lever) : 0.0,
+					Lever));
+			}
+
+			static void CheckComOffset(const FGateTarget& Target, FGateReport& Report, const FJ1Type& Type, FGateRunState& State)
+			{
+				const std::string What = std::string("COM-offset rod ") + Type.Name;
+				std::unique_ptr<FGateScene> Run = MakeEmptyGateScene(Target, Type.bHinge ? "J1.ComOffsetHinge" : "J1.ComOffsetBall");
+				FPhysScene& Scene = *Run->Scene;
+				FBodySetup Rod;
+				Rod.AggGeom.BoxElems.emplace_back(10.0, 10.0, 100.0);
+				Rod.PhysMaterial = Scene.GetDefaultPhysicalMaterial();
+				const FBodySetup* RodSetup = Scene.CreateBodySetup(std::move(Rod));
+				FBodyInstance Template;
+				Template.bSimulatePhysics = true;
+				Template.bOverrideMass = true;
+				Template.MassInKgOverride = 1.0f;
+				Template.LinearDamping = 0.0f;
+				Template.AngularDamping = 0.0f;
+				const FVector Nudge(5.0, 0.0, -10.0);
+				Template.COMNudge = Nudge;
+				FBodyInstance* Body = Scene.SpawnBody(Template, RodSetup, FTransform(FVector(0.0, 0.0, 450.0)));
+				// Hung at its top (actor-local (0, 0, 50), the world point (0, 0, 500)); the hinge axis (frame X) is world Y, the plane of
+				// the COM's offset is XZ, so the rod swings about the hinge axis (about 4.8 deg from the vertical).
+				FConstraintInstance Hang;
+				Hang.JointName = "J1ComOffset";
+				Hang.Pos1 = FVector(0.0, 0.0, 50.0);
+				Hang.PriAxis1 = FVector(0.0, 1.0, 0.0);
+				Hang.SecAxis1 = FVector(0.0, 0.0, 1.0);
+				Hang.Pos2 = FVector(0.0, 0.0, 500.0);
+				Hang.PriAxis2 = FVector(0.0, 1.0, 0.0);
+				Hang.SecAxis2 = FVector(0.0, 0.0, 1.0);
+				if (Type.bHinge)
+				{
+					ConstraintUtils::ConfigureAsHinge(Hang);
+				}
+				else
+				{
+					ConstraintUtils::ConfigureAsBallAndSocket(Hang);
+				}
+				FConstraintInstance* Joint = Scene.SpawnConstraint(Hang, Body, nullptr);
+				Scene.FlushDeferredActors();
+				Scene.PrepareForSimulation();
+				Report.Check((Body->MassProperties.CenterOfMass - Nudge).Size() < 1e-6, Format("%s: the host COM (%.6g, %.6g, %.6g) is not the nudge", What.c_str(),
+					Body->MassProperties.CenterOfMass.X, Body->MassProperties.CenterOfMass.Y, Body->MassProperties.CenterOfMass.Z));
+				if (!Report.Check(Joint != nullptr && Joint->IsSimulated(), What + ": the joint is not simulated"))
+				{
+					return;
+				}
+				const double StretchTol = Tolerance(Target, Report, "J1", "com_offset_stretch_cm");
+				const double AxisTol = Tolerance(Target, Report, "J1", "hinge_axis_rad");
+				constexpr int32 Frames = 60;
+				double MaxStretch = 0.0;
+				double MaxAxis = 0.0;
+				for (int32 Frame = 0; Frame < Frames; ++Frame)
+				{
+					TickGateScene(*Run, State);
+					double Stretch = 0.0;
+					double Axis = 0.0;
+					MeasureJointFrames(*Joint, Stretch, Axis);
+					MaxStretch = std::max(MaxStretch, Stretch);
+					MaxAxis = Type.bHinge ? std::max(MaxAxis, Axis) : MaxAxis;
+				}
+				const double SwingX = Body->State.BodyTM.TransformPosition(Body->MassProperties.CenterOfMass).X;
+				Report.Check(MaxStretch <= StretchTol, Format("%s: max stretch %.4g cm over %d frames (> %.3g): frames taken in COM space instead of actor space "
+					"are off by the nudge (%.3g cm)", What.c_str(), MaxStretch, Frames, StretchTol, Nudge.Size()));
+				if (Type.bHinge)
+				{
+					Report.Check(MaxAxis <= AxisTol, Format("%s: max hinge axis error %.3g rad (> %.3g)", What.c_str(), MaxAxis, AxisTol));
+				}
+				Report.Note(Format("%s (COM nudge (5, 0, -10) cm): max stretch %.3g cm, hinge axis error %.2g rad over %d frames, COM x %.2f cm (swinging from +5)",
+					What.c_str(), MaxStretch, MaxAxis, Frames, SwingX));
+				if (Declares(Scene, PT_CAP_JOINT_SNAPSHOT))
+				{
+					FPhysicsDebugSnapshot Snapshot;
+					if (Report.Check(Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS) && Snapshot.Joints.size() == 1u,
+						Format("%s: %zu joint records in the snapshot, expected 1", What.c_str(), Snapshot.Joints.size())))
+					{
+						CheckSnapshotFrames(Target, Report, Snapshot.Joints[0], *Joint, What);
+					}
+				}
+				FinishGateScene(*Run, State);
+			}
+
+			// M9 fix round 2 (docs/Abi.md 9.4 item 5): PT_JOINTF_DISABLE_COLLISION is UE's bDisableCollision. UE's default (false) lets the
+			// jointed pair collide; with the flag no shape of Body1 collides with one of Body2. Two 20 cm cubes overlapping by 6 cm along X,
+			// gravity off, joined at a point 40 cm above their centres - outside both, so the pair can open like a V about it (the frames'
+			// X axis, a hinge's twist axis, is world Y). Colliding, the contact pushes the cubes apart: their centre distance grows by at
+			// least collision_push_cm within 60 frames (an engine that keeps a penetration slop - Jolt 2 cm - does not remove the whole
+			// overlap; full separation opens the V to about 22 cm). With the flag nothing acts on the pair and the overlap stays
+			// (disable_collision_drift_cm). Measured on the host's poses: a backend without contact capture runs it too. An inverted
+			// switch fails both runs.
+			static void CheckCollisionSwitch(const FGateTarget& Target, FGateReport& Report, const FJ1Type& Type, FGateRunState& State)
+			{
+				const double PushMin = Tolerance(Target, Report, "J1", "collision_push_cm");
+				const double DriftMax = Tolerance(Target, Report, "J1", "disable_collision_drift_cm");
+				constexpr double CubeSize = 20.0;
+				constexpr double CentreDistance = 14.0;   // 6 cm overlap
+				constexpr double AnchorAbove = 40.0;
+				constexpr double Height = 500.0;
+				constexpr int32 Frames = 60;
+				for (const bool bDisable : { false, true })
+				{
+					const std::string What = std::string("collision switch ") + Type.Name + (bDisable ? " with PT_JOINTF_DISABLE_COLLISION" : " (UE default: the pair collides)");
+					std::unique_ptr<FGateScene> Run = MakeEmptyGateScene(Target, bDisable ? "J1.DisableCollision" : "J1.CollidingPair");
+					FPhysScene& Scene = *Run->Scene;
+					FBodySetup Cube;
+					Cube.AggGeom.BoxElems.emplace_back(CubeSize, CubeSize, CubeSize);
+					Cube.PhysMaterial = Scene.GetDefaultPhysicalMaterial();
+					const FBodySetup* CubeSetup = Scene.CreateBodySetup(std::move(Cube));
+					FBodyInstance Template;
+					Template.bSimulatePhysics = true;
+					Template.bOverrideMass = true;
+					Template.MassInKgOverride = 1.0f;
+					Template.LinearDamping = 0.0f;
+					Template.AngularDamping = 0.0f;
+					Template.bEnableGravity = false;
+					FBodyInstance* Left = Scene.SpawnBody(Template, CubeSetup, FTransform(FVector(-0.5 * CentreDistance, 0.0, Height)));
+					FBodyInstance* Right = Scene.SpawnBody(Template, CubeSetup, FTransform(FVector(0.5 * CentreDistance, 0.0, Height)));
+					// Both frames sit at the world point (0, 0, Height + AnchorAbove) at rest, X = world Y.
+					FConstraintInstance Pair;
+					Pair.JointName = "J1CollisionSwitch";
+					Pair.Pos1 = FVector(0.5 * CentreDistance, 0.0, AnchorAbove);
+					Pair.PriAxis1 = FVector(0.0, 1.0, 0.0);
+					Pair.SecAxis1 = FVector(0.0, 0.0, 1.0);
+					Pair.Pos2 = FVector(-0.5 * CentreDistance, 0.0, AnchorAbove);
+					Pair.PriAxis2 = FVector(0.0, 1.0, 0.0);
+					Pair.SecAxis2 = FVector(0.0, 0.0, 1.0);
+					if (Type.bHinge)
+					{
+						ConstraintUtils::ConfigureAsHinge(Pair);
+					}
+					else
+					{
+						ConstraintUtils::ConfigureAsBallAndSocket(Pair);
+					}
+					Pair.ProfileInstance.bDisableCollision = bDisable;
+					FConstraintInstance* Joint = Scene.SpawnConstraint(Pair, Left, Right);
+					Scene.FlushDeferredActors();
+					Scene.PrepareForSimulation();
+					if (!Report.Check(Joint != nullptr && Joint->IsSimulated(), What + ": the joint is not simulated"))
+					{
+						continue;
+					}
+					const auto CentreGap = [&]() { return (Right->State.BodyTM.GetTranslation() - Left->State.BodyTM.GetTranslation()).Size(); };
+					const double Start = CentreGap();
+					double MaxStretch = 0.0;
+					for (int32 Frame = 0; Frame < Frames; ++Frame)
+					{
+						TickGateScene(*Run, State);
+						double Stretch = 0.0;
+						double Axis = 0.0;
+						MeasureJointFrames(*Joint, Stretch, Axis);
+						MaxStretch = std::max(MaxStretch, Stretch);
+					}
+					const double Moved = CentreGap() - Start;
+					if (bDisable)
+					{
+						Report.Check(std::abs(Moved) <= DriftMax, Format("%s: the cubes' centre distance changed by %.4g cm in %d frames (> %.3g): something acts on a "
+							"pair that must not collide (docs/Abi.md 9.4 item 5)", What.c_str(), Moved, Frames, DriftMax));
+					}
+					else
+					{
+						Report.Check(Moved >= PushMin, Format("%s: the overlapping cubes' centre distance grew by %.4g cm in %d frames (< %.3g): the pair does not "
+							"collide although bDisableCollision is false (UE's default, docs/Abi.md 9.4 item 5)", What.c_str(), Moved, Frames, PushMin));
+					}
+					Report.Note(Format("%s: centre distance %.3f -> %.3f cm over %d frames (6 cm overlap at the start), max joint stretch %.3g cm", What.c_str(), Start,
+						Start + Moved, Frames, MaxStretch));
+					FinishGateScene(*Run, State);
+				}
+			}
+
+			// M9 fix round 2 (docs/Abi.md 9.4 item 9): a joint with no awake dynamic body did not run - zero impulses and
+			// PT_JOINTSNAP_SLEEPING. A two-link chain (10 x 10 x 40 cm, 1 kg each) hung at rest from the world (joint 0: world - upper
+			// link, joint 1: upper - lower link with bDisableCollision, the links touch at their tips). Awake, both joints carry the weight
+			// (LinearImpulse up, not SLEEPING); after PUT_TO_SLEEP of both links and two steps, both links stay asleep and both records are
+			// SLEEPING alone with exactly zero impulses. Needs a profile with sleep on (UEParity) and PT_CAP_JOINT_SNAPSHOT.
+			static void CheckSleepingJoint(const FGateTarget& Target, FGateReport& Report, const FJ1Type& Type, FGateRunState& State)
+			{
+				const std::string What = std::string("sleeping joint ") + Type.Name;
+				std::unique_ptr<FGateScene> Run = MakeEmptyGateScene(Target, "J1.SleepingJoint", true);
+				FPhysScene& Scene = *Run->Scene;
+				FBodySetup Link;
+				Link.AggGeom.BoxElems.emplace_back(10.0, 10.0, 40.0);
+				Link.PhysMaterial = Scene.GetDefaultPhysicalMaterial();
+				const FBodySetup* LinkSetup = Scene.CreateBodySetup(std::move(Link));
+				FBodyInstance Template;
+				Template.bSimulatePhysics = true;
+				Template.bOverrideMass = true;
+				Template.MassInKgOverride = 1.0f;
+				FBodyInstance* Upper = Scene.SpawnBody(Template, LinkSetup, FTransform(FVector(0.0, 0.0, 580.0)));
+				FBodyInstance* Lower = Scene.SpawnBody(Template, LinkSetup, FTransform(FVector(0.0, 0.0, 540.0)));
+				const auto MakeJoint = [&](const char* Name, const FVector& Pos1, const FVector& Pos2, const bool bDisableCollision)
+				{
+					FConstraintInstance Joint;
+					Joint.JointName = Name;
+					Joint.Pos1 = Pos1;
+					Joint.PriAxis1 = FVector(0.0, 1.0, 0.0);
+					Joint.SecAxis1 = FVector(0.0, 0.0, 1.0);
+					Joint.Pos2 = Pos2;
+					Joint.PriAxis2 = FVector(0.0, 1.0, 0.0);
+					Joint.SecAxis2 = FVector(0.0, 0.0, 1.0);
+					if (Type.bHinge)
+					{
+						ConstraintUtils::ConfigureAsHinge(Joint);
+					}
+					else
+					{
+						ConstraintUtils::ConfigureAsBallAndSocket(Joint);
+					}
+					Joint.ProfileInstance.bDisableCollision = bDisableCollision;
+					return Joint;
+				};
+				FConstraintInstance* Top = Scene.SpawnConstraint(MakeJoint("J1SleepTop", FVector(0.0, 0.0, 20.0), FVector(0.0, 0.0, 600.0), false), Upper, nullptr);
+				FConstraintInstance* Middle = Scene.SpawnConstraint(MakeJoint("J1SleepMiddle", FVector(0.0, 0.0, 20.0), FVector(0.0, 0.0, -20.0), true), Lower, Upper);
+				Scene.FlushDeferredActors();
+				Scene.PrepareForSimulation();
+				if (!Report.Check(Top != nullptr && Middle != nullptr && Top->IsSimulated() && Middle->IsSimulated(), What + ": the joints are not simulated"))
+				{
+					return;
+				}
+				for (int32 Frame = 0; Frame < 3; ++Frame)
+				{
+					TickGateScene(*Run, State);
+				}
+				FPhysicsDebugSnapshot Snapshot;
+				if (!Report.Check(Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS) && Snapshot.Joints.size() == 2u,
+					Format("%s: %zu joint records while awake, expected 2", What.c_str(), Snapshot.Joints.size())))
+				{
+					return;
+				}
+				for (const PtJointSnapshot& Awake : Snapshot.Joints)
+				{
+					Report.Check((Awake.Flags & PT_JOINTSNAP_SLEEPING) == 0u, Format("%s: joint %u reports PT_JOINTSNAP_SLEEPING while its links are awake", What.c_str(),
+						Awake.JointIndex));
+					Report.Check((Awake.Flags & PT_JOINTSNAP_IMPULSE_NA) != 0u || Awake.LinearImpulse.Z > 0.0, Format("%s: joint %u carries LinearImpulse.Z %.4g "
+						"while awake, expected the weight below it (> 0)", What.c_str(), Awake.JointIndex, Awake.LinearImpulse.Z));
+				}
+				Upper->PutInstanceToSleep();
+				Lower->PutInstanceToSleep();
+				for (int32 Frame = 0; Frame < 2; ++Frame)
+				{
+					TickGateScene(*Run, State);
+				}
+				FinishGateScene(*Run, State);
+				const bool bAsleep = Upper->State.ObjectState == EObjectStateType::Sleeping && Lower->State.ObjectState == EObjectStateType::Sleeping;
+				if (!Report.Check(bAsleep, Format("%s: the links are in states %d / %d two steps after PUT_TO_SLEEP, expected Sleeping (nothing wakes them)", What.c_str(),
+					static_cast<int32>(Upper->State.ObjectState), static_cast<int32>(Lower->State.ObjectState))))
+				{
+					return;
+				}
+				if (!Report.Check(Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS) && Snapshot.Joints.size() == 2u,
+					Format("%s: %zu joint records while asleep, expected 2", What.c_str(), Snapshot.Joints.size())))
+				{
+					return;
+				}
+				for (const PtJointSnapshot& Asleep : Snapshot.Joints)
+				{
+					const bool bZero = Asleep.LinearImpulse.X == 0.0 && Asleep.LinearImpulse.Y == 0.0 && Asleep.LinearImpulse.Z == 0.0 && Asleep.AngularImpulse.X == 0.0
+						&& Asleep.AngularImpulse.Y == 0.0 && Asleep.AngularImpulse.Z == 0.0;
+					Report.Check(Asleep.Flags == PT_JOINTSNAP_SLEEPING && bZero, Format("%s: joint %u with both links asleep reports flags 0x%x, LinearImpulse (%.4g, %.4g, "
+						"%.4g), AngularImpulse (%.4g, %.4g, %.4g); expected PT_JOINTSNAP_SLEEPING alone and zero impulses (docs/Abi.md 9.4 item 9)", What.c_str(),
+						Asleep.JointIndex, Asleep.Flags, Asleep.LinearImpulse.X, Asleep.LinearImpulse.Y, Asleep.LinearImpulse.Z, Asleep.AngularImpulse.X,
+						Asleep.AngularImpulse.Y, Asleep.AngularImpulse.Z));
+				}
+				Report.Note(Format("%s: two links hung at rest, put to sleep after 3 awake frames: both joints PT_JOINTSNAP_SLEEPING with zero impulses", What.c_str()));
+			}
+
+			// abi-v1.1 (docs/Abi.md 9.4 item 9): LinearImpulse on Body1, AngularImpulse about the joint anchor (Frame1World's origin) - the
+			// couple of the angular rows, since the linear impulse acts at the anchor. About the rod's COM the joint's net angular
+			// impulse would be 0.
+			static void CheckImpulseConvention(const FGateTarget& Target, FGateReport& Report, FGateRunState& State)
+			{
+				std::unique_ptr<FGateScene> Run = MakeEmptyGateScene(Target, "J1.Cantilever");
+				FPhysScene& Scene = *Run->Scene;
+				FBodySetup Rod;
+				Rod.AggGeom.BoxElems.emplace_back(100.0, 4.0, 4.0);
+				Rod.PhysMaterial = Scene.GetDefaultPhysicalMaterial();
+				const FBodySetup* RodSetup = Scene.CreateBodySetup(std::move(Rod));
+				FBodyInstance Template;
+				Template.bSimulatePhysics = true;
+				Template.bOverrideMass = true;
+				Template.MassInKgOverride = 1.0f;
+				Template.LinearDamping = 0.0f;
+				Template.AngularDamping = 0.0f;
+				FBodyInstance* Body = Scene.SpawnBody(Template, RodSetup, FTransform(FVector(0.0, 0.0, 500.0)));
+				FConstraintInstance Arm;
+				Arm.JointName = "J1Cantilever";
+				Arm.Pos1 = FVector(-50.0, 0.0, 0.0);
+				Arm.PriAxis1 = FVector(1.0, 0.0, 0.0);
+				Arm.SecAxis1 = FVector(0.0, 1.0, 0.0);
+				Arm.Pos2 = FVector(-50.0, 0.0, 500.0);
+				Arm.PriAxis2 = FVector(1.0, 0.0, 0.0);
+				Arm.SecAxis2 = FVector(0.0, 1.0, 0.0);
+				ConstraintUtils::ConfigureAsHinge(Arm);
+				FConstraintInstance* Joint = Scene.SpawnConstraint(Arm, Body, nullptr);
+				Scene.FlushDeferredActors();
+				Scene.PrepareForSimulation();
+				if (!Report.Check(Joint != nullptr && Joint->IsSimulated(), "cantilever: the hinge is not simulated"))
+				{
+					return;
+				}
+				for (int32 Frame = 0; Frame < 5; ++Frame)
+				{
+					TickGateScene(*Run, State);
+				}
+				FinishGateScene(*Run, State);
+				FPhysicsDebugSnapshot Snapshot;
+				if (!Report.Check(Scene.CaptureDebugSnapshot(Snapshot, PT_SNAP_PARTICLES | PT_SNAP_JOINTS) && Snapshot.Joints.size() == 1u,
+					Format("cantilever: %zu joint records in the snapshot, expected 1", Snapshot.Joints.size())))
+				{
+					return;
+				}
+				const PtJointSnapshot& Held = Snapshot.Joints[0];
+				const double Weight = std::abs(Scene.GetGravity().Z) * Run->DtEngine;   // m g dt of 1 kg
+				const double ImpulseRel = Tolerance(Target, Report, "J1", "impulse_rel");
+				const double CoupleRel = Tolerance(Target, Report, "J1", "couple_rel");
+				Report.Note(Format("cantilever (1 kg, 100 cm, world hinge about X at its end): LinearImpulse (%.4g, %.4g, %.4g) kg cm/s, AngularImpulse (%.4g, %.4g, %.4g) "
+					"kg cm^2/s, flags 0x%x; m g dt = %.4g, -50 m g dt = %.4g", Held.LinearImpulse.X, Held.LinearImpulse.Y, Held.LinearImpulse.Z, Held.AngularImpulse.X,
+					Held.AngularImpulse.Y, Held.AngularImpulse.Z, Held.Flags, Weight, -50.0 * Weight));
+				Report.Check((Held.Flags & (PT_JOINTSNAP_SLEEPING | PT_JOINTSNAP_IMPULSE_NA)) == 0u, Format("cantilever: flags 0x%x - a snapshot backend reports the "
+					"joint's impulses (sleeping off)", Held.Flags));
+				Report.Check(std::abs(Held.LinearImpulse.Z - Weight) <= ImpulseRel * Weight && std::abs(Held.LinearImpulse.X) <= ImpulseRel * Weight
+					&& std::abs(Held.LinearImpulse.Y) <= ImpulseRel * Weight, Format("cantilever: LinearImpulse (%.4g, %.4g, %.4g), expected (0, 0, m g dt %.4g) within "
+					"%.3g relative (docs/Abi.md 9.4 item 9: the impulse on Body1)", Held.LinearImpulse.X, Held.LinearImpulse.Y, Held.LinearImpulse.Z, Weight, ImpulseRel));
+				if ((Held.Flags & PT_JOINTSNAP_ANGULAR_IMPULSE_NA) != 0u)
+				{
+					Report.Check(std::isnan(Held.AngularImpulse.X) && std::isnan(Held.AngularImpulse.Y) && std::isnan(Held.AngularImpulse.Z),
+						"cantilever: PT_JOINTSNAP_ANGULAR_IMPULSE_NA with a non-NaN AngularImpulse");
+					Report.Note("cantilever: PT_JOINTSNAP_ANGULAR_IMPULSE_NA - the couple is not checked (LinearImpulse is)");
+					return;
+				}
+				const double Couple = -50.0 * Weight;
+				Report.Check(std::abs(Held.AngularImpulse.Y - Couple) <= CoupleRel * std::abs(Couple) && std::abs(Held.AngularImpulse.X) <= CoupleRel * std::abs(Couple)
+					&& std::abs(Held.AngularImpulse.Z) <= CoupleRel * std::abs(Couple), Format("cantilever: AngularImpulse (%.4g, %.4g, %.4g), expected the couple "
+					"(0, -50 m g dt = %.4g, 0) about the anchor within %.3g relative (abi-v1.1, docs/Abi.md 9.4 item 9; about the COM it would be 0)",
+					Held.AngularImpulse.X, Held.AngularImpulse.Y, Held.AngularImpulse.Z, Couple, CoupleRel));
+			}
+		};
+
 		// ---- the module rule ------------------------------------------------------------------------------------------
 		bool PrepareModule(const FGateTarget& Target, std::string& OutError)
 		{
@@ -1540,7 +2210,8 @@ namespace PhysicsTest::Gates
 	}
 
 	void CheckEffectiveReadback(const FGateTarget& Target, const FReadbackContext& Context, const std::vector<FEffectiveSetting>& Settings,
-		const std::vector<std::string>& SkipKeys, const bool bRequireNoWrapping, const std::string& SceneLabel, FGateReport& Report)
+		const std::vector<std::string>& SkipKeys, const bool bRequireNoWrapping, const std::string& SceneLabel, FGateReport& Report,
+		std::vector<FReadbackDiffRow>* OutDiff)
 	{
 		int32 NumReadback = 0;
 		int32 Compared = 0;
@@ -1554,13 +2225,24 @@ namespace PhysicsTest::Gates
 		std::vector<std::string> ScenePinnedKeys;
 		for (const FEffectiveSetting& Setting : Settings)
 		{
+			// M9: the diff row of this key; the branches below fill its status.
+			FReadbackDiffRow Scratch;
+			FReadbackDiffRow& Row = OutDiff != nullptr ? OutDiff->emplace_back() : Scratch;
+			Row.Key = Setting.Key;
+			Row.Source = Setting.Source;
+			Row.Native = Setting.Native;
+			Row.bHasEffective = Setting.bHasCanonical;
+			Row.Effective = Setting.Canonical;
 			if (Setting.Source != "READBACK")
 			{
+				Row.Status = "not_readback";
 				continue;
 			}
 			if (std::find(SkipKeys.begin(), SkipKeys.end(), Setting.Key) != SkipKeys.end())
 			{
 				++Skipped;
+				Row.Status = "skipped";
+				Row.Note = "left to another gate (G10a)";
 				continue;
 			}
 			++NumReadback;
@@ -1568,12 +2250,16 @@ namespace PhysicsTest::Gates
 			const FReadbackRule* Rule = Target.Tolerances->FindReadbackRule(Target.Backend, Target.Variant, Setting.Key, SceneName);
 			if (!Report.Check(Rule != nullptr, "G9 " + Setting.Key + ": READBACK key without a registered expectation (tolerances.json gates.G9.readback)"))
 			{
+				Row.Status = "no_rule";
 				continue;
 			}
+			Row.Rule = !Rule->Unchecked.empty() ? std::string("unchecked") : Rule->Expect;
 			if (!Rule->Scenes.empty() && Context.Scenario != nullptr && std::find(Rule->Scenes.begin(), Rule->Scenes.end(), SceneName) == Rule->Scenes.end())
 			{
 				++SceneBound;
 				SceneBoundKeys.push_back(Setting.Key);
+				Row.Status = "skipped";
+				Row.Note = "geometry-bound rule (tolerances.json scene list) of other scenes";
 				continue;
 			}
 			const bool bBodyTemplateRule = Rule->Expect == "profile:linear_damping" || Rule->Expect == "profile:max_angular_velocity"
@@ -1582,18 +2268,33 @@ namespace PhysicsTest::Gates
 			{
 				++ScenePinned;
 				ScenePinnedKeys.push_back(Setting.Key);
+				Row.Status = "skipped";
+				Row.Note = "the scene pins its bodies' values (body-template rule)";
 				continue;
 			}
 			if (Context.NumDynamicBodies == 0 && !Setting.bHasCanonical && Rule->Unchecked.empty())
 			{
 				++NoBodyKeys;
+				Row.Status = "skipped";
+				Row.Note = "aggregates over dynamic bodies; the scene has none";
 				continue;
 			}
 			const int32 Before = Unchecked;
-			CheckReadbackRule(Target, Context, Setting, *Rule, Report, Compared, Unchecked);
+			const size_t FailuresBefore = Report.Failures.size();
+			CheckReadbackRule(Target, Context, Setting, *Rule, Report, Compared, Unchecked, &Row);
 			if (Unchecked != Before)
 			{
 				UncheckedKeys.push_back(Setting.Key + " (" + Rule->Unchecked + ")");
+				Row.Status = "unchecked";
+				Row.Note = Rule->Unchecked;
+			}
+			else
+			{
+				Row.Status = Report.Failures.size() == FailuresBefore ? "match" : "mismatch";
+				if (Row.Status == "mismatch")
+				{
+					Row.Note = Report.Failures.back();
+				}
 			}
 		}
 		if (bRequireNoWrapping)
@@ -1643,8 +2344,9 @@ namespace PhysicsTest::Gates
 		static FGateG6 G6;
 		static FGateG7 G7;
 		static FGateG9 G9;
+		static FGateJ1 J1;
 		static FGateG12 G12;
-		static const std::vector<IConformanceGate*> Gates = { &G1, &G1b, &G2, &G3, &G4, &G5, &G6, &G7, &G9, &G12 };
+		static const std::vector<IConformanceGate*> Gates = { &G1, &G1b, &G2, &G3, &G4, &G5, &G6, &G7, &G9, &J1, &G12 };
 		return Gates;
 	}
 
@@ -1676,7 +2378,7 @@ namespace PhysicsTest::Gates
 			IConformanceGate* Gate = FindPhysicsGate(Id);
 			if (Gate == nullptr)
 			{
-				OutError = "unknown physics gate '" + Id + "' (G1, G1b, G2, G3, G4, G5, G6, G7, G9, G12)";
+				OutError = "unknown physics gate '" + Id + "' (G1, G1b, G2, G3, G4, G5, G6, G7, G9, J1, G12)";
 				return false;
 			}
 			Selected.push_back(Gate);

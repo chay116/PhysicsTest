@@ -62,6 +62,52 @@ namespace PhysicsTest::PhysXBackend
 
 		const char* const GFilteringNames[] = { "Keep", "Suppress", "Kill" };
 		const physx::PxPairFilteringMode::Enum GFilteringValues[] = { physx::PxPairFilteringMode::eKEEP, physx::PxPairFilteringMode::eSUPPRESS, physx::PxPairFilteringMode::eKILL };
+
+		// DebugVisualization (M9): the variant-file names of the EPhysXVisualizationCategory bits, in bit order.
+		const char* const GVisualizationNames[] = { "CollisionShapes", "CollisionAABBs", "ActorAxes", "BodyMassAxes", "BodyLinearVelocity", "JointLocalFrames",
+			"JointLimits", "ContactPoints", "ContactNormals" };
+		static_assert((1u << (sizeof(GVisualizationNames) / sizeof(GVisualizationNames[0]))) - 1u == PhysXViz_All, "one name per visualization category bit");
+
+		// "None", or a comma-separated list of category names (spaces allowed, case-insensitive, no repeats).
+		PtResult ParseVisualization(const Abi::FStringRef Key, const Abi::FStringRef Value, uint32& Out, char (&Error)[256])
+		{
+			const Abi::FStringRef Trimmed = TrimSpaces(Value);
+			if (EqualsNoCase("None", Trimmed))
+			{
+				Out = 0;
+				return PT_OK;
+			}
+			uint32 Bits = 0;
+			Abi::FStringRef Rest = Trimmed;
+			while (true)
+			{
+				uint32 Comma = 0;
+				while (Comma < Rest.Length && Rest.Data[Comma] != ',')
+				{
+					++Comma;
+				}
+				const Abi::FStringRef Name = TrimSpaces(Abi::FStringRef{ Rest.Data, Comma });
+				uint32 Bit = 0;
+				for (uint32 Index = 0; Index < sizeof(GVisualizationNames) / sizeof(GVisualizationNames[0]); ++Index)
+				{
+					Bit = EqualsNoCase(GVisualizationNames[Index], Name) ? (1u << Index) : Bit;
+				}
+				if (Bit == 0 || (Bits & Bit) != 0)
+				{
+					return Fail(Error, Key, "None or a comma list of CollisionShapes, CollisionAABBs, ActorAxes, BodyMassAxes, BodyLinearVelocity, JointLocalFrames, "
+						"JointLimits, ContactPoints, ContactNormals (each once)");
+				}
+				Bits |= Bit;
+				if (Comma >= Rest.Length)
+				{
+					break;
+				}
+				Rest.Data += Comma + 1;
+				Rest.Length -= Comma + 1;
+			}
+			Out = Bits;
+			return PT_OK;
+		}
 	}
 
 	PtResult ApplySceneOption(FPhysXSceneConfig& Config, const Abi::FStringRef Key, const Abi::FStringRef Value, char (&Error)[256])
@@ -213,6 +259,22 @@ namespace PhysicsTest::PhysXBackend
 			const EPhysXGyroscopicRule Values[] = { EPhysXGyroscopicRule::Ignore, EPhysXGyroscopicRule::FromBody };
 			return ParseEnum(Value, Names, Values, Config.GyroscopicRule) ? PT_OK : Fail(Error, Key, "Ignore or FromBody");
 		}
+		if (EqualsNoCase("JointRecipe", Key))
+		{
+			const char* const Names[] = { "D6", "Native" };
+			const EPhysXJointRecipe Values[] = { EPhysXJointRecipe::D6, EPhysXJointRecipe::Native };
+			return ParseEnum(Value, Names, Values, Config.JointRecipe) ? PT_OK : Fail(Error, Key, "D6 or Native (PxSphericalJoint / PxRevoluteJoint)");
+		}
+		if (EqualsNoCase("JointActorOrder", Key))
+		{
+			const char* const Names[] = { "ParentFirst", "ChildFirst" };
+			const EPhysXJointActorOrder Values[] = { EPhysXJointActorOrder::ParentFirst, EPhysXJointActorOrder::ChildFirst };
+			return ParseEnum(Value, Names, Values, Config.JointActorOrder) ? PT_OK : Fail(Error, Key, "ParentFirst (actor0 = Body2) or ChildFirst (actor0 = Body1)");
+		}
+		if (EqualsNoCase("DebugVisualization", Key))
+		{
+			return ParseVisualization(Key, Value, Config.Visualization, Error);
+		}
 		snprintf(Error, sizeof(Error), "PhysX: unknown scene option '%.*s' (see Config/Profiles/Backend/PhysX.UE4Compat.ini for the keys)", static_cast<int>(Key.Length),
 			Key.Data);
 		return PT_E_INVALID_ARG;
@@ -286,5 +348,27 @@ namespace PhysicsTest::PhysXBackend
 	const char* ToString(const EPhysXGyroscopicRule Value)
 	{
 		return Value == EPhysXGyroscopicRule::Ignore ? "Ignore" : "FromBody";
+	}
+
+	const char* ToString(const EPhysXJointRecipe Value)
+	{
+		return Value == EPhysXJointRecipe::D6 ? "D6" : "Native";
+	}
+
+	const char* ToString(const EPhysXJointActorOrder Value)
+	{
+		return Value == EPhysXJointActorOrder::ParentFirst ? "ParentFirst" : "ChildFirst";
+	}
+
+	const char* GetVisualizationCategoryName(const uint32 CategoryBit)
+	{
+		for (uint32 Index = 0; Index < sizeof(GVisualizationNames) / sizeof(GVisualizationNames[0]); ++Index)
+		{
+			if (CategoryBit == (1u << Index))
+			{
+				return GVisualizationNames[Index];
+			}
+		}
+		return "?";
 	}
 }

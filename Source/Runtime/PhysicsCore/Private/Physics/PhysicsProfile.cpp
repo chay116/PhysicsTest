@@ -528,6 +528,139 @@ namespace PhysicsTest
 		};
 #undef PT_PROPERTY
 
+		// ---- [/Script/PhysicsTest.ForcedOverrides] (M9) ----
+		constexpr const char* GForcedMaterialPrefix = "PhysicalMaterial";
+		constexpr const char* GForcedBodyPrefix = "BodyInstance";
+		constexpr const char* GStaticFrictionFromFriction = "Friction";   // PhysicalMaterial.StaticFriction=Friction: SF := F
+
+		// Fields the harness mass computation reads (BodyUtils, 02 5.3): forcing them after the mass was computed would leave
+		// the mass and the forced value disagreeing.
+		bool IsMassField(const std::string_view Field)
+		{
+			return EqualsNoCase(Field, "Density") || EqualsNoCase(Field, "RaiseMassToPower") || EqualsNoCase(Field, "MassScale");
+		}
+
+		// "PhysicalMaterial.<Field>" / "BodyInstance.<Field>" -> target and property (case-insensitive).
+		bool ParseForcedOverrideKey(const std::string_view Key, FForcedOverride::ETarget& OutTarget, const FPropertyDesc*& OutDesc, std::string& OutError)
+		{
+			const size_t Dot = Key.find('.');
+			const std::string_view Prefix = Dot == std::string_view::npos ? Key : Key.substr(0, Dot);
+			const std::string_view Field = Dot == std::string_view::npos ? std::string_view() : Key.substr(Dot + 1);
+			std::span<const FPropertyDesc> Table;
+			if (EqualsNoCase(Prefix, GForcedMaterialPrefix))
+			{
+				OutTarget = FForcedOverride::ETarget::PhysicalMaterial;
+				Table = GMaterialDefaultsProperties;
+			}
+			else if (EqualsNoCase(Prefix, GForcedBodyPrefix))
+			{
+				OutTarget = FForcedOverride::ETarget::BodyInstance;
+				Table = GBodyInstanceDefaultsProperties;
+			}
+			else
+			{
+				OutError = "forced override '" + std::string(Key) + "': the key must be PhysicalMaterial.<field> or BodyInstance.<field>";
+				return false;
+			}
+			OutDesc = nullptr;
+			for (const FPropertyDesc& Desc : Table)
+			{
+				if (EqualsNoCase(Desc.Name, Field))
+				{
+					OutDesc = &Desc;
+				}
+			}
+			if (OutDesc == nullptr)
+			{
+				OutError = "forced override '" + std::string(Key) + "': unknown field (the fields of [" + (OutTarget == FForcedOverride::ETarget::PhysicalMaterial
+					? ConfigSections::PhysicalMaterialDefaults : ConfigSections::BodyInstanceDefaults) + "])";
+				return false;
+			}
+			if (IsMassField(Field))
+			{
+				OutError = "forced override '" + std::string(Key) + "': the harness mass computation reads this field before the override would apply; "
+					"set it in [" + ConfigSections::PhysicalMaterialDefaults + "] / [" + ConfigSections::BodyInstanceDefaults + "] or in the scene instead";
+				return false;
+			}
+			return true;
+		}
+
+		// Checks and normalises a forced override value; the StaticFriction token stays as it is.
+		bool NormalizeForcedOverrideValue(const FForcedOverride::ETarget Target, const FPropertyDesc& Desc, const std::string_view Text, std::string& OutCanonical,
+			std::string& OutError)
+		{
+			if (Target == FForcedOverride::ETarget::PhysicalMaterial && std::string_view(Desc.Name) == "StaticFriction" && EqualsNoCase(Text, GStaticFrictionFromFriction))
+			{
+				OutCanonical = GStaticFrictionFromFriction;
+				return true;
+			}
+			FPhysicalMaterial Material;
+			FBodyInstance Body;
+			void* Object = Target == FForcedOverride::ETarget::PhysicalMaterial ? static_cast<void*>(&Material) : static_cast<void*>(&Body);
+			if (!Desc.Import(Object, Text, OutError))
+			{
+				return false;
+			}
+			OutCanonical = Desc.Export(Object);
+			return true;
+		}
+
+		template <typename TObject>
+		int32 ApplyForcedOverridesTo(const std::span<const FForcedOverride> Overrides, const FForcedOverride::ETarget Target, std::span<const FPropertyDesc> Table,
+			TObject& InOut, std::vector<std::string>* OutChanges)
+		{
+			int32 Changed = 0;
+			const auto ApplyOne = [&](const FForcedOverride& Override, const FPropertyDesc& Desc, const std::string& Value)
+			{
+				const std::string Before = Desc.Export(&InOut);
+				std::string Ignored;
+				if (!Desc.Import(&InOut, Value, Ignored))
+				{
+					return;   // validated by the resolver
+				}
+				const std::string After = Desc.Export(&InOut);
+				if (After != Before)
+				{
+					++Changed;
+					if (OutChanges != nullptr)
+					{
+						OutChanges->push_back(Override.GetKey() + ": " + Before + " -> " + After);
+					}
+				}
+			};
+			// Plain values in file order, then the relational SF := F (it reads the forced Friction, if any).
+			for (const bool bRelational : { false, true })
+			{
+				for (const FForcedOverride& Override : Overrides)
+				{
+					if (Override.Target != Target)
+					{
+						continue;
+					}
+					const auto Desc = std::find_if(Table.begin(), Table.end(), [&Override](const FPropertyDesc& D) { return Override.Field == D.Name; });
+					if (Desc == Table.end())
+					{
+						continue;
+					}
+					const bool bIsRelational = Target == FForcedOverride::ETarget::PhysicalMaterial && Override.Value == GStaticFrictionFromFriction;
+					if (bIsRelational != bRelational)
+					{
+						continue;
+					}
+					if (bIsRelational)
+					{
+						const auto Friction = std::find_if(Table.begin(), Table.end(), [](const FPropertyDesc& D) { return std::string_view(D.Name) == "Friction"; });
+						ApplyOne(Override, *Desc, Friction->Export(&InOut));
+					}
+					else
+					{
+						ApplyOne(Override, *Desc, Override.Value);
+					}
+				}
+			}
+			return Changed;
+		}
+
 		// ------------------------------------------------------------------------------------------------------------
 		// Sections
 		// ------------------------------------------------------------------------------------------------------------
@@ -620,6 +753,7 @@ namespace PhysicsTest
 			else if (Is(ConfigSections::ForcedOverrides))
 			{
 				Info.Kind = ESectionKind::ForcedOverrides;
+				Info.Prefix = "ForcedOverrides";
 			}
 			else if (StartsWithNoCase(Section, ConfigSections::BackendPrefix))
 			{
@@ -898,6 +1032,18 @@ namespace PhysicsTest
 		if (Info.Prefix.empty())
 		{
 			return {};
+		}
+		if (Info.Kind == ESectionKind::ForcedOverrides)
+		{
+			// M9: "ForcedOverrides.PhysicalMaterial.FrictionCombineMode" in the canonical spelling when the key parses.
+			FForcedOverride::ETarget Target = FForcedOverride::ETarget::PhysicalMaterial;
+			const FPropertyDesc* Desc = nullptr;
+			std::string Ignored;
+			if (ParseForcedOverrideKey(Key, Target, Desc, Ignored))
+			{
+				return Info.Prefix + "." + (Target == FForcedOverride::ETarget::PhysicalMaterial ? GForcedMaterialPrefix : GForcedBodyPrefix) + "." + Desc->Name;
+			}
+			return Info.Prefix + "." + std::string(Key);
 		}
 		if (const FPropertyDesc* Desc = FindProperty(Info.Kind, Key))
 		{
@@ -1181,7 +1327,23 @@ namespace PhysicsTest
 					return Fail("[" + Line.Section + "] is not read: every UE physics key belongs to [" + ConfigSections::PhysicsSettings
 						+ "], as in a UE game (BaseEngine.ini:3406, DL44)");
 				case ESectionKind::ForcedOverrides:
-					return Fail("[" + Line.Section + "] arrives in M9 (ForcedOverrides)");
+					// M9 (02 10): a variant may not force anything (it could undo a normalisation the way a pinned key would).
+					if (Layer.Origin == EConfigOrigin::BackendVariant)
+					{
+						return Fail("[" + Line.Section + "] belongs in the base config, a physics profile or -ini:, not in a backend variant");
+					}
+					if (!Line.Key.empty())
+					{
+						FForcedOverride::ETarget Target = FForcedOverride::ETarget::PhysicalMaterial;
+						const FPropertyDesc* Desc = nullptr;
+						std::string Canonical;
+						std::string KeyError;
+						if (!ParseForcedOverrideKey(Line.Key, Target, Desc, KeyError) || !NormalizeForcedOverrideValue(Target, *Desc, Line.Value, Canonical, KeyError))
+						{
+							return Fail(KeyError);
+						}
+					}
+					break;
 				case ESectionKind::Unknown:
 					return Fail("unknown section [" + Line.Section + "]");
 				case ESectionKind::ProfileMeta:
@@ -1329,6 +1491,26 @@ namespace PhysicsTest
 					Out.ConsoleVariables.emplace_back(Variable != nullptr ? std::string(Variable->GetName()) : Entry.Key, Value.Value);
 					continue;
 				}
+				if (Info.Kind == ESectionKind::ForcedOverrides)
+				{
+					// M9: validated per line above. Applied after authoring by FPhysScene (FlushDeferredActors).
+					FForcedOverride Override;
+					const FPropertyDesc* Desc = nullptr;
+					std::string ValueError;
+					if (!ParseForcedOverrideKey(Entry.Key, Override.Target, Desc, ValueError)
+						|| !NormalizeForcedOverrideValue(Override.Target, *Desc, Entry.Value.Value, Override.Value, ValueError))
+					{
+						OutError = Record.Name + ": " + ValueError;
+						return false;
+					}
+					Override.Field = Desc->Name;
+					Override.OriginName = Record.Name;
+					Value.Value = Override.Value;
+					Value.Unit = Desc->Unit;
+					Value.Origin = EConfigOrigin::ForcedOverride;
+					Out.ForcedOverrides.push_back(std::move(Override));
+					continue;
+				}
 				if (Info.Kind == ESectionKind::Backend || Info.Kind == ESectionKind::BackendInit)
 				{
 					Value.Value = Entry.Value.Value;
@@ -1375,6 +1557,10 @@ namespace PhysicsTest
 			{
 				bPhysics = FindHarnessCVar(Name) != nullptr || ProfileOwnedCVars.contains(ToLower(Name));
 			}
+			else if (Prefix == "ForcedOverrides")
+			{
+				bPhysics = true;   // M9: what the engine receives after authoring
+			}
 			else if (Prefix != "Backend")
 			{
 				const FPropertyDesc* Desc = FindProperty(KindFromPrefix(Prefix), Name);
@@ -1420,6 +1606,21 @@ namespace PhysicsTest
 		{
 			Desc.Copy(&InOutTemplate, &Config.MaterialDefaults);
 		}
+	}
+
+	std::string FForcedOverride::GetKey() const
+	{
+		return std::string(Target == ETarget::PhysicalMaterial ? GForcedMaterialPrefix : GForcedBodyPrefix) + "." + Field;
+	}
+
+	int32 FProfileResolver::ApplyForcedOverrides(const std::span<const FForcedOverride> Overrides, FPhysicalMaterial& InOutMaterial, std::vector<std::string>* OutChanges)
+	{
+		return ApplyForcedOverridesTo(Overrides, FForcedOverride::ETarget::PhysicalMaterial, GMaterialDefaultsProperties, InOutMaterial, OutChanges);
+	}
+
+	int32 FProfileResolver::ApplyForcedOverrides(const std::span<const FForcedOverride> Overrides, FBodyInstance& InOutBody, std::vector<std::string>* OutChanges)
+	{
+		return ApplyForcedOverridesTo(Overrides, FForcedOverride::ETarget::BodyInstance, GBodyInstanceDefaultsProperties, InOutBody, OutChanges);
 	}
 
 	EConsoleVariableFlags FProfileResolver::GetConsoleVariableSetBy(const FResolvedConfigValue& Value)

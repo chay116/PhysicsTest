@@ -139,9 +139,13 @@ namespace PhysicsTest
 		// desc_sha256 of this build configuration per profile) at <path>; the other configuration's entries are kept.
 		std::filesystem::path SceneHashesPath;
 		// -Gate=G8 / -Gate=G11 (M7): the multi-process gates. G8 (DET1) runs the run -Runs=N times (default 3) in fresh
-		// processes; G11 runs it with contact capture off and on.
+		// processes; G11 runs it twice with one result-neutral knob changed and compares every frame's hashes.
 		std::string MultiRunGate;
 		int32 GateRuns = 3;
+		// -G11Knob= (M9; 02 14.3 G11, 03 M9): contacts (default, M7: capture off / on), variants:<A>,<B> (the backend variants
+		// A and B, e.g. variants:Default,StaticAabbOff for Bullet.StaticAabbOff), viz (Bench mode without instrumentation / Viz
+		// mode with -Instrument=native_debug_draw: an attached debug drawer must not change the result, e.g. Bullet's).
+		std::string G11Knob;
 		double BusyHelperSeconds = 0.0;      // -BusyHelper=<s> (M7): the exit-4 test load
 
 		// UE-style switches (FParse). False + OutError for a malformed value (e.g. -Threads=4x, -Frames=0). Out.OutDir is set

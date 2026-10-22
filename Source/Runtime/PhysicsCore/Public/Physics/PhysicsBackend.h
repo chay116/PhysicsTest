@@ -27,9 +27,25 @@ static_assert(PhysicsTest::NumCollisionChannels == PT_NUM_COLLISION_CHANNELS, "h
 namespace PhysicsTest
 {
 	struct FBodyInstance;
+	struct FConstraintInstance;
 	struct FPhysicalMaterial;
 	struct FPhysicsDebugSnapshot;
 	struct FPhysicsSettingsCore;
+
+	// FConstraintInstance -> PtConstraintCreateInfo (M9, docs/Abi.md 9.4; ConstraintUtils.h:10, :19 [V] presets):
+	//   linear X / Y / Z all LCM_Locked, and (Swing1, Swing2, Twist) = (Free, Free, Free) -> PT_JOINT_BALL
+	//   (ConfigureAsBallAndSocket) or (Locked, Locked, Free) -> PT_JOINT_HINGE (ConfigureAsHinge: twist about Frame X). Any
+	//   other motion (ACM_Limited, a hinge about a swing axis, a free linear axis) is not a Phase-1 joint (DL31): false +
+	//   OutError. The limit angles are ignored (no limited motion exists). Frames: GetRefFrame(Frame1 / Frame2), whose axes
+	//   must be orthonormal (unit Pri / Sec within 1e-4, Pri . Sec within 1e-4); positions unscaled (UE InitConstraint's
+	//   InScale = 1). bDisableCollision -> PT_JOINTF_DISABLE_COLLISION. Body1 must be set (the child); Body2 == nullptr is the
+	//   world (Body2Index PT_INDEX_NONE). Body1Index / Body2Index are the bodies' creation-order indices.
+	bool MarshalConstraint(const FConstraintInstance& Constraint, uint32 Body1Index, uint32 Body2Index, PtConstraintCreateInfo& Out, std::string& OutError);
+	// The PT_CAP_JOINT_* capability a marshalled joint needs.
+	[[nodiscard]] uint64 GetJointCapability(const PtConstraintCreateInfo& Info);
+	// FPhysicalMaterial -> PtPhysicalMaterial as CreateMaterials receives it: raw F / SF / R (DL41) and the per-material combine
+	// modes resolved with the project setting (bOverride*CombineMode ? the material's : the project's).
+	[[nodiscard]] PtPhysicalMaterial MarshalPhysicalMaterial(const FPhysicalMaterial& Material, const FPhysicsSettingsCore& Project);
 
 	// One generated registry entry (cmake/PTBackendRegistry.cpp.in): a static backend (StaticEntry) or a DLL file next to
 	// the executable (DllFileName).
@@ -52,7 +68,7 @@ namespace PhysicsTest
 		std::string SourceCommit;
 		std::string BuildConfig;
 		std::string BuildFlagsJson;
-		uint64 Capabilities = 0;            // PROVISIONAL(M9) bits already cleared on a revision mismatch
+		uint64 Capabilities = 0;            // PT_CAP_PROVISIONAL_MASK bits already cleared on a revision mismatch
 		uint64 DeclaredCapabilities = 0;    // as the module reported them
 		uint32 ModuleFlags = 0;
 		uint32 ProvisionalRevision = 0;
@@ -196,6 +212,11 @@ namespace PhysicsTest
 			FMarshalledActorBatch& Out, std::string& OutError) const;
 		// CreateMaterials(NewMaterials) + CreateActors, then binds every body's ActorHandle to this proxy.
 		PtResult CreateActors(std::span<FBodyInstance* const> Bodies, const FMarshalledActorBatch& Batch);
+		// CreateConstraints(Infos) (M9; Infos[i] marshals Constraints[i], every body already has its actor), then binds every
+		// constraint's ConstraintHandle to this proxy: Index = the backend's joint index (creation order of the joints this
+		// proxy created; PtJointSnapshot::JointIndex).
+		PtResult CreateConstraints(std::span<FConstraintInstance* const> Constraints, std::span<const PtConstraintCreateInfo> Infos);
+		// ReleaseActors(Body); the backend releases the body's joints with it (docs/Abi.md 9.4): their handles are cleared here.
 		PtResult ReleaseActor(FBodyInstance& Body);
 		// [T_prepare] Returns the backend's description of what it did.
 		PtResult PrepareForSimulation(std::string& OutActions);
@@ -222,7 +243,7 @@ namespace PhysicsTest
 		// GetMemoryStats of this scene (untimed; the bench manifest's memory group). -1 fields = the backend cannot tell.
 		PtResult GetMemoryStats(PtMemoryStats& Out);
 		PtResult ComputeNativeStateHash(uint64& OutHash);
-		// CaptureDebugSnapshot (counts) + ReadDebugSnapshot into buffers sized from the counts (untimed; PROVISIONAL(M9)).
+		// CaptureDebugSnapshot (counts) + ReadDebugSnapshot into buffers sized from the counts (untimed; ABI v1.1).
 		// SnapshotFlags = PT_SNAP_*. PT_E_UNSUPPORTED when the backend has no snapshot.
 		PtResult CaptureDebugSnapshot(uint32 SnapshotFlags, FPhysicsDebugSnapshot& Out);
 		// JSON lines (two-call protocol). Empty string + error code on failure.
@@ -234,7 +255,15 @@ namespace PhysicsTest
 		[[nodiscard]] const FBackendInfo& GetInfo() const { return Module->GetInfo(); }
 		[[nodiscard]] const PtBackendApi& GetApi() const { return *Api; }
 		[[nodiscard]] uint32 GetNumBodies() const { return static_cast<uint32>(BodiesByIndex.size()); }
+		// The host material of each backend material index (creation order of CreateMaterials).
+		[[nodiscard]] std::span<const FPhysicalMaterial* const> GetMaterialSources() const { return MaterialSources; }
 		[[nodiscard]] FBodyInstance* GetBody(const uint32 Index) const { return Index < BodiesByIndex.size() ? BodiesByIndex[Index] : nullptr; }
+		// Joints created in the backend (M9): JointIndex -> constraint (nullptr once a body of the joint was released).
+		[[nodiscard]] uint32 GetNumJoints() const { return static_cast<uint32>(ConstraintsByIndex.size()); }
+		[[nodiscard]] FConstraintInstance* GetConstraint(const uint32 JointIndex) const
+		{
+			return JointIndex < ConstraintsByIndex.size() ? ConstraintsByIndex[JointIndex] : nullptr;
+		}
 		[[nodiscard]] std::string GetLastErrorMessage() const { return Module->GetLastErrorMessage(); }
 		// How often CaptureDebugSnapshot logged a rejected particle BodyIndex (once per scene at most; a unit test reads it).
 		[[nodiscard]] uint32 GetNumSnapshotIndexErrorLogs() const { return NumSnapshotIndexErrorLogs; }
@@ -248,10 +277,13 @@ namespace PhysicsTest
 		uint32 NextSerial = 1;
 		std::vector<const FPhysicalMaterial*> MaterialSources;   // backend material index -> host material
 		std::vector<FBodyInstance*> BodiesByIndex;                // creation order (= BodyIndex)
+		std::vector<FConstraintInstance*> ConstraintsByIndex;     // creation order of the backend's joints (= JointIndex)
+		uint32 NextConstraintSerial = 1;
 		std::vector<PtBodyCommand> PendingCommands;
 		std::vector<uint32> PullIndices;
 		std::vector<PtBodyState> PullStates;
 		uint32 NumSnapshotIndexErrorLogs = 0;   // CaptureDebugSnapshot: an invalid particle BodyIndex is logged once per scene
+		uint32 NumSnapshotJointErrorLogs = 0;   // ... and an invalid JointIndex (M9)
 	};
 
 	// PtBodyState -> FBodyInstanceState (cm, cm/s, rad/s; the object state values are shared).

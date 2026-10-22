@@ -76,6 +76,7 @@ namespace PhysicsTest::PhysXBackend
 		Invalid = 0,
 		Body = 1,    // PxRigidActor: the harness body index
 		Shape = 2,   // PxShape: the element index inside its body (PtContactPoint::Shape0 / Shape1)
+		Joint = 3,   // PxJoint: the harness joint index (creation order, PtJointSnapshot::JointIndex; M9)
 	};
 
 	struct FPhysxUserData

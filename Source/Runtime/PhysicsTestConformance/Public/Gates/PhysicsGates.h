@@ -1,4 +1,5 @@
-// PhysicsGates.h - the M6 physics gates G1, G1b, G2-G7, G9, G12 (02_Architecture 14.3, 03_WorkPlan M6, A.12). [MVP M6]
+// PhysicsGates.h - the M6 physics gates G1, G1b, G2-G7, G9, G12 and the M9 joint gate J1 (02_Architecture 14.3, 03_WorkPlan M6,
+// M9, A.12). [MVP M6; J1 M9]
 // A gate runs its gate scenes (GateScenes.h) on one target - backend x variant x physics profile - through FPhysScene and
 // the C ABI, and compares what the engine did with an analytic reference computed with dt_engine (DL23) or with the
 // resolved profile (G9). Every threshold, every expected per-engine deviation and every allowed Skip comes from
@@ -36,6 +37,15 @@
 //   G9   M3.BoxPile 1k           every READBACK key equals its resolved value (profile, variant option, scene capacity or a
 //                                registered constant) or is registered as not profile-derived with a reason; an unregistered
 //                                READBACK key fails; shape.wrapping = 0
+//   J1   M6a.Pendulum + own      the joint contract (docs/Abi.md 9.4, M9 fix round 0): per declared joint type the M6a 5 deg
+//        bodies                  frames stay together, the hinge axes aligned, the bob swings through; the snapshot's frames
+//                                are the host's and a moving joint reports no couple about its anchor; releasing the bob
+//                                releases the joint; a COM-offset body keeps its actor-space frames; the collision switch
+//                                (bDisableCollision false: an overlapping jointed pair is pushed apart, true: untouched; M9
+//                                fix round 2); a hinged cantilever's impulses (m g dt, the couple -50 m g dt). Sleep off in its
+//                                scenes, except a sleeping joint under a profile with sleep on (PT_JOINTSNAP_SLEEPING, zero
+//                                impulses; M9 fix round 2). No joint capability: the
+//                                joints stay host-only and the gate reports Skip (registered for Null and the Chaos bridge)
 //   G12  all of the above        engine error bits 0 on every frame (Jolt update errors, PhysX error callback, Bullet pool
 //                                heap fallbacks), plus M3.BoxPile 1k for 120 frames on its declared capacity hints. Selected
 //                                alone (-Gates=G12) it still runs every gate before it and returns only its own report
@@ -74,7 +84,13 @@ namespace PhysicsTest
 		// 5: M7 (G3 checks the optional contact.point_pose declaration against the inferred pose; G9 reads PhysX threads.workers
 		//    as the dispatcher's T workers; the G9 comparison is shared with the bench preflight).
 		// 6: M7 fix round 0 (G9 rules bound to a scene list, the per-scene "by_scene" values; tolerances.json version 5).
-		inline constexpr int32 GateSuiteVersion = 6;
+		// 7: M9 (G9 sleep.criteria: Jolt's and Bullet's sleep rule keys - the settings / bodies not holding the variant's sleep
+		//    rule, const:0 (fix round 0: Jolt's was the scene-dependent value const:0.5); A4 joint cases; the preflight diff rows;
+		//    fix round 0: the joint gate J1; tolerances.json version 6).
+		// 8: M9 commit (J1's collision-switch and sleeping-joint cases of fix round 2 with J1.collision_push_cm /
+		//    disable_collision_drift_cm; G4 restitution velocity model 2 - the contact state at the step start - registered for
+		//    Bullet; the lead's sign-off of every pending post-run registration, 2026-10-22; tolerances.json version 7).
+		inline constexpr int32 GateSuiteVersion = 8;
 
 		// One override of a registered value: the most specific match wins (engine + variant + profile > engine + variant >
 		// engine + profile > engine > default). Engine is the registry backend name (Null, NullDll, Jolt, Bullet, PhysX).
@@ -205,7 +221,7 @@ namespace PhysicsTest
 			virtual FGateReport Run(const FGateTarget& Target, FGateRunState& State) = 0;
 		};
 
-		// G1, G1b, G2, G3, G4, G5, G6, G7, G9, G12 in that order (G12 last: it reads the other gates' frames).
+		// G1, G1b, G2, G3, G4, G5, G6, G7, G9, J1, G12 in that order (G12 last: it reads the other gates' frames).
 		[[nodiscard]] const std::vector<IConformanceGate*>& GetPhysicsGates();
 		[[nodiscard]] IConformanceGate* FindPhysicsGate(std::string_view Id);   // case-insensitive
 
@@ -237,11 +253,32 @@ namespace PhysicsTest
 			int32 NumDynamicBodies = -1;
 		};
 
+		// M9 (the preflight diff, 02 10): one effective key next to what the run resolved for it.
+		struct FReadbackDiffRow
+		{
+			std::string Key;
+			std::string Source;                // READBACK / SET_ONLY / COMPILE_TIME / ENGINE_DEFAULT
+			std::string Native;                // the engine's text
+			bool bHasEffective = false;        // the canonical value the backend reported
+			double Effective = 0.0;
+			std::string Rule;                  // the tolerances.json G9 expectation ("profile:linear_damping", "const:4", ...), "" without one
+			bool bHasResolved = false;         // the expectation resolved for this run
+			double Resolved = 0.0;
+			// match / mismatch: compared; unchecked: registered as not profile-derived; skipped: not compared here (Note says
+			// why: another gate, a geometry-bound rule, a scene that pins body values, no dynamic body); no_rule: a READBACK key
+			// without a registered expectation (a G9 failure); not_readback: SET_ONLY / COMPILE_TIME / ENGINE_DEFAULT (recorded,
+			// never compared).
+			std::string Status;
+			std::string Note;
+		};
+
 		// The G9 comparison on effective settings the caller already holds (M7: the bench preflight runs it on the scene of
 		// the run itself, 02 12.2 step 7; G9 on M3.BoxPile 1k). Every READBACK key not in SkipKeys needs a registered rule
 		// (tolerances.json gates.G9.readback) and must equal its resolved value; bRequireNoWrapping adds shape.wrapping = 0.
 		// SkipKeys: keys another gate owns (the preflight leaves listeners.installed and the drawer keys to G10a).
+		// OutDiff (M9, optional): one row per effective key, in the settings' order - the bench's preflight_diff.json.
 		void CheckEffectiveReadback(const FGateTarget& Target, const FReadbackContext& Context, const std::vector<FEffectiveSetting>& Settings,
-			const std::vector<std::string>& SkipKeys, bool bRequireNoWrapping, const std::string& SceneLabel, FGateReport& Report);
+			const std::vector<std::string>& SkipKeys, bool bRequireNoWrapping, const std::string& SceneLabel, FGateReport& Report,
+			std::vector<FReadbackDiffRow>* OutDiff = nullptr);
 	}
 }

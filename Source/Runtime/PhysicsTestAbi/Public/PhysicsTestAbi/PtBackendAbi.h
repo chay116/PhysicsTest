@@ -1,9 +1,12 @@
 /* PtBackendAbi.h - pure C11. The ONLY header shared with the Chaos DLL (02_Architecture 7, A.1, docs/Abi.md).
    Units: cm, kg, s, rad, Z-up, double.
-   v1.0 (major 1): the CORE is FROZEN since M6 (intended tag abi-v1.0, docs/Abi.md 2). v1.x is append-only: fields after
+   v1.0 (major 1): the CORE is FROZEN since M6 (tag abi-v1.0, docs/Abi.md 2). v1.x is append-only: fields after
    StructSize / Stride-guarded tails, entries at the end of PtBackendApi, new bits and enum values; anything else bumps the
-   major and every DLL backend (Chaos) is rebuilt. Entries marked PROVISIONAL(M9) (joints, debug snapshot, native draw) may
-   still change until M9; every such change bumps PT_ABI_PROVISIONAL_REVISION.
+   major and every DLL backend (Chaos) is rebuilt. v1.1 (M9, final; the lead tags abi-v1.1 on the M9 commit): joints, the
+   debug snapshot and native draw - provisional from M6 to M9 - are final and frozen too (docs/Abi.md 9.2, 9.4): their
+   layouts are the v1.0 ones, v1.1 fixed their meaning and appended one bit and two masks (PT_JOINTSNAP_ANGULAR_IMPULSE_NA;
+   PT_JOINTSNAP_ALL, PT_SNAP_ALL), checked append-only against abi-v1.0 (every struct's size and offsets unchanged, a v1.1
+   host runs a v1.0 module and a v1.0 host a v1.1 one).
 
    Calling rules (enforced by PtBackendKit.h on the backend side, docs/Abi.md):
      - every entry returns PtResult; no C++ exception crosses the boundary (SEH is not swallowed)
@@ -39,9 +42,13 @@ extern "C" {
    with the major it was built with: a module built against another major (an M2.5 spike DLL of major 0) returns NULL
    and is refused; rebuild it against this header. */
 #define PT_ABI_VERSION_MAJOR 1u
-#define PT_ABI_VERSION_MINOR 0u
+#define PT_ABI_VERSION_MINOR 1u                        /* v1.1 (M9): the M9 entries final, append-only to v1.0 */
 #define PT_ABI_VERSION ((PT_ABI_VERSION_MAJOR << 16) | PT_ABI_VERSION_MINOR)
-#define PT_ABI_PROVISIONAL_REVISION 1u                 /* PROVISIONAL(M9) layout revision; frozen at M9 */
+#define PT_ABI_PROVISIONAL_REVISION 3u                 /* FROZEN at 3 since v1.1 (M9). The revision of the formerly provisional
+                                                          entries a module was built with (PtBackendInfo.ProvisionalRevision):
+                                                          1 = M6-M8, 2 = M9 prep (joint semantics), 3 = v1.1 (the angular impulse
+                                                          about the anchor, PT_JOINTSNAP_ANGULAR_IMPULSE_NA, the native draw
+                                                          rules). Layouts unchanged since 1 (docs/Abi.md 9.4) */
 #define PT_GET_BACKEND_API_SYMBOL "PT_GetBackendApi"   /* the only export of a DLL backend */
 #define PT_CALL __cdecl
 #define PT_INDEX_NONE 0xFFFFFFFFu
@@ -110,10 +117,15 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 #define PT_COMBINE_MULTIPLY  2u
 #define PT_COMBINE_MAX       3u
 
-/* ---- Joint type: PROVISIONAL(M9) ---- */
-#define PT_JOINT_BALL   0u
-#define PT_JOINT_HINGE  1u   /* twist about Frame X is free; swings are locked (ConstraintUtils::ConfigureAsHinge) */
-#define PT_JOINT_FIXED  2u   /* reserved */
+/* ---- Joint type: v1.1 (M9; docs/Abi.md 9.4) ----
+   Both are rigid (hard) joints solved by the engine's own joint solver: no limits, drives, softness, breakage or
+   adapter-side projection (DL31; Phase 1). Frame1 / Frame2 are rigid poses in Body1's / Body2's actor space (the body
+   origin, not the COM; unscaled; Frame2 in world space when Body2 is the world). Locked linear axes keep the two frame
+   origins together. */
+#define PT_JOINT_BALL   0u   /* ConstraintUtils::ConfigureAsBallAndSocket: linear locked, swing 1 / 2 and twist free */
+#define PT_JOINT_HINGE  1u   /* ConstraintUtils::ConfigureAsHinge: linear locked, twist about Frame X free, both swings locked:
+                                the X axes of the two frames stay parallel (same direction), rotation about them is free */
+#define PT_JOINT_FIXED  2u   /* reserved: PT_E_INVALID_ARG */
 
 /* ---- Run mode ---- */
 #define PT_RUN_BENCH     0u
@@ -151,7 +163,11 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 #define PT_SHAPEF_SIMULATION         (1u << 0)
 #define PT_SHAPEF_QUERY              (1u << 1)
 #define PT_SHAPEF_ALL                0x3u
-#define PT_JOINTF_DISABLE_COLLISION  (1u << 0)   /* PROVISIONAL(M9) */
+#define PT_JOINTF_DISABLE_COLLISION  (1u << 0)   /* v1.1: FConstraintProfileProperties::bDisableCollision - every shape
+                                                    of Body1 ignores every shape of Body2 (both directions; filters otherwise
+                                                    unchanged). Clear (UE's default): the pair collides by its filters. No
+                                                    effect for a world joint */
+#define PT_JOINTF_ALL                0x1u        /* every defined PT_JOINTF_* bit; others -> PT_E_INVALID_ARG */
 #define PT_READ_ALL          0u   /* dense: one state per created body, in index order. A released body reports ObjectState
                                      UNINITIALIZED with a zero pose (identity rotation) and zero velocities. OutIndices may
                                      be NULL; when it is not, the module writes OutIndices[i] = i for every state written
@@ -166,8 +182,11 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 #define PT_CAP_SHAPE_CONVEX              PT_CAP(1)
 #define PT_CAP_SHAPE_TRIMESH_STATIC      PT_CAP(2)
 #define PT_CAP_KINEMATIC                 PT_CAP(3)
-#define PT_CAP_JOINT_BALL                PT_CAP(4)   /* PROVISIONAL(M9) */
-#define PT_CAP_JOINT_HINGE               PT_CAP(5)   /* PROVISIONAL(M9) */
+#define PT_CAP_JOINT_BALL                PT_CAP(4)   /* v1.1: CreateConstraints accepts PT_JOINT_BALL. A module with neither
+                                                        joint capability returns PT_E_UNSUPPORTED for every well-formed
+                                                        CreateConstraints call (Num 0 included); a well-formed joint of a type
+                                                        the module lacks is PT_E_UNSUPPORTED (argument errors come first) */
+#define PT_CAP_JOINT_HINGE               PT_CAP(5)   /* v1.1: CreateConstraints accepts PT_JOINT_HINGE */
 #define PT_CAP_SLEEPING                  PT_CAP(6)
 #define PT_CAP_CCD                       PT_CAP(7)
 #define PT_CAP_GYROSCOPIC                PT_CAP(8)
@@ -178,22 +197,31 @@ typedef struct PtKeyValue { const char* Key; const char* Value; } PtKeyValue;   
 #define PT_CAP_ACTIVE_LIST               PT_CAP(11)
 #define PT_CAP_STATE_WRITE               PT_CAP(12)
 #define PT_CAP_NATIVE_HASH               PT_CAP(13)
-#define PT_CAP_CONTACT_POINTS            PT_CAP(16)  /* PROVISIONAL(M9) (debug snapshot) */
-#define PT_CAP_CONTACT_NORMAL_IMPULSE    PT_CAP(17)  /* PROVISIONAL(M9) */
-#define PT_CAP_CONTACT_FRICTION_IMPULSE  PT_CAP(18)  /* PROVISIONAL(M9) */
-#define PT_CAP_CONTACT_ACTIVE_EXACT      PT_CAP(19)  /* PROVISIONAL(M9) */
-#define PT_CAP_NATIVE_ISLANDS            PT_CAP(20)  /* PROVISIONAL(M9). Jolt does not declare it: GetIslandIndexInternal is an
+#define PT_CAP_CONTACT_POINTS            PT_CAP(16)  /* v1.1 (debug snapshot) */
+#define PT_CAP_CONTACT_NORMAL_IMPULSE    PT_CAP(17)  /* v1.1 */
+#define PT_CAP_CONTACT_FRICTION_IMPULSE  PT_CAP(18)  /* v1.1 */
+#define PT_CAP_CONTACT_ACTIVE_EXACT      PT_CAP(19)  /* v1.1 */
+#define PT_CAP_NATIVE_ISLANDS            PT_CAP(20)  /* v1.1. Jolt does not declare it: GetIslandIndexInternal is an
                                                         internal, per-step API (MotionProperties.h:258 [V]); the viewer uses
                                                         the harness FIslandBuilder */
-#define PT_CAP_SLEEP_THRESHOLD_INFO      PT_CAP(21)  /* PROVISIONAL(M9): the debug snapshot carries per-body sleep thresholds and
-                                                        counters (PT_SNAP_SLEEP_INFO); no producer or consumer before M9 */
-#define PT_CAP_BOUNDS                    PT_CAP(22)  /* PROVISIONAL(M9) */
-#define PT_CAP_JOINT_SNAPSHOT            PT_CAP(23)  /* PROVISIONAL(M9) */
-#define PT_CAP_NATIVE_DEBUG_DRAW         PT_CAP(24)  /* PROVISIONAL(M9). Bullet: viz runs only - the drawer is attached only in viz
-                                                        and DBG_NoDeactivation mirrors the profile (btDiscreteDynamicsWorld.cpp:418-421 [V]) */
+#define PT_CAP_SLEEP_THRESHOLD_INFO      PT_CAP(21)  /* v1.1: reserved with PT_SNAP_SLEEP_INFO (per-body sleep thresholds and
+                                                        counters). No module declares it and no snapshot buffer carries it:
+                                                        PtDebugSnapshotBuffers has no StructSize, so a v1.x meaning comes with a
+                                                        read entry appended to PtBackendApi (docs/Abi.md 9.2) */
+#define PT_CAP_BOUNDS                    PT_CAP(22)  /* v1.1 */
+#define PT_CAP_JOINT_SNAPSHOT            PT_CAP(23)  /* v1.1: PT_SNAP_JOINTS returns one PtJointSnapshot per live joint;
+                                                        without it the snapshot holds no joints (the host draws joints from its
+                                                        own pulled body states) */
+#define PT_CAP_NATIVE_DEBUG_DRAW         PT_CAP(24)  /* v1.1: PT_SNAP_NATIVE_DRAW returns the engine's own debug draw of the last
+                                                        step as PtDebugDrawCmd records. Viz runs only (PT_RUN_VIZ): PhysX sets its
+                                                        visualization parameters, Bullet attaches its drawer, and a bench or
+                                                        behaviour run draws nothing (a capture returns 0 commands). Bullet's
+                                                        DBG_NoDeactivation mirrors the profile (btDiscreteDynamicsWorld.cpp:418-421
+                                                        [V]); drawing must not change the result (G11 -G11Knob=viz) */
 #define PT_CAP_PHASE_TIMERS              PT_CAP(25)
 #define PT_CAP_ALLOC_STATS               PT_CAP(26)
-/* The PROVISIONAL(M9) capabilities: a host reads them as absent when PtBackendInfo.ProvisionalRevision differs. */
+/* The capabilities that were PROVISIONAL(M9) until v1.1: a host reads them as absent when PtBackendInfo.ProvisionalRevision
+   differs from its PT_ABI_PROVISIONAL_REVISION (a module built before the v1.1 freeze). The name stays (append-only). */
 #define PT_CAP_PROVISIONAL_MASK (PT_CAP_JOINT_BALL | PT_CAP_JOINT_HINGE | PT_CAP_CONTACT_POINTS | PT_CAP_CONTACT_NORMAL_IMPULSE | \
                                  PT_CAP_CONTACT_FRICTION_IMPULSE | PT_CAP_CONTACT_ACTIVE_EXACT | PT_CAP_NATIVE_ISLANDS | \
                                  PT_CAP_SLEEP_THRESHOLD_INFO | PT_CAP_BOUNDS | PT_CAP_JOINT_SNAPSHOT | PT_CAP_NATIVE_DEBUG_DRAW)
@@ -220,7 +248,7 @@ typedef struct PtBackendInfo {
                                       SDK-internal flags come from compile_commands.json (CMake) or UBT .rsp files (Chaos) */
 	uint32_t NumPhaseTimers;
 	uint32_t ProvisionalRevision;    /* = PT_ABI_PROVISIONAL_REVISION the module was built with; on mismatch the host
-                                      treats every PROVISIONAL(M9) capability as absent */
+                                      treats every PT_CAP_PROVISIONAL_MASK capability as absent */
 	const char* const* PhaseTimerNames;
 	uint32_t NumRequiredEffectiveKeys; uint32_t Reserved;
 	const char* const* RequiredEffectiveKeys;   /* backend-specific required keys; A7 checks the generic set plus these */
@@ -331,13 +359,25 @@ typedef struct PtActorBatch {
 	uint32_t NumConvexVertices;  const PtVec3* ConvexVertices;
 } PtActorBatch;
 
-typedef struct PtConstraintCreateInfo {   /* PROVISIONAL(M9) */
-	uint32_t Type;
-	uint32_t Body1;                  /* child */
-	uint32_t Body2;                  /* parent, or PT_INDEX_NONE for the world */
-	uint32_t Flags;
-	PtTransform Frame1, Frame2;      /* in each body's actor space */
-	double TwistLimitLow, TwistLimitHigh;   /* reserved; NaN */
+/* CreateConstraints (v1.1, M9; docs/Abi.md 9.4). Called in Idle after the actors exist (the host:
+   FPhysScene::FlushDeferredActors, after CreateActors, 02 6). A joint's index is its creation order over every successful
+   CreateConstraints call of the scene (0, 1, ...; never reused) - PtJointSnapshot::JointIndex. The batch is all or nothing.
+   Kit checks (PT_E_INVALID_ARG unless noted): Stride >= sizeof and aligned; Type BALL or HINGE; Body1 a created, live body
+   (never PT_INDEX_NONE); Body2 a created, live body other than Body1, or PT_INDEX_NONE (the world); unknown Flags bits;
+   Reserved0 / Reserved1 not 0 (bit test); a frame not finite or its rotation not unit (1e-6); then PT_E_UNSUPPORTED for a
+   type without its capability. Releasing a body (ReleaseActors) releases every joint attached to it: the indices stay,
+   snapshots no longer report them. A joint between two bodies that are not dynamic is accepted and has no effect. */
+typedef struct PtConstraintCreateInfo {   /* v1.1 */
+	uint32_t Type;                   /* PT_JOINT_BALL / PT_JOINT_HINGE */
+	uint32_t Body1;                  /* child (UE ConstraintBone1): a body index */
+	uint32_t Body2;                  /* parent (UE ConstraintBone2): a body index, or PT_INDEX_NONE for the world */
+	uint32_t Flags;                  /* PT_JOINTF_* */
+	PtTransform Frame1, Frame2;      /* joint frames: Frame1 in Body1's actor space, Frame2 in Body2's (world space for the
+	                                    world). Rigid (unit rotation, no scale). At rest the world frames coincide: origins
+	                                    for both types, plus parallel X axes for HINGE; an initial violation is corrected by
+	                                    the engine's solver like any other joint error */
+	double Reserved0, Reserved1;     /* 0 (M9: were "TwistLimitLow / High, NaN"; limits are not part of Phase 1, DL31). A v1.x
+	                                    meaning comes with a capability bit (docs/Abi.md 2 Reserved rule) */
 } PtConstraintCreateInfo;   /* 144 B */
 
 /* ---- Body commands (FChaosEngineInterface::*_AssumesLocked, ChaosEngineInterface.h:358-471 [V]) ----
@@ -434,7 +474,7 @@ typedef struct PtStepStats {
    AllocatorKind: 0 CRT malloc, 2 an engine temp / arena allocator (Jolt: the per-scene temp block). */
 typedef struct PtMemoryStats { int64_t LiveBytes, PeakBytes, NumAllocs, NumFrees; uint32_t AllocatorKind, Reserved; } PtMemoryStats;
 
-/* ---- Debug snapshot (Chaos conventions): PROVISIONAL(M9) ---- */
+/* ---- Debug snapshot (Chaos conventions): v1.1 (M9; docs/Abi.md 9.1, 9.2) ---- */
 #define PT_SNAP_PARTICLES       (1u << 0)
 #define PT_SNAP_BOUNDS          (1u << 1)
 #define PT_SNAP_CONTACTS        (1u << 2)
@@ -442,6 +482,10 @@ typedef struct PtMemoryStats { int64_t LiveBytes, PeakBytes, NumAllocs, NumFrees
 #define PT_SNAP_NATIVE_ISLANDS  (1u << 4)
 #define PT_SNAP_SLEEP_INFO      (1u << 5)
 #define PT_SNAP_NATIVE_DRAW     (1u << 6)
+#define PT_SNAP_ALL             0x7Fu       /* v1.1: every defined PT_SNAP_* bit (PT_SNAP_SLEEP_INFO is defined and reserved: a module
+                                               without PT_CAP_SLEEP_THRESHOLD_INFO ignores it). A Kit-based module refuses a request
+                                               with any other bit, or a Reserved field of PtDebugSnapshotRequest / PtDebugSnapshotBuffers
+                                               that is not 0, with PT_E_INVALID_ARG (docs/Abi.md 2 Reserved rule; M9 fix round 1) */
 /* v1.0 flag rule (docs/Abi.md 9.1 decision 2, checked by G3): at most one of ACTIVE / ACTIVE_APPROX / SPECULATIVE.
    ACTIVE = the solver acted on the point in its last step - a normal impulse, or a push-out (Chaos bIsActive: NetPushOut or
    NetImpulse not nearly zero, ChaosDebugDraw.cpp:1453 [V]) - on PT_CAP_CONTACT_ACTIVE_EXACT backends; ACTIVE_APPROX = Phi
@@ -487,9 +531,63 @@ typedef struct PtContactPoint {
 	uint32_t Flags;
 } PtContactPoint;       /* 128 B */
 
+/* One live joint (PT_SNAP_JOINTS on a PT_CAP_JOINT_SNAPSHOT backend), in JointIndex order (v1.1, docs/Abi.md 9.4 item 9).
+   Chaos draws "a" = particle[1] / "b" = particle[0]: the harness maps Body1 to particle[0] and Body2 to particle[1].
+   Frame1World / Frame2World  the joint frames in world space at the snapshot pose (the end of the last step): Body1's
+                              actor pose x Frame1, Body2's x Frame2 (Frame2 itself for the world). The stretch is
+                              |Frame1World.Translation - Frame2World.Translation|; for HINGE the angle between the two X
+                              axes is the swing error
+   LinearImpulse              what the joint applied to Body1 (the child) in the last step, world space, kg cm/s (an engine
+                              that reports a force multiplies by its step dt); Body2 got the opposite
+   AngularImpulse             the joint's angular impulse on Body1 in the last step about the joint anchor, Frame1World's
+                              origin, world space, kg cm^2/s: the couple of the angular rows (zero for BALL), since the linear
+                              impulse acts at the anchor - NOT about Body1's centre of mass (that would add
+                              (anchor - COM) x LinearImpulse). Chaos' joint angular impulse is this couple. Body2 got
+                              -LinearImpulse at its own anchor (Frame2World's origin) and the opposite couple about it; the two
+                              anchors coincide while the joint holds
+   both impulses              0 for a joint that did not run (no awake dynamic body: PT_JOINTSNAP_SLEEPING) or before its
+                              first step; NaN where the engine cannot tell (PT_JOINTSNAP_IMPULSE_NA: both,
+                              PT_JOINTSNAP_ANGULAR_IMPULSE_NA: the angular one only)
+   JointIndex                 creation order (PtConstraintCreateInfo)
+   Flags                      PT_JOINTSNAP_* */
 typedef struct PtJointSnapshot { PtTransform Frame1World, Frame2World; PtVec3 LinearImpulse, AngularImpulse; uint32_t JointIndex, Flags; } PtJointSnapshot;  /* 168 B */
+#define PT_JOINTSNAP_SLEEPING            (1u << 0)   /* no dynamic body of the joint is awake (kept from the step it fell asleep in;
+                                                        also a joint between two bodies that are not dynamic): zero impulses */
+#define PT_JOINTSNAP_IMPULSE_NA          (1u << 1)   /* LinearImpulse and AngularImpulse are NaN: the engine cannot report them */
+#define PT_JOINTSNAP_ANGULAR_IMPULSE_NA  (1u << 2)   /* v1.1: AngularImpulse only is NaN, LinearImpulse is valid (PhysX 5.11 TGS: its
+                                                        joint writeback carries no usable torque, docs/Abi.md 9.4) */
+#define PT_JOINTSNAP_ALL                 0x7u        /* every defined PT_JOINTSNAP_* bit */
 
-/* Native debug draw command type: mirrors IChaosDDRenderer::Render* (ChaosDDRenderer.h:19-44 [V]) */
+/* Native debug draw (v1.1, docs/Abi.md 9.2; PT_CAP_NATIVE_DEBUG_DRAW, PT_SNAP_NATIVE_DRAW). The engine's own drawing of the last
+   step, in harness units (cm). Command type: mirrors IChaosDDRenderer::Render* (ChaosDDRenderer.h:19-44 [V]).
+     ColorBGRA      the FColor memory layout B, G, R, A read as one little-endian uint32, i.e. the packed value 0xAARRGGBB
+                    (FColor::FromPackedARGB; PhysX's PxDebugColor values are the same numbers). A primitive whose engine gives
+                    each vertex its own colour carries the first vertex's colour
+     pose           the pose the engine drew at - engine-defined: PhysX draws shapes, actor axes and joint frames at the pose
+                    the step started from (one step behind the snapshot's particles), contacts at the end of the step;
+                    Bullet's drawer runs at the capture (end of step)
+     strings        TextOffset / TextLength index PtDebugDrawCmd text in the snapshot's string pool (not NUL-terminated)
+     truncation     at most PtDebugSnapshotRequest.MaxNativeCommands commands, the first ones in the engine's order, and
+                    PtDebugSnapshotCounts.bTruncated
+   PtDebugSnapshotRequest.NativeDrawCategories is backend-defined: 0 = the backend's default set (the variant's categories);
+   PhysX and Bullet define no categories and ignore it (PhysX draws inside simulate, so a capture cannot choose).
+   Fields per type (v1.1 meaning, M9 fix round 2; the host decoder PhysicsDebugDraw ToLatentCommand reads exactly these; every
+   field a type does not use is 0, Rotation then (0, 0, 0, 1); all lengths cm):
+     POINT     A = position, Size = point size (px)
+     LINE      A -> B
+     ARROW     A -> B (tip), Size = arrow head size (cm, UE's ArrowSize)
+     CIRCLE    A = centre, Size = radius; the circle lies in the plane of Rotation's Y and Z axes (UE's DrawDebugCircle with a
+               matrix: IChaosDDRenderer::RenderCircle(Center, Axes, ...) passes Rotation = FQuat of the orthonormal Axes, so
+               Rotation.GetAxisY() / GetAxisZ() = Axes.GetUnitAxis(EAxis::Y / Z); X is the circle's normal)
+     SPHERE    A = centre, Size = radius
+     CAPSULE   A = centre, Rotation (the capsule axis is Rotation's Z), Extent = (Radius, HalfHeight incl. radius, 0)
+     BOX       A = centre, Rotation, Extent = half extent
+     TRIANGLE  A, B, C
+     STRING    A = location, TextOffset / TextLength, Size = font scale (0 reads as 1), bDrawShadow = 0 / 1
+     every type ColorBGRA; Thickness (cm, 0 = 1 px) for the line-drawn types (not POINT); DepthPriority = UE's SDPG (0 world,
+     1 foreground); Lifetime (s) = 0: drawn for this capture only - every repository engine writes 0, the host redraws the latest
+     capture each frame and does not keep commands (a value > 0 is passed on as the command's lifetime, the duration for STRING);
+     Reserved = 0. */
 #define PT_DD_POINT     0u
 #define PT_DD_LINE      1u
 #define PT_DD_ARROW     2u
@@ -553,7 +651,7 @@ typedef struct PtBackendApi {
      (BodyInstance.cpp:1669,1695-1706,4723-4733; NpRigidDynamic.cpp:521-527 [V]) */
 	PtResult (PT_CALL *CreateActors)(PtSceneId Scene, const PtActorBatch* Batch);
 	PtResult (PT_CALL *ReleaseActors)(PtSceneId Scene, const uint32_t* BodyIndices, uint32_t Num);
-	PtResult (PT_CALL *CreateConstraints)(PtSceneId Scene, const PtConstraintCreateInfo* Infos, uint32_t Num, uint32_t Stride);  /* PROVISIONAL(M9) */
+	PtResult (PT_CALL *CreateConstraints)(PtSceneId Scene, const PtConstraintCreateInfo* Infos, uint32_t Num, uint32_t Stride);  /* v1.1 meaning */
 	PtResult (PT_CALL *PrepareForSimulation)(PtSceneId Scene, PtTextBuffer* OutActions);
 	PtResult (PT_CALL *SetUpForFrame)(PtSceneId Scene, const PtVec3* NewGrav, float DeltaSeconds, float MinDeltaTime,
                                     float MaxDeltaTime, float MaxSubstepDeltaTime, int32_t MaxSubsteps, uint32_t bSubstepping);
@@ -565,8 +663,8 @@ typedef struct PtBackendApi {
                                      uint32_t Capacity, uint32_t* OutCount);
 	PtResult (PT_CALL *ReadMassProperties)(PtSceneId Scene, uint32_t First, uint32_t Num, PtMassProperties* Out);
 	PtResult (PT_CALL *GetStepStats)(PtSceneId Scene, PtStepStats* Out);
-	PtResult (PT_CALL *CaptureDebugSnapshot)(PtSceneId Scene, const PtDebugSnapshotRequest* Req, PtDebugSnapshotCounts* Out);  /* PROVISIONAL(M9) */
-	PtResult (PT_CALL *ReadDebugSnapshot)(PtSceneId Scene, const PtDebugSnapshotBuffers* Buffers);                             /* PROVISIONAL(M9) */
+	PtResult (PT_CALL *CaptureDebugSnapshot)(PtSceneId Scene, const PtDebugSnapshotRequest* Req, PtDebugSnapshotCounts* Out);  /* v1.1 meaning */
+	PtResult (PT_CALL *ReadDebugSnapshot)(PtSceneId Scene, const PtDebugSnapshotBuffers* Buffers);                             /* v1.1 meaning */
 	PtResult (PT_CALL *ComputeNativeStateHash)(PtSceneId Scene, uint64_t* OutHash);
 	PtResult (PT_CALL *SetOption)(PtSceneId SceneOrZero, const char* Key, const char* Value);
 	PtResult (PT_CALL *DumpEffectiveSettings)(PtSceneId SceneOrZero, PtTextBuffer* OutJsonLines);

@@ -224,6 +224,30 @@
           "type": "string",
           "pattern": "^1\\.[0-9]+$"
         },
+        "module_abi_version": {
+          "description": "M9 fix round 2: the module's own PtBackendApi.AbiVersion (major.minor); abi_version is the host header's. Absent in older manifests",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "module_provisional_revision": {
+          "description": "M9 fix round 2: PtBackendInfo.ProvisionalRevision as the module reported it (3 = abi-v1.1). Absent in older manifests",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "capabilities": {
           "type": "array",
           "items": {
@@ -1018,7 +1042,41 @@
         "states",
         "contacts",
         "phases"
-      ]
+      ],
+      "properties": {
+        "native_draw": {
+          "description": "M9: native_draw.csv of a -Instrument=native_debug_draw run (PT_SNAP_NATIVE_DRAW every 'every' frames: counts per PT_DD_* type, string bytes, truncation, h_draw). frames 0 with a note when the tier is off, the backend lacks PT_CAP_NATIVE_DEBUG_DRAW or the run is not a viz run.",
+          "type": "object",
+          "required": [
+            "frames",
+            "commands",
+            "truncated_frames",
+            "every",
+            "note"
+          ],
+          "properties": {
+            "frames": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "commands": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated_frames": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "every": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {

@@ -21,7 +21,7 @@
         "name": { "type": "string" },
         "path": { "type": "string" },
         "sha256": { "$ref": "#/$defs/sha256" },
-        "purpose": { "enum": [ "perf", "determinism" ] },
+        "purpose": { "enum": [ "perf", "determinism", "behavior" ] },
         "repeats": { "type": "integer", "minimum": 1 },
         "block_seed": { "type": "integer", "minimum": 0 },
         "document": { "type": "object" }
@@ -102,7 +102,7 @@
         "type": "object",
         "required": [ "cell_id", "key", "label", "backend", "variant", "profile", "scenario", "params", "T", "frames" ],
         "properties": {
-          "state": { "enum": [ "ok", "contaminated", "failed", "incomplete" ] },
+          "state": { "description": "unsupported (M9): every repeat's bench refused the scene because the backend lacks a capability it requires (joints); reported, not a failure.", "enum": [ "ok", "contaminated", "failed", "incomplete", "unsupported" ] },
           "cv_pct": { "description": "CV of values_ns (reported only; the report's CV over the validated runs is the authoritative one).", "type": [ "number", "null" ] },
           "values_ns": { "description": "The window mean of every ok, headline-valid run (the last attempt of each repeat).", "type": "array", "items": { "type": "number" } },
           "n_not_headline_valid": { "description": "ok runs with timing_valid_for_headline false: they give no value.", "type": "integer", "minimum": 0 }
@@ -121,9 +121,9 @@
           "exit_code": { "enum": [ null, 0, 2, 3, 4, 5, 6 ] },
           "process_exit_code": { "type": [ "integer", "null" ] },
           "outcome": {
-            "description": "ok (exit.json 0, both files valid), contaminated (exit.json 4: retried while attempts remain), exit_<code>_<status>, no_exit_json (the process ended without exit.json: failed whatever its raw code), timeout, spawn_error, invalid_exit_json, invalid_manifest.",
+            "description": "ok (exit.json 0, both files valid), contaminated (exit.json 4: retried while attempts remain), unsupported (M9: exit.json 2 with status unsupported - the backend lacks a capability the scene requires), exit_<code>_<status>, no_exit_json (the process ended without exit.json: failed whatever its raw code), timeout, spawn_error, invalid_exit_json, invalid_manifest.",
             "type": "string",
-            "pattern": "^(ok|contaminated|no_exit_json|timeout|spawn_error|invalid_exit_json|invalid_manifest|exit_[0-9]+_[a-z_]+)$"
+            "pattern": "^(ok|contaminated|unsupported|no_exit_json|timeout|spawn_error|invalid_exit_json|invalid_manifest|exit_[0-9]+_[a-z_]+)$"
           },
           "retried": { "type": "boolean" },
           "teardown_killed": {

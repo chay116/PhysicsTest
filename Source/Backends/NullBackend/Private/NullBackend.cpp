@@ -942,7 +942,9 @@ namespace PhysicsTest::NullBackend
 	{
 		Out.Name = ModuleName;
 		Out.DisplayName = (ModuleFlags & PT_MODULE_NO_REINIT) != 0 ? "Null (SDK-free reference backend; NO_REINIT test double)" : "Null (SDK-free reference backend)";
-		Out.EngineVersion = "PhysicsTest Null, ABI v1.0";
+		// The ABI the module was built against (Null is the Chaos bridge's template: keep this in step with PT_ABI_VERSION_MINOR).
+		static_assert(PT_ABI_VERSION_MAJOR == 1u && PT_ABI_VERSION_MINOR == 1u, "update the Null EngineVersion text to the header's ABI version");
+		Out.EngineVersion = "PhysicsTest Null, ABI v1.1";
 		Out.SourceCommit = "n/a";
 		Out.BuildConfig = GetBuildConfig();
 		Out.BuildFlagsJson = GNullBuildReport;

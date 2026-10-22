@@ -9,7 +9,8 @@ set(_pt_automation_backend_tests "")
 set(_pt_automation_backend_deps "")
 set(_pt_automation_backend_areas "")
 if(PT_WITH_BULLET)
-	list(APPEND _pt_automation_backend_tests Private/Tests/BulletBackendTests.cpp)
+	# M9: BulletJointTests.cpp (joints, joint snapshot, UE sleep mapping, viz drawer) shares the BulletBackend area.
+	list(APPEND _pt_automation_backend_tests Private/Tests/BulletBackendTests.cpp Private/Tests/BulletJointTests.cpp)
 	list(APPEND _pt_automation_backend_deps PT::Backend::Bullet)
 	list(APPEND _pt_automation_backend_areas BulletBackend)
 	get_target_property(_pt_in_registry PtBackendBullet PT_IN_BACKEND_REGISTRY)
@@ -20,15 +21,20 @@ if(PT_WITH_BULLET)
 	endif()
 endif()
 if(PT_WITH_PHYSX)
-	list(APPEND _pt_automation_backend_tests Private/Tests/PhysXBackendTests.cpp)
+	# M9: PhysXJointTests.cpp (joints, joint snapshot, native debug draw) shares the PhysXBackend area and its registry define.
+	list(APPEND _pt_automation_backend_tests Private/Tests/PhysXBackendTests.cpp Private/Tests/PhysXJointTests.cpp)
 	list(APPEND _pt_automation_backend_deps PT::Backend::PhysX)
 	list(APPEND _pt_automation_backend_areas PhysXBackend)
 	get_target_property(_pt_in_registry PtBackendPhysX PT_IN_BACKEND_REGISTRY)
 	if(_pt_in_registry)
-		set_source_files_properties(Private/Tests/PhysXBackendTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_PHYSX_IN_REGISTRY=1)
+		set_source_files_properties(Private/Tests/PhysXBackendTests.cpp Private/Tests/PhysXJointTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_PHYSX_IN_REGISTRY=1)
 	else()
-		set_source_files_properties(Private/Tests/PhysXBackendTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_PHYSX_IN_REGISTRY=0)
+		set_source_files_properties(Private/Tests/PhysXBackendTests.cpp Private/Tests/PhysXJointTests.cpp PROPERTIES COMPILE_DEFINITIONS PT_PHYSX_IN_REGISTRY=0)
 	endif()
+endif()
+# M9: the Jolt joint tests compile in every build (each case passes with a message when Jolt is not in the registry).
+if(PT_WITH_JOLT)
+	list(APPEND _pt_automation_backend_areas JoltJoint)
 endif()
 
 # M6 round 0: the SDK backends this build must gate (GateTests.cpp checks the gate targets against them, so a build that
@@ -61,6 +67,8 @@ pt_add_program(PhysicsTestAutomation
 		Private/Tests/CoreMiscTests.cpp
 		Private/Tests/DebugDrawTests.cpp
 		Private/Tests/GateTests.cpp
+		Private/Tests/JointAndBehaviorTests.cpp
+		Private/Tests/JoltJointTests.cpp
 		Private/Tests/PhysicsBackendTests.cpp
 		Private/Tests/PhysicsProfileTests.cpp
 		Private/Tests/PhysicsTypesTests.cpp
@@ -86,7 +94,7 @@ set_tests_properties(PhysicsTest.Automation PROPERTIES LABELS "unit")
 
 # One CTest entry per test area (PhysicsTest.<Area>.*), so a failure names its area. doctest exits 0 when a filter
 # matches nothing, so each entry also requires a non-empty, all-passing summary line.
-foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw Bench
+foreach(_area Core Config Types BodyUtils StepPlanner Analytic Profile PhysScene Abi BackendCommon Backend Scenario SdkBackend DebugDraw Bench Joint Behavior
 		${_pt_automation_backend_areas})
 	add_test(NAME PhysicsTest.Unit.${_area} COMMAND PhysicsTestAutomation "-tc=PhysicsTest.${_area}.*")
 	set_tests_properties(PhysicsTest.Unit.${_area} PROPERTIES
@@ -97,7 +105,7 @@ endforeach()
 # M6: one CTest entry per physics gate (PhysicsTest.Gates.<Gate>: every backend x variant x profile, 02 14.3), plus the
 # tolerance-file checks and the gate runner's selection rules (registered skips, G12 alone). The doctest filter names the
 # case exactly (G1 must not also run G1b).
-foreach(_gate G1 G1b G2 G3 G4 G5 G6 G7 G9 G12 ToleranceFileIsComplete SelectionRules)
+foreach(_gate G1 G1b G2 G3 G4 G5 G6 G7 G9 J1 G12 ToleranceFileIsComplete SelectionRules)
 	add_test(NAME PhysicsTest.Gates.${_gate} COMMAND PhysicsTestAutomation "-tc=PhysicsTest.Gates.${_gate}")
 	set_tests_properties(PhysicsTest.Gates.${_gate} PROPERTIES
 		LABELS "unit;gates"

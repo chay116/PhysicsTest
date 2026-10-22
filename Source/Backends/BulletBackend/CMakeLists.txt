@@ -7,10 +7,13 @@
 set(_pt_bullet_sources
 	Private/BulletBackend.cpp
 	Private/BulletCombine.h
+	Private/BulletDebugDrawer.cpp
+	Private/BulletDebugDrawer.h
 	Private/BulletIncludes.h
 	Private/BulletMath.h
 	Private/PhysScene_Bullet.cpp
-	Private/PhysScene_Bullet.h)
+	Private/PhysScene_Bullet.h
+	Private/PhysScene_BulletJoints.cpp)
 
 add_library(PtBackendBullet STATIC ${_pt_bullet_sources} Public/BulletBackend/BulletBackendEntry.h)
 add_library(PT::Backend::Bullet ALIAS PtBackendBullet)

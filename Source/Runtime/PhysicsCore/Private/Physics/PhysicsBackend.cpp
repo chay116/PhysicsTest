@@ -6,15 +6,18 @@
 #include "Misc/AssertionMacros.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Physics/Matrix33.h"
 #include "Physics/PhysicsDebugSnapshot.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 
 #include <Windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -90,18 +93,7 @@ namespace PhysicsTest
 
 		PtPhysicalMaterial MarshalMaterial(const FPhysicalMaterial& Material, const FPhysicsSettingsCore& Project)
 		{
-			// Raw values: the pair rule (static friction, combine) is the backend's (DL41). The per-material combine mode is
-			// resolved here: bOverride*CombineMode ? the material's mode : the project setting (A.1).
-			PtPhysicalMaterial Out = {};
-			Out.Friction = Material.Friction;
-			Out.StaticFriction = Material.StaticFriction;
-			Out.Restitution = Material.Restitution;
-			Out.SleepLinearVelocityThreshold = Material.SleepLinearVelocityThreshold;
-			Out.SleepAngularVelocityThreshold = Material.SleepAngularVelocityThreshold;
-			Out.SleepCounterThreshold = Material.SleepCounterThreshold > 0 ? static_cast<uint32>(Material.SleepCounterThreshold) : 0u;
-			Out.FrictionCombineMode = static_cast<uint8>(Material.GetEffectiveFrictionCombineMode(Project));
-			Out.RestitutionCombineMode = static_cast<uint8>(Material.GetEffectiveRestitutionCombineMode(Project));
-			return Out;
+			return MarshalPhysicalMaterial(Material, Project);
 		}
 
 		PtShapeElem MakeShape(const PtTransform& Local, const uint32 Type, const uint32 MaterialIndex, const FKShapeElem& Element,
@@ -241,7 +233,7 @@ namespace PhysicsTest
 		Info.DeclaredCapabilities = Raw.Capabilities;
 		Info.ModuleFlags = Raw.ModuleFlags;
 		Info.ProvisionalRevision = Raw.ProvisionalRevision;
-		// A module built against another PROVISIONAL(M9) layout revision: its provisional capabilities read as absent (A.1).
+		// A module built against another PT_ABI_PROVISIONAL_REVISION (before the v1.1 freeze): its PT_CAP_PROVISIONAL_MASK capabilities read as absent (A.1).
 		Info.Capabilities = Raw.ProvisionalRevision == PT_ABI_PROVISIONAL_REVISION ? Raw.Capabilities : (Raw.Capabilities & ~PT_CAP_PROVISIONAL_MASK);
 		for (uint32 Index = 0; Index < Raw.NumPhaseTimers && Raw.PhaseTimerNames != nullptr; ++Index)
 		{
@@ -598,6 +590,138 @@ namespace PhysicsTest
 		return Batch;
 	}
 
+	namespace
+	{
+		const char* ToString(const ELinearConstraintMotion Motion)
+		{
+			switch (Motion)
+			{
+			case ELinearConstraintMotion::LCM_Free:    return "LCM_Free";
+			case ELinearConstraintMotion::LCM_Limited: return "LCM_Limited";
+			case ELinearConstraintMotion::LCM_Locked:  return "LCM_Locked";
+			}
+			return "?";
+		}
+
+		const char* ToString(const EAngularConstraintMotion Motion)
+		{
+			switch (Motion)
+			{
+			case EAngularConstraintMotion::ACM_Free:    return "ACM_Free";
+			case EAngularConstraintMotion::ACM_Limited: return "ACM_Limited";
+			case EAngularConstraintMotion::ACM_Locked:  return "ACM_Locked";
+			}
+			return "?";
+		}
+
+		// One joint frame (FConstraintInstance::GetRefFrame: columns Pri, Sec, Pri ^ Sec; position unscaled). The ABI wants a
+		// rigid frame, so the axes must be orthonormal (UE only warns, ConstraintInstance.cpp:805-809 [V]).
+		bool MarshalJointFrame(const FVector& Pos, const FVector& Pri, const FVector& Sec, const char* Which, PtTransform& Out, std::string& OutError)
+		{
+			constexpr double Tolerance = 1.0e-4;
+			if (std::abs(Pri.Size() - 1.0) > Tolerance || std::abs(Sec.Size() - 1.0) > Tolerance || std::abs(Pri | Sec) > Tolerance)
+			{
+				OutError = std::string(Which) + " axes are not orthonormal (|Pri| " + std::to_string(Pri.Size()) + ", |Sec| " + std::to_string(Sec.Size())
+					+ ", Pri . Sec " + std::to_string(Pri | Sec) + "): a joint frame is a rigid pose (docs/Abi.md 9.4)";
+				return false;
+			}
+			// Bit test: /fp:fast may fold std::isfinite (docs/Progress.md M0 4).
+			const auto IsFiniteBits = [](const double Value)
+			{
+				uint64 Bits = 0;
+				std::memcpy(&Bits, &Value, sizeof(Bits));
+				return ((Bits >> 52) & 0x7FFu) != 0x7FFu;
+			};
+			if (!IsFiniteBits(Pos.X) || !IsFiniteBits(Pos.Y) || !IsFiniteBits(Pos.Z))
+			{
+				OutError = std::string(Which) + " position is not finite";
+				return false;
+			}
+			const FQuat Rotation = Private::QuatFromRotationMatrix(Private::FMatrix33::FromColumns(Pri, Sec, Pri ^ Sec)).GetNormalized();
+			Out = PtTransform{ PtQuat{ Rotation.X, Rotation.Y, Rotation.Z, Rotation.W }, PtVec3{ Pos.X, Pos.Y, Pos.Z } };
+			return true;
+		}
+	}
+
+	bool MarshalConstraint(const FConstraintInstance& Constraint, const uint32 Body1Index, const uint32 Body2Index, PtConstraintCreateInfo& Out,
+		std::string& OutError)
+	{
+		Out = PtConstraintCreateInfo();
+		const char* Name = Constraint.JointName.empty() ? "<unnamed>" : Constraint.JointName.c_str();
+		const FConstraintProfileProperties& Profile = Constraint.ProfileInstance;
+		const FLinearConstraint& Linear = Profile.LinearLimit;
+		if (Linear.XMotion != ELinearConstraintMotion::LCM_Locked || Linear.YMotion != ELinearConstraintMotion::LCM_Locked
+			|| Linear.ZMotion != ELinearConstraintMotion::LCM_Locked)
+		{
+			OutError = std::string("joint '") + Name + "': linear motion (" + ToString(Linear.XMotion) + ", " + ToString(Linear.YMotion) + ", "
+				+ ToString(Linear.ZMotion) + ") is not locked; Phase-1 joints are ball and hinge only (DL31, ConstraintUtils::ConfigureAsBallAndSocket / ConfigureAsHinge)";
+			return false;
+		}
+		const EAngularConstraintMotion Swing1 = Constraint.GetAngularSwing1Motion();
+		const EAngularConstraintMotion Swing2 = Constraint.GetAngularSwing2Motion();
+		const EAngularConstraintMotion Twist = Constraint.GetAngularTwistMotion();
+		using enum EAngularConstraintMotion;
+		if (Swing1 == ACM_Free && Swing2 == ACM_Free && Twist == ACM_Free)
+		{
+			Out.Type = PT_JOINT_BALL;
+		}
+		else if (Swing1 == ACM_Locked && Swing2 == ACM_Locked && Twist == ACM_Free)
+		{
+			Out.Type = PT_JOINT_HINGE;
+		}
+		else
+		{
+			OutError = std::string("joint '") + Name + "': angular motion (Swing1 " + ToString(Swing1) + ", Swing2 " + ToString(Swing2) + ", Twist "
+				+ ToString(Twist) + ") is neither the ball preset (all free) nor the hinge preset (swings locked, twist free); limited motions and hinges "
+				"about a swing axis are not part of Phase 1 (DL31)";
+			return false;
+		}
+		if (Body1Index == PT_INDEX_NONE)
+		{
+			OutError = std::string("joint '") + Name + "': Body1 (the child, ConstraintBone1) must be a body; only Body2 may be the world";
+			return false;
+		}
+		if (Body1Index == Body2Index)
+		{
+			OutError = std::string("joint '") + Name + "': Body1 and Body2 are the same body";
+			return false;
+		}
+		Out.Body1 = Body1Index;
+		Out.Body2 = Body2Index;
+		Out.Flags = Profile.bDisableCollision ? PT_JOINTF_DISABLE_COLLISION : 0u;
+		const std::string Prefix = std::string("joint '") + Name + "': ";
+		if (!MarshalJointFrame(Constraint.Pos1, Constraint.PriAxis1, Constraint.SecAxis1, "Frame1", Out.Frame1, OutError)
+			|| !MarshalJointFrame(Constraint.Pos2, Constraint.PriAxis2, Constraint.SecAxis2, "Frame2", Out.Frame2, OutError))
+		{
+			OutError = Prefix + OutError;
+			return false;
+		}
+		Out.Reserved0 = 0.0;
+		Out.Reserved1 = 0.0;
+		return true;
+	}
+
+	uint64 GetJointCapability(const PtConstraintCreateInfo& Info)
+	{
+		return Info.Type == PT_JOINT_BALL ? PT_CAP_JOINT_BALL : (Info.Type == PT_JOINT_HINGE ? PT_CAP_JOINT_HINGE : 0);
+	}
+
+	PtPhysicalMaterial MarshalPhysicalMaterial(const FPhysicalMaterial& Material, const FPhysicsSettingsCore& Project)
+	{
+		// Raw values: the pair rule (static friction, combine) is the backend's (DL41). The per-material combine mode is
+		// resolved here: bOverride*CombineMode ? the material's mode : the project setting (A.1).
+		PtPhysicalMaterial Out = {};
+		Out.Friction = Material.Friction;
+		Out.StaticFriction = Material.StaticFriction;
+		Out.Restitution = Material.Restitution;
+		Out.SleepLinearVelocityThreshold = Material.SleepLinearVelocityThreshold;
+		Out.SleepAngularVelocityThreshold = Material.SleepAngularVelocityThreshold;
+		Out.SleepCounterThreshold = Material.SleepCounterThreshold > 0 ? static_cast<uint32>(Material.SleepCounterThreshold) : 0u;
+		Out.FrictionCombineMode = static_cast<uint8>(Material.GetEffectiveFrictionCombineMode(Project));
+		Out.RestitutionCombineMode = static_cast<uint8>(Material.GetEffectiveRestitutionCombineMode(Project));
+		return Out;
+	}
+
 	std::unique_ptr<FPhysicsBackendScene> FPhysicsBackendScene::Create(FPhysicsBackendModule& InModule, const PtSceneDesc& Desc, std::string& OutError)
 	{
 		std::unique_ptr<FPhysicsBackendScene> Scene(new FPhysicsBackendScene());
@@ -800,12 +924,43 @@ namespace PhysicsTest
 		return Result;
 	}
 
+	PtResult FPhysicsBackendScene::CreateConstraints(const std::span<FConstraintInstance* const> Constraints, const std::span<const PtConstraintCreateInfo> Infos)
+	{
+		check(Constraints.size() == Infos.size());
+		if (Infos.empty())
+		{
+			return PT_OK;
+		}
+		const PtResult Result = Api->CreateConstraints(SceneId, Infos.data(), static_cast<uint32>(Infos.size()), sizeof(PtConstraintCreateInfo));
+		if (Result < 0)
+		{
+			return Result;
+		}
+		for (FConstraintInstance* Constraint : Constraints)
+		{
+			Constraint->ConstraintHandle.Scene = this;
+			Constraint->ConstraintHandle.Index = static_cast<uint32>(ConstraintsByIndex.size());
+			Constraint->ConstraintHandle.Serial = NextConstraintSerial++;
+			ConstraintsByIndex.push_back(Constraint);
+		}
+		return Result;
+	}
+
 	PtResult FPhysicsBackendScene::ReleaseActor(FBodyInstance& Body)
 	{
 		const uint32 Index = Body.ActorHandle.Index;
 		const PtResult Result = Api->ReleaseActors(SceneId, &Index, 1);
 		if (Result >= 0)
 		{
+			// The backend released the body's joints with it (docs/Abi.md 9.4): their indices stay, their handles are cleared.
+			for (FConstraintInstance*& Constraint : ConstraintsByIndex)
+			{
+				if (Constraint != nullptr && (Constraint->Body1 == &Body || Constraint->Body2 == &Body))
+				{
+					Constraint->ConstraintHandle = FPhysicsConstraintHandle();
+					Constraint = nullptr;
+				}
+			}
 			BodiesByIndex[Index] = nullptr;
 			// Queued commands for the released body are dropped (UE discards them with the proxy); the backend would reject
 			// them, and with them the rest of the atomic batch.
@@ -895,7 +1050,10 @@ namespace PhysicsTest
 		Out.SimTime = 0.0;
 		Out.bTruncated = false;
 		Out.bFromHostState = false;
+		Out.bJointsFromHostState = false;
+		Out.NumRejectedJoints = 0;
 		Out.HarnessIslandIndex.clear();
+		Out.JointHostIndex.clear();
 		Out.Capabilities = Module->GetInfo().Capabilities;
 		PtDebugSnapshotRequest Request = {};
 		Request.StructSize = sizeof(PtDebugSnapshotRequest);
@@ -952,6 +1110,21 @@ namespace PhysicsTest
 				++NumSnapshotIndexErrorLogs;
 			}
 			Out.Particles.erase(Invalid, Out.Particles.end());
+		}
+		// M9: a joint must name a live joint this proxy created (JointIndex = creation order, docs/Abi.md 9.4); anything else
+		// is a backend bug, dropped like a bad particle and logged once per scene.
+		const auto InvalidJoint = std::remove_if(Out.Joints.begin(), Out.Joints.end(),
+			[this](const PtJointSnapshot& Joint) { return GetConstraint(Joint.JointIndex) == nullptr; });
+		Out.NumRejectedJoints = static_cast<uint32>(Out.Joints.end() - InvalidJoint);
+		if (Out.NumRejectedJoints > 0)
+		{
+			if (NumSnapshotJointErrorLogs == 0)
+			{
+				UE_LOG(LogPhysicsBackend, Error, "scene %llu (%s): CaptureDebugSnapshot returned %u joint(s) whose JointIndex names no live joint of this scene (%u created); "
+					"dropped (logged once per scene)", static_cast<unsigned long long>(SceneId), Module->GetName().c_str(), Out.NumRejectedJoints, GetNumJoints());
+				++NumSnapshotJointErrorLogs;
+			}
+			Out.Joints.erase(InvalidJoint, Out.Joints.end());
 		}
 		return Result;
 	}

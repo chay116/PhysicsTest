@@ -12,8 +12,12 @@ set(_pt_physx_sources
 	Private/PhysScene_PhysX.cpp
 	Private/PhysScene_PhysX.h
 	Private/PhysXBackend.cpp
+	Private/PhysXConstraint.cpp
+	Private/PhysXConstraint.h
 	Private/PhysXCPUDispatcher.cpp
 	Private/PhysXCPUDispatcher.h
+	Private/PhysXDebugRender.cpp
+	Private/PhysXDebugRender.h
 	Private/PhysXIncludes.h
 	Private/PhysXParse.h
 	Private/PhysXSceneConfig.cpp

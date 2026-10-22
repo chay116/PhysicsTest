@@ -2,8 +2,8 @@
 # 남긴다". One fresh bench process per backend x variant x physics profile (Null, Jolt.Default, Bullet.Default and the four
 # PhysX variants in UEParity and Normalized: the PhysX SdkDefault runs get their own PxTolerancesScale): each must exit 0,
 # write conformance.json (schema physicstest.conformance/1) with result "pass", no failed gate and the full gate list,
-# and record the tolerances file's SHA-256, the ABI version 1.0 and the post-run registrations its verdicts used (with
-# pending_sign_offs = how many still wait for the lead, M6 round 2). -Describe's stdout must be pure JSON for Null and for
+# and record the tolerances file's SHA-256, the ABI version 1.1 and the post-run registrations its verdicts used (with
+# pending_sign_offs = how many still wait for the lead, M6 round 2; 0 since the M9 commit). -Describe's stdout must be pure JSON for Null and for
 # every SDK entry (their module and scene initialisation are what would print), and so must -List (M6, lead (g)).
 # The PT_MODULE_NO_REINIT path (docs/Abi.md 9.1 decision 7, the Chaos bridge's) runs on the test double PtBackend_Null.dll
 # with PT_NULL_DLL_NO_REINIT=1: every ABI gate A0-A7, A10 in its own process, the physics gates in one more, and the bench
@@ -14,7 +14,7 @@ cmake_minimum_required(VERSION 3.25)
 file(REMOVE_RECURSE "${PT_OUT_DIR}")
 set(_failures "")
 set(_runs 0)
-set(_expected_gates G1 G1b G2 G3 G4 G5 G6 G7 G9 G12)
+set(_expected_gates G1 G1b G2 G3 G4 G5 G6 G7 G9 J1 G12)
 string(REPLACE "," ";" _entries "${PT_BACKEND}")
 foreach(_entry Null NullDll ${_entries})
 	string(REPLACE "/" ";" _entry_parts "${_entry}")
@@ -61,8 +61,8 @@ foreach(_entry Null NullDll ${_entries})
 		if(NOT _schema STREQUAL "physicstest.conformance/1" OR NOT _result STREQUAL "pass" OR NOT _failed EQUAL 0)
 			list(APPEND _failures "${_label}: schema '${_schema}', result '${_result}', failed ${_failed}")
 		endif()
-		if(NOT _abi STREQUAL "1.0")
-			list(APPEND _failures "${_label}: abi_version '${_abi}' (expected 1.0)")
+		if(NOT _abi STREQUAL "1.1")
+			list(APPEND _failures "${_label}: abi_version '${_abi}' (expected 1.1, abi-v1.1)")
 		endif()
 		string(LENGTH "${_tol}" _tol_length)
 		if(NOT _tol_length EQUAL 64)
@@ -102,6 +102,11 @@ foreach(_entry Null NullDll ${_entries})
 			endif()
 			if(NOT _count EQUAL _pending)
 				list(APPEND _failures "${_label}: pending_sign_offs ${_pending}, but ${_count} listed registrations are pending")
+			endif()
+			# M9 commit: the lead signed every post-run registration (2026-10-22); a verdict that rests on an unsigned one fails
+			# until the lead signs it (docs/Progress.md M9 리드 결정).
+			if(NOT _pending EQUAL 0)
+				list(APPEND _failures "${_label}: pending_sign_offs ${_pending} - a verdict rests on a post-run registration the lead has not signed")
 			endif()
 			# Null's G7 rotation model is a post-run registration (Progress M6 D-6): its verdict rests on it.
 			if(_backend MATCHES "^Null" AND NOT "G7.step_angle_model" IN_LIST _post_keys)
@@ -158,9 +163,11 @@ ${_stdout}${_stderr}")
 		list(APPEND _failures "${_label}: result '${_result}', backend '${_display}'")
 	endif()
 	if(_abi_gate STREQUAL "Physics")
+		# the physics gates of the suite (M9 fix round 0: J1 too, a registered Skip on the joint-less double) in one process
 		string(JSON _num_gates LENGTH "${_json}" gates)
-		if(NOT _num_gates EQUAL 10)
-			list(APPEND _failures "${_label}: ${_num_gates} gates, expected 10")
+		list(LENGTH _expected_gates _num_expected)
+		if(NOT _num_gates EQUAL _num_expected)
+			list(APPEND _failures "${_label}: ${_num_gates} gates, expected ${_num_expected} (${_expected_gates})")
 		endif()
 	else()
 		string(JSON _id GET "${_json}" gates 0 id)

@@ -209,7 +209,12 @@ def execute(exe: pathlib.Path, args: list[str], out_dir: pathlib.Path, timeout_s
     return result
 
 
-NO_MANIFEST_STATUSES = ("fatal", "usage_error")
+NO_MANIFEST_STATUSES = ("fatal", "usage_error", "unsupported")
+# M9: the bench refuses a scene whose required capabilities (joints) the backend lacks before it initialises the backend:
+# exit.json 2, status "unsupported". Not a failed run: the cell is "unsupported" and does not fail the session. M9 fix round 1:
+# a module that declares the capability but was built against another PT_ABI_PROVISIONAL_REVISION (the host masks it) is not
+# "unsupported": the bench exits 6 backend_unavailable and the cell fails (docs/ResultsSchema.md 2, status).
+UNSUPPORTED_STATUS = "unsupported"
 
 
 def manifest_expected(exit_code: Any, exit_status: Any, has_exit_json: bool) -> bool:
@@ -243,6 +248,8 @@ def judge(out_dir: pathlib.Path, process: dict[str, Any], window: str) -> dict[s
         row["reason"] = exit_doc.get("reason", "")
         if row["exit_code"] == 0 and not errors:
             row["outcome"] = "ok"
+        elif row["exit_code"] == 2 and row["exit_status"] == UNSUPPORTED_STATUS and not errors:
+            row["outcome"] = "unsupported"
         elif row["exit_code"] == RETRY_EXIT_CODE:
             row["outcome"] = "contaminated"
         elif errors:
@@ -308,11 +315,15 @@ def summarize_cells(cells: list[dict[str, Any]], runs: list[dict[str, Any]], rep
                     values.append(float(last["window_mean_ns"]))
             elif all(t["outcome"] == "contaminated" for t in tries):
                 repeat_states.append("contaminated")
+            elif last["outcome"] == "unsupported":
+                repeat_states.append("unsupported")
             else:
                 repeat_states.append("failed")
         states = set(repeat_states)
         if states == {"ok"}:
             state = "ok"
+        elif states == {"unsupported"}:
+            state = "unsupported"
         elif "failed" in states:
             state = "failed"
         elif "contaminated" in states:
@@ -493,7 +504,7 @@ def run_matrix(matrix: Matrix, exe: pathlib.Path, preset: str | None, out_root: 
     log(cv_table(document))
     if errors:
         log("ERROR: session.json does not match Config/Schemas/session.schema.json (exit code 1): " + "; ".join(errors))
-    bad = [c for c in document["cells"] if c.get("state") != "ok"]
+    bad = [c for c in document["cells"] if c.get("state") not in ("ok", "unsupported")]   # M9: unsupported is reported, not failed
     return session_dir, (0 if not bad and not errors and document["status"] == "complete" else 1)
 
 

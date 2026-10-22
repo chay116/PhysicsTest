@@ -774,17 +774,39 @@ Chaos 행까지:
 
 **완료 기준** (Normalized, 3엔진)
 - `M4.InclineFriction`: 미끄러지는 μ에서 d(2 s)가 이산 기준과 1% 이내. μ ≥ 0.6은 정지 (drift < 0.1 cm).
+  - *기준 문구 메모 (리드 결정 2026-10-22):* 1% / 0.1 cm는 기본값이고, 엔진별 실행 뒤 등록 허용치(Bullet 미끄러짐 8%, PhysX PGS 미끄러짐 6.5%·creep 6 cm, TGS 0.3 cm)를 엔진 거동 / 회귀 상한으로 승인했다. `BoxYaw` 0과 등방성 변형 45를 같은 한계로 따로 판정한다.
 - `M5.BouncingBalls`: 임계 50 cm/s를 넘는 모든 충돌에서 e_k가 엔진별 등록 허용치(기본 ±0.02) 이내.
+  - *기준 문구 메모 (리드 결정 2026-10-22):* "등록"은 엔진의 반발 속도 모델까지 포함한다 (`tolerances.json` G4): Jolt 0, PhysX 1, Bullet 2(스텝 시작의 접촉 상태, M9 커밋에 등록·승인).
 - `M6a.Pendulum`: 5°에서 주기 오차 < 0.5%. 기준값 2.00905 s (30°는 2.04305, 90°는 2.37023; g = 980, L = 100, r = 5).
+  - *기준 문구 메모 (리드 결정 2026-10-22):* 카탈로그 씬 `M6a.Pendulum`(기본 `Joint=Hinge`, Scenes.md §2.19)으로 판정한다 (세 엔진 모두 약 0.012% 안에서 통과). `Joint=Ball` 변형은 보고만 하고 판정하지 않는다. Bullet ball의 +8.7%(`btPoint2PointConstraint`, 신장 약 2.35 cm)는 엔진 거동 발견(algorithmic)이다.
 - `M6b`/`M6c`: 체인 신장을 보고하고 에너지가 발산하지 않는다.
+  - *기준 문구 메모 (리드 결정 2026-10-22):* 100:1 체인(`M6c`)에서 PhysX PGS와 TGS의 에너지 증가는 엔진 거동 발견으로 받아들인다 (algorithmic: PhysX 5.x에는 UE4가 기댄 joint projection이 없다). 기준은 "fail — accepted engine behaviour"로 보고하고 조정해서 없애지 않는다. Bullet의 "통과"는 조인트가 떨어진 체인의 자명한 에너지 검사라 통과가 아니라 별도 발견(조인트 분리)으로 보고한다.
 - 모든 엔진 간 차이에 by-design / mismatch / algorithmic 태그가 붙는다.
 - `M1.SingleBoxDrop` UEParity 대 Normalized 표가 기본값이 만든 차이(예: Jolt damping 0.05)를 보여준다.
 - `M2a.Tower` N=10 (UEParity, sleep 켬)에서 PhysX UE4Compat / -Stab / -TGS의 안정화 순서가 01의 프로브와 같은 방향이다 (UE4Compat가 가장 늦게 안정되거나 5 s 안에 잠들지 않음).
 - G11 추가 항목: `Bullet.StaticAabbOff`의 해시가 `Bullet.Default`와 같다.
+  - *기준 문구 메모 (리드 결정 2026-10-22):* 좁힌 범위에서 판정한다 - 한 바디·조인트·탑(`M2a.Tower` N=10 기준 run) 씬의 두 프로필과 `M3.BoxPile` 1k Normalized + `bEnableEnhancedDeterminism`. 더미에서는 결과 중립이 아니다 (쌍 순서가 바뀌어 frame 약 51부터 갈린다): 결과를 바꾸는 by-design knob으로 문서화하고 비교에서 `Bullet.Default`와 같은 것으로 다루지 않는다 (02 §14 G11 행).
 - Bullet viz 드로어를 붙인 run과 붙이지 않은 run의 최종 `h_native`가 같다 (UEParity, sleep 켬).
 - `abi-v1.1` 태그. 조인트, 스냅샷, 네이티브 드로 항목에서 "잠정" 표시가 사라진다.
+  - *기준 문구 메모 (리드 결정 2026-10-22):* v1.1이 최종이다 (append-only를 검사가 확인했다). 리드가 M9 커밋에 `abi-v1.1` 태그를 단다.
 
 **산출물:** 거동 씬, 조인트 구현 3종, `Config/Profiles/Backend/{Jolt.SharpBoxes,Bullet.StaticAabbOff}.ini`, `Tools/ptbench/analysis/behavior.py`, `Config/Matrices/behavior.json`, `abi-v1.1` 태그, `docs/Scenes.md` 갱신, `docs/Profiles.md`(프로필 축·ini 계층·엔진별 매핑표).
+
+**M9 준비 메모 [V]** (하네스 쪽, 2026-10-22. 자세한 결과와 이유는 [Progress.md](Progress.md) M9 준비)
+- **조인트 계약:** [Abi.md](Abi.md) §9.4가 세 엔진 구현과 Chaos 브리지가 따를 확정 초안이다 (`PT_ABI_PROVISIONAL_REVISION` 2, 레이아웃 그대로). 호스트·Kit·디버그 드로·`desc_sha256`은 준비되어 있고, 조인트 capability가 없는 백엔드에서 조인트 씬은 벤치가 `unsupported`(종료 코드 2)로 거부하고 러너가 실패로 세지 않는다. 엔진이 capability를 선언하면 `PhysicsTest.Joint.BackendContract`와 `PreflightSweep`이 그 엔진을 바로 검사한다.
+- **씬:** 위 목록의 씬을 모두 더했다 ([Scenes.md](Scenes.md) §2.16~§2.22). `M4`의 "d(2 s)"는 120 스텝 뒤(frame 119)다. `M6a`의 세 기준값은 솔리드 구 추의 **물리 진자** 정확해다 (`Analytic::PendulumPeriod`, 단진자 2.00805 s가 아니다). 섭동 변형은 혼돈계 씬의 `Perturb` 파라미터다.
+- **프로필:** `[/Script/PhysicsTest.ForcedOverrides]`와 preflight diff(`preflight_diff.json`), 변형 ini 둘 ([Profiles.md](Profiles.md)). Normalized가 Average + SF := F를 강제하므로 Normalized의 `desc_sha256`이 M8과 다르다.
+- **G11 추가 항목:** `-G11Knob=variants:Default,StaticAabbOff`. 한 바디 씬에서는 통과하지만 `M3.BoxPile` 1k에서는 frame 51부터 갈린다 (Bullet의 강제 AABB 갱신이 static proxy를 dynamic 트리로 옮긴다). 이 기준은 Bullet 구현자와 리드가 정한다.
+- **분석 입력:** `-StatesEvery` run의 `scene_desc.json`(백엔드가 받은 그대로의 기하·질량·조인트)과 `states.ptst`. 분석 구현자는 `out/m9prep/`의 고정 벤치를 쓴다.
+
+**M9 실행 메모 [V]** (통합, 2026-10-22. 결과와 근거는 [Progress.md](Progress.md) M9)
+- **완료 기준 결과 (Normalized, 주 series; 통합·수정 라운드 시점, 리드 결정 전 - 결정 뒤의 판정은 아래 "M9 마감"):** M4 미끄러짐·정지는 Jolt 통과, Bullet(미끄러짐 −1.89%)과 PhysX UE4Compat(+2.89%, PGS creep 4.97 cm)은 algorithmic 태그와 실행 뒤 등록 제안(리드 승인 대기). M5는 Jolt·PhysX 통과, Bullet은 등록 모델 0으로 실패이고 접촉 상태 모델(모델 2 제안)이 모든 충돌을 5.8e-6 안에서 맞춘다. M6a 5° 주기는 카탈로그 씬(기본 `Joint=Hinge`)에서 세 엔진 통과 (−0.009 ~ −0.012%), `Joint=Ball` 변형은 Jolt·PhysX 통과, **Bullet ball은 +8.7%로 실패** (`btPoint2PointConstraint`, J-1, 리드 결정). M6b는 모든 엔진이 통과(신장 보고, 에너지 비발산). **M6c는 PhysX PGS가 발산해 실패** (모든 복제, PX-1), TGS도 에너지가 네 run 모두 방출 에너지 위로 오른다, Jolt 통과, Bullet은 에너지 통과·신장 11~15 m. 태그: 차이 450개 모두 태그, 설명 없음 0. M1 표, M2a 안정화 순서, G11 viz 드로어 통과. G11 StaticAabbOff는 좁힌 범위에서만 통과 (문자 그대로는 `M3.BoxPile` 1k에서 실패, 리드 확인 대기). `abi-v1.1`: 헤더·문서 준비, 태그는 리드.
+- **기준 범위 제안 (리드 결정):** "`Bullet.StaticAabbOff`의 해시가 `Bullet.Default`와 같다"를 한 바디·조인트·탑 씬 + `M3.BoxPile` 1k Normalized `bEnableEnhancedDeterminism`으로 좁힌다. M6c의 "에너지가 발산하지 않는다"는 PhysX PGS와 TGS에서 성립하지 않는다 (조정해서 숨기지 않았다). M6a 기준을 카탈로그 씬(hinge)으로 읽을지, ball 변형의 Bullet 실패를 엔진 거동으로 받아들일지.
+- **수정 라운드 0 (독립 검사 반영):** 조인트 계약(Abi.md §9.4 13)을 물리 게이트 **J1**로 옮겼다 - DLL 백엔드(Chaos 브리지, M13 (b))도 `-Conformance`로 자기 프로세스에서 돈다. J1은 COM이 actor 원점이 아닌 바디와 움직이는 조인트의 couple도 본다. Bullet 스냅샷의 각 충격량을 솔버가 쓴 스텝 시작 지레로 옮기게 고쳤다. Bullet ball 신장 예외 3 cm는 `tolerances.json` J1의 승인 대기 등록이다. G11 viz knob은 viz child가 그렸는지 확인한다. Jolt G9 `sleep.criteria`는 씬 독립 규칙 키다. 거동 태그: `restitution-threshold`(by-design)는 임계가 다를 때만, 확신은 분기별, 사후 기본 허용치는 승인 대기 override로. preflight sweep의 `unsupported` 허용은 `-Describe` capability로.
+- **수정 라운드 1 (두 번째 독립 검사 반영):** 두 기준(`M6a` ball의 Bullet 5° 주기, PhysX `M6c` 에너지)은 엔진 거동이라 실패로 남고 리드 결정이다. 승인 대기 등록에 기대는 행은 "fail (pending override)"로 세고, Bullet `M6c` 에너지는 조인트가 떨어진 자명한 통과(`pass (joints separated)`)로 표시한다. `M4`는 `BoxYaw` 0과 45를 따로 판정한다. 새 발견: PhysX UE4Compat-TGS가 `M3.BoxPile` 1k에서 상자를 던지고(반발 0이면 선다, Checkpoints N-4), SdkDefault Normalized 더미가 frame 600 뒤 무너진다(위치 반복 8이면 선다, N-5) - probe 셋을 거동 매트릭스에 넣었고 M11은 이 행들의 작업량이 다르다는 것을 적는다 (TimingContract §9). ABI: 스냅샷 요청의 Reserved·bit 검사를 태그 전에 Kit에 넣었다 (`PT_SNAP_ALL`, A4 87 사례). 차이 450개 (algorithmic 347, by-design 103), `unexplained` 0 ([Progress.md](Progress.md) M9 §9).
+- **수정 라운드 2 (세 번째 독립 검사 반영):** 실패 기준 셋(G11 `StaticAabbOff` 문자 그대로, `M6a` Bullet ball, `M6c` PhysX)은 리드 결정 대기의 실패로 센다 (통합 주장의 G11 "pass"를 바로잡았다). 데이터 조건이 없던 태그 규칙 넷에 조건을 넣었다 (M5 충돌 깊이는 `impact-phase-depth`, algorithmic / inferred). J1이 충돌 스위치(`bDisableCollision`)와 잠든 조인트(UEParity)를 본다 - Chaos 브리지가 스위치를 뒤집으면 J1에서 실패한다. 네이티브 드로의 타입별 필드와 `Lifetime` 0 규칙을 ABI 문서·헤더에 적었다 (뜻만, 레이아웃 그대로). Jolt `M6c`가 UEParity에서 찢어지는 것은 감쇠 특유가 아니라 0.1% 궤적 변화로도 찢어지는 경계다. manifest가 모듈 자신의 ABI 버전·리비전을 적는다. 차이 450개 (algorithmic 363, by-design 87), `unexplained` 0. 커밋 메시지·리드 요약용 수는 [Progress.md](Progress.md) M9 §10에 모았다 (마감 뒤의 수는 §12).
+- **M9 리드 결정 (2026-10-22, [Progress.md](Progress.md) M9 §11):** (1) `M6a` 5° 주기는 카탈로그 씬(hinge)으로 판정하고 `Joint=Ball`은 보고만 한다. (2) PhysX PGS·TGS의 `M6c` 에너지 증가는 받아들인 엔진 거동("fail — accepted engine behaviour"), Bullet은 별도 발견(조인트 분리). (3) G11 `StaticAabbOff`는 좁힌 범위, 더미에서는 결과 중립이 아닌 by-design knob. (4) 실행 뒤 등록 모두 승인 (J1 Bullet ball 3 cm, `M4` Bullet 8% / PGS 6.5% / PGS creep 6 cm / TGS 0.3 cm, Bullet 반발 모델 2, 분석 사후 기본값 셋): `pending_sign_offs`는 모든 곳에서 0. (5) ABI v1.1 최종, 태그는 리드가 M9 커밋에. (6) `tolerances.json` version 7, `GateSuiteVersion` 8.
+- **M9 마감 (리드 결정 반영·검토 지적, 2026-10-22):** 위 결정을 데이터와 시험에 반영했다: 분석의 기준 행이 결정을 따르고(`behavior_rules.LEAD_DECISIONS`; PhysX `M6c`의 "accepted" 표시는 그 메커니즘 규칙의 태그가 있을 때만), G4 게이트가 Bullet 모델 2를 판정한다. `jolt-penetration-slop`(by-design, verified)이 높이의 크기를 확인하고, 조건이 없던 inferred 규칙 여덟에 최소 서명 조건을 넣었다. 기준 결과 (Normalized, 주 series): M4·M5 세 엔진 통과(등록 허용치·모델), M6a hinge 세 엔진 통과, M6b 통과, M6c Jolt 통과·Bullet 발견(조인트 분리)·PhysX 받아들인 실패, M1 표·M2a 순서·태그 통과. 차이 383개 (algorithmic 304, by-design 79), `unexplained` 0 ([Progress.md](Progress.md) M9 §12).
 
 **선행:** M6, M8.
 

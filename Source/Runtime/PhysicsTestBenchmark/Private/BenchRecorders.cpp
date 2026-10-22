@@ -290,7 +290,7 @@ namespace PhysicsTest::BenchRecorders
 		AppendValue(Header, static_cast<uint32>(sizeof(PtContactPoint)));   // record size 128
 		AppendValue(Header, uint32(0));                                     // frame_count (patched by Close)
 		AppendValue(Header, uint32(0));                                     // flags (bit 0: frame_count final)
-		AppendValue(Header, uint32(PT_ABI_PROVISIONAL_REVISION));           // the PtContactPoint layout revision (PROVISIONAL(M9))
+		AppendValue(Header, uint32(PT_ABI_PROVISIONAL_REVISION));           // the PtContactPoint layout revision (3 since v1.1)
 		AppendValue(Header, PointPose);                                     // contact.point_pose (0xFFFFFFFF: not declared)
 		AppendValue(Header, uint32(0));                                     // reserved
 		if (Header.size() != HeaderSize || std::fwrite(Header.data(), 1, Header.size(), File) != Header.size())
@@ -330,5 +330,56 @@ namespace PhysicsTest::BenchRecorders
 		bOk = std::fclose(File) == 0 && bOk;
 		File = nullptr;
 		return bOk;
+	}
+
+	// ---- native_draw.csv (M9) ----------------------------------------------------------------------------------------------
+	void FNativeDrawRecorder::Record(const uint32 Frame, const std::span<const PtDebugDrawCmd> Commands, const std::string& StringPool, const bool bTruncated)
+	{
+		static_assert(sizeof(PtDebugDrawCmd) == 160, "h_draw hashes the 160-byte ABI record");
+		FNativeDrawRow Row;
+		Row.Frame = Frame;
+		Row.Commands = static_cast<uint32>(Commands.size());
+		Row.StringBytes = static_cast<uint32>(StringPool.size());
+		Row.bTruncated = bTruncated;
+		uint64 Hash = FFnv::Offset64;
+		for (const PtDebugDrawCmd& Command : Commands)
+		{
+			if (Command.Type < FNativeDrawRow::NumTypes)
+			{
+				++Row.ByType[Command.Type];
+			}
+			else
+			{
+				++Row.OtherType;
+			}
+		}
+		if (!Commands.empty())
+		{
+			Hash = FnvValue(Hash, Commands.data(), Commands.size_bytes());
+		}
+		if (!StringPool.empty())
+		{
+			Hash = FnvValue(Hash, StringPool.data(), StringPool.size());
+		}
+		Row.DrawHash = Hash;
+		Rows.push_back(Row);
+		CommandCount += Row.Commands;
+		TruncatedFrames += bTruncated ? 1u : 0u;
+	}
+
+	bool FNativeDrawRecorder::WriteCsv(const std::filesystem::path& Path) const
+	{
+		std::string Text = "frame,commands,points,lines,arrows,circles,spheres,capsules,boxes,triangles,strings,other_type,string_bytes,truncated,h_draw\n";
+		Text.reserve(Text.size() + Rows.size() * 96);
+		char Line[256];
+		for (const FNativeDrawRow& Row : Rows)
+		{
+			std::snprintf(Line, sizeof(Line), "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,0x%016" PRIx64 "\n", Row.Frame, Row.Commands,
+				Row.ByType[PT_DD_POINT], Row.ByType[PT_DD_LINE], Row.ByType[PT_DD_ARROW], Row.ByType[PT_DD_CIRCLE], Row.ByType[PT_DD_SPHERE],
+				Row.ByType[PT_DD_CAPSULE], Row.ByType[PT_DD_BOX], Row.ByType[PT_DD_TRIANGLE], Row.ByType[PT_DD_STRING], Row.OtherType, Row.StringBytes,
+				Row.bTruncated ? 1 : 0, Row.DrawHash);
+			Text += Line;
+		}
+		return WriteText(Path, Text);
 	}
 }

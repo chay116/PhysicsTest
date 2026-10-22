@@ -17,6 +17,10 @@ carries a note (validate.table_notes). A series without a value in the chosen wi
 declares only a headline window) is written as such and left out of the figures.
 Figures: per table the run values (bars = median, dots = runs), per M3.BoxPile table the per-frame median / IQR, and the
 N-scaling of each series. CV is reported only: "CV < 2 %" is a target until the M10 gate.
+M9: when the inputs hold behaviour runs (run.mode Behavior) or runs the bench refused as unsupported, section 5 summarises them
+in one line each (they never enter a timing table) and section 7 is the behaviour analysis (analysis/behavior.py: criteria,
+tagged cross-engine differences, the M1 UEParity vs Normalized table, scene tables, chaotic sensitivity, variant knobs, the
+tolerance and rule registry), with its PNGs, differences.csv and behavior.json next to index.md.
 """
 from __future__ import annotations
 
@@ -384,6 +388,16 @@ def section_cv(cells: pd.DataFrame, condition: str = "", window: str = "headline
     return md
 
 
+def has_behaviour_runs(classified: pd.DataFrame) -> bool:
+    """Whether the inputs hold behaviour runs (run.mode Behavior) or runs refused as unsupported (the joint scenes of a
+    behaviour matrix): then the report carries the behaviour section (§7, analysis/behavior.py)."""
+    if classified.empty:
+        return False
+    mode = classified["mode"] if "mode" in classified.columns else pd.Series(dtype=object)
+    status = classified["exit_status"] if "exit_status" in classified.columns else pd.Series(dtype=object)
+    return bool((mode == "Behavior").any() or (status == "unsupported").any())
+
+
 def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window: str | None = None) -> pathlib.Path:
     inputs = [str(session_or_inputs)] if not isinstance(session_or_inputs, (list, tuple)) else [str(p) for p in session_or_inputs]
     loaded = load_module.load(inputs)
@@ -530,8 +544,24 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
     md.append("## 5. 거부된 run과 재시도")
     md.append("")
     rejected = classified[~classified["accepted"]] if not classified.empty else classified
+    # M9: behaviour runs (run.mode Behavior) and runs the bench refused as unsupported (a scene needs a capability the backend
+    # lacks) never enter a timing table by design: one line each instead of a row per run.
+    outside = pd.Series(False, index=rejected.index)
+    if not rejected.empty:
+        behaviour_mask = rejected["mode"] == "Behavior" if "mode" in rejected.columns else outside
+        unsupported_mask = rejected["exit_status"] == "unsupported" if "exit_status" in rejected.columns else outside
+        behaviour_mask = behaviour_mask.fillna(False).astype(bool)
+        unsupported_mask = unsupported_mask.fillna(False).astype(bool)
+        outside = behaviour_mask | unsupported_mask
+        if behaviour_mask.any():
+            md.append(f"- 거동 run {int(behaviour_mask.sum())}개 (`run.mode` Behavior): 타이밍 표에 넣지 않는다. 분석은 §7.")
+        if unsupported_mask.any():
+            md.append(f"- `unsupported` run {int(unsupported_mask.sum())}개: 씬이 요구하는 capability(조인트)가 백엔드에 없어 벤치가 초기화 전에 거부했다 (실패가 아니다).")
+        if outside.any():
+            md.append("")
+        rejected = rejected[~outside]
     if rejected.empty:
-        md.append("거부된 run 없음.")
+        md.append("거부된 run 없음." if not outside.any() else "그 밖에 거부된 run 없음.")
     else:
         md.append("| run | 셀 | 결과 | 사유 |")
         md.append("|---|---|---|---|")
@@ -558,6 +588,14 @@ def build_report(session_or_inputs, out_dir: pathlib.Path | None = None, window:
               "한 표의 run이 여러 빌드(exe, git, preset)에서 왔으면 표 아래에 주의를 적는다 (comparability key는 M10).")
     md.append("- bootstrap CI, comparability key, CV 게이트, sentinel, 주장 규칙은 M10이다. 이 리포트의 비율과 순위는 주장이 아니다.")
     md.append("")
+    if has_behaviour_runs(classified):
+        # M9: the behaviour section (02 13 behavior) over the same inputs; its PNGs, differences.csv and behavior.json go
+        # next to index.md.
+        from . import behavior
+
+        analysis = behavior.analyze(inputs)
+        if analysis.results or analysis.unsupported:
+            md += behavior.markdown_section(analysis, out_dir, condition, number="7")
     path = out_dir / "index.md"
     common.write_text_atomic(path, "\n".join(md) + "\n")
     return path

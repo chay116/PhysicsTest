@@ -54,11 +54,21 @@
 // command) or PrevStepContacts (the candidates for a pair that falls asleep in the coming step); M5 round 0 fixed the
 // double listing of a commanded sleep.
 //
+// Joints (M9, docs/Abi.md 9.4; PhysXConstraint.h): CreateConstraints creates one PhysX joint per ABI joint with the variant's
+// recipe (UE4Compat family: PxD6Joint with the actors swapped [M]; SdkDefault: PxSphericalJoint / PxRevoluteJoint), all or
+// nothing; ReleaseActors releases the joints of a released body first. The debug snapshot reports every live joint
+// (PT_CAP_JOINT_SNAPSHOT): the two world frames from the engine's actor poses and joint local poses, and the impulse on
+// Body1 from PxConstraint::getForce x dt. Native debug draw (PT_CAP_NATIVE_DEBUG_DRAW; PhysXDebugRender.h): viz runs set the
+// variant's PxVisualizationParameters at InitPhysScene, and PT_SNAP_NATIVE_DRAW turns PxScene::getRenderBuffer into
+// PtDebugDrawCmd records; every other run leaves PhysX's visualization off and reports no command.
+//
 // Containers are physx::PxArray (PhysX's allocator, no std:: container in adapter state, docs/Abi.md 5.13).
 #pragma once
 
 #include "PhysicsFiltering.h"
+#include "PhysXConstraint.h"
 #include "PhysXCPUDispatcher.h"
+#include "PhysXDebugRender.h"
 #include "PhysXSceneConfig.h"
 #include "PhysXSimEventCallback.h"
 #include "PhysXSupport.h"
@@ -121,6 +131,7 @@ namespace PhysicsTest::PhysXBackend
 		PtResult CreateMaterials(::PhysicsTest::Abi::TStridedView<PtPhysicalMaterial> Materials) override;
 		PtResult CreateActors(const ::PhysicsTest::Abi::FActorBatchView& Batch) override;
 		PtResult ReleaseActors(const uint32_t* BodyIndices, uint32_t Num) override;
+		PtResult CreateConstraints(::PhysicsTest::Abi::TStridedView<PtConstraintCreateInfo> Infos) override;   // M9, PhysXConstraint.cpp
 		PtResult PrepareForSimulation(::PhysicsTest::Abi::FTextWriter& OutActions) override;
 		PtResult SetUpForFrame(const ::PhysicsTest::Abi::FFrameParams& Params) override;
 		PtResult StartFrame() override;
@@ -160,6 +171,14 @@ namespace PhysicsTest::PhysXBackend
 		// I_world^-1 * V (native units) of a dynamic body: R diag(invI) R^T V, R = pose rotation * mass frame rotation.
 		physx::PxVec3 MultiplyWorldInverseInertia(const physx::PxRigidDynamic& Actor, const physx::PxVec3& V) const;
 		physx::PxVec3 MultiplyWorldInertia(const physx::PxRigidDynamic& Actor, const physx::PxVec3& V) const;
+		// Joints (M9, PhysXConstraint.cpp).
+		void ReleaseJointsOf(uint32 BodyIndex);       // before the body's actor is released
+		void ReleaseAllJoints();                      // the destructor, before the actors
+		PtTransform GetActorPose(uint32 BodyIndex) const;   // the engine's actor pose (cm); identity for PT_INDEX_NONE (the world)
+		PtJointSnapshot MakeJointSnapshot(uint32 JointIndex) const;
+		void StageJointSnapshots();
+		void AppendJointSettings(::PhysicsTest::Abi::FTextWriter& Out) const;
+		void AppendVisualizationSettings(::PhysicsTest::Abi::FTextWriter& Out) const;
 
 		PtSceneDesc Desc;
 		FPhysXSceneConfig Config;
@@ -185,6 +204,9 @@ namespace PhysicsTest::PhysXBackend
 		physx::PxArray<uint32> ActiveScratch;
 		physx::PxArray<PtParticleSnapshot> SnapshotParticles;
 		physx::PxArray<PtContactPoint> SnapshotContacts;
+		physx::PxArray<FPhysXJoint> Joints;               // M9: one record per joint index (never reused)
+		physx::PxArray<PtJointSnapshot> SnapshotJoints;
+		physx::PxArray<PtDebugDrawCmd> SnapshotCommands;   // M9: the native draw of the last capture (viz runs)
 		physx::PxArray<FPhysXRawContact> SleepingContacts;
 		physx::PxArray<FPhysXRawContact> SleepingScratch;
 		// The step before the last one: PhysX reports nothing for the pairs of an island already in the step the island
@@ -211,7 +233,13 @@ namespace PhysicsTest::PhysXBackend
 		uint32 ReadStamp = 0;
 		uint64 TotalSteps = 0;
 		float StepDeltaTime = 0.0f;
+		float LastSimulatedDeltaTime = 0.0f;   // the dt of the last simulate that ran (PxConstraint::getForce divides by it)
 		PtVec3 Gravity = {};
+		uint32 NumJointsWithoutDynamicBody = 0;   // accepted joints without an engine joint (docs/Abi.md 9.4 item 6)
+		uint32 NumJointsReleasedWithBodies = 0;
+		FPhysXRenderCounts LastCaptureCommands;    // the last PT_SNAP_NATIVE_DRAW capture (effective physx.debug_visualization)
+		uint32 NumNativeCaptures = 0;
+		bool bVisualization = false;               // viz run with a non-empty DebugVisualization: the parameters are set
 		bool bStepped = false;
 		bool bSimulating = false;
 		bool bSleepingAllowed = true;
