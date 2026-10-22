@@ -2341,3 +2341,22 @@ smoke 세션 `m10-smoke-test`(test, 4.6분, 시도 71 = 60 + CV 게이트 8 + se
 - **경합 창:** 사용 중인 데스크톱에서는 T = 1 run이 `contended`로 헤드라인 자격을 잃을 수 있다 (종료 코드 4와 겹치는 경우가 대부분이다). M11은 유휴 데스크톱 + High performance로 돈다.
 
 **바뀐 파일 (수정 라운드 1):** `Source/Runtime/PhysicsTestBenchCore/Public/BenchCore.h`, `Source/Runtime/PhysicsTestConformance/{Public/Gates/ThreadGate.h, Private/Gates/ThreadGate.cpp, Public/Gates/PhysicsGates.h}`, `Source/Runtime/PhysicsTestBenchmark/Private/{BenchmarkRunner.cpp, BenchMultiRun.cpp, BenchChildRuns.h}`, `Source/Runtime/Core/Public/HAL/PlatformTime.h`, `Source/Backends/JoltBackend/Private/JoltProfiler.cpp`, `Source/Programs/PhysicsTestAutomation/Private/Tests/MeasurementTests.cpp`, `Source/Programs/PhysicsTestBench/{CMakeLists.txt, RunBenchMatrix.cmake, RunStampCheck.cmake}`, `Config/Schemas/manifest.schema.json`, `Tools/ptbench/{runner.py, stamps.py, analysis/{claims.py, load.py, perf.py, report.py}, tests/{test_unit.py, test_integration.py}}`, `README.md`, `docs/{02_Architecture, 03_WorkPlan, 04_DecisionLog, ChaosBackendGuide, ResultsSchema, TimingContract, Progress}.md`, `docs/appendix/A_HeaderSketches.md`, `docs/reports/m10_smoke/index.md`.
+
+### 9. 마지막 독립 검사 뒤 남은 경미 지적 (리드 정리, 2026-10-23)
+
+수정 라운드 2 뒤의 독립 검사는 실패 기준 없이 경미 지적만 냈다. M10은 여기서 닫고, 아래는 M11 전에 처리할 후속 작업으로 남긴다.
+
+| # | 지적 | 처리 시점 |
+|---|---|---|
+| 1 | M10 클린 빌드로 `Saved/Conformance`의 스탬프가 모두 낡았다 (`stamp --check` 0/4). M11 세션 전에 `ptbench stamp --prune` 뒤 `ptbench stamp`로 다시 만든다 | M11 시작 전 (필수) |
+| 2 | 리포트가 제목과 모든 표·그림 조건에 UNOFFICIAL을 하드코딩한다. 보고 가능한 세션(고성능 전원 계획, 스탬프 유효)이면 그 표기를 바꿔야 한다 | M11 |
+| 3 | `ptbench run --allow-unstamped --report`가 `allow_unstamped`를 리포트에 넘기지 않아 모든 run을 거부한 리포트를 만든다 | M11 |
+| 4 | G10b의 cpu_eff 절반은 정의상 거의 1이다. 단일 스레드 증명은 외부 스레드 cycle 쪽에 기댄다 (리드 후속 과제) | M11 판정 전 |
+| 5 | `--target` 단일 SDK 세션에서 Jolt sentinel이 빠져 세션이 항상 비공식이 된다. A-B-A 대조 세션에는 같은 SDK의 sentinel이 필요하다 | M11 |
+| 6 | 주장 규칙의 ISA-dependent 판정: 한 플래그 프로필의 CI가 1을 포함해도 점추정 방향이 반대면 ISA-dependent로 적는다 (D-16). 리드 확인 필요 | M11 |
+| 7 | P0/P1처럼 1 µs 미만 씬의 `T_frame`에 서브 버킷 TSC 읽기 약 40 ns가 들어간다 (모든 엔진에 같은 상수) | M11 리포트에 명시 |
+| 8 | census #2가 `LoopAllocations`·`LoadMonitor.End`보다 먼저 돌아 할당 집계에 섞일 수 있다 (기록되지 않은 편차) | M11 |
+| 9 | 문서: ResultsSchema §4의 5e-7 문구(짧은 run은 1.3e-6까지), Debug TSC 읽기 오버헤드 단일 값(21~28 ns로 변동), QPC가 이 PC에서는 invariant TSC에서 나오므로 "독립 시계"가 아니라는 점, 02 §3 트리와 §4.5 타깃 그래프의 M10 항목 | 다음 문서 정리 |
+| 10 | prof: `PT_PROFILE_FRAME_MARK`를 정의만 하고 부르지 않아 Tracy 캡처에 프레임이 없다 | prof 사용 전 |
+| 11 | THIRD_PARTY_NOTICES #9: Tracy 클라이언트 TU에 함께 컴파일되는 번들 서드파티의 라이선스가 빠져 있다 | 재배포 전 |
+| 12 | 스탬프 키에 백엔드 식별자가 없다 (static Null은 빈 variant_sha256과 module SHA로만 구분된다). 지금은 충돌이 없지만 잠재 위험이다 | Chaos 추가 전 (M13) |
